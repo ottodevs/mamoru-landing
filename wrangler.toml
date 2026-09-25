@@ -14,3 +14,13 @@ routes = [
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "404-page"
+
+# Address list. Keys are hashes. Values stay in this account.
+[[kv_namespaces]]
+binding = "WAITLIST"
+id = "69293a22f249404e9e0a1bca6878252e"
+
+# One welcome note from notify@mamoru.lol. No other sender.
+[[send_email]]
+name = "EMAIL"
+allowed_sender_addresses = ["notify@mamoru.lol"]

@@ -1,9 +1,6 @@
 ---
+import { CUSTODY_LINE, FOLLOW_UP_LINES } from "../follow-up";
 /** On submit: POST /api/notify, then swap the bar for the follow-up. */
-const FOLLOW_UP_LINES = [
-  "You're on the list.",
-  "We'll write when mamoru.lol opens.",
-];
 ---
 <section class="email-bar" aria-labelledby="email-bar-lead">
   <div class="compose" id="mamoru-email-compose">
@@ -20,12 +17,16 @@ const FOLLOW_UP_LINES = [
         placeholder="you@example.com"
         maxlength="254"
       />
+      <input class="hp" type="text" name="leave_blank" tabindex="-1" autocomplete="off" aria-hidden="true" />
       <button class="submit" type="submit">Notify me</button>
     </form>
     <p class="status" id="mamoru-email-status" role="status" aria-live="polite"></p>
   </div>
   <div class="follow-up" id="mamoru-email-followup" hidden>
-    {FOLLOW_UP_LINES.map((line) => <p class="follow-line">{line}</p>)}
+    {FOLLOW_UP_LINES.map((line, i) => (
+      <p class:list={["follow-line", i === 0 ? "follow-kicker" : undefined]}>{line}</p>
+    ))}
+    <p class="follow-line follow-quiet">{CUSTODY_LINE}</p>
   </div>
 </section>
 
@@ -49,6 +50,9 @@ const FOLLOW_UP_LINES = [
       const emailInput = form.querySelector("#mamoru-email");
       const email =
         emailInput instanceof HTMLInputElement ? emailInput.value.trim() : "";
+      const honeyInput = form.querySelector("input[name=leave_blank]");
+      const leaveBlank =
+        honeyInput instanceof HTMLInputElement ? honeyInput.value : "";
       if (!email) {
         statusEl.textContent = "Enter an email.";
         return;
@@ -61,7 +65,7 @@ const FOLLOW_UP_LINES = [
             "content-type": "application/json",
             accept: "application/json",
           },
-          body: JSON.stringify({ email }),
+          body: JSON.stringify({ email, leave_blank: leaveBlank }),
         });
         const data = (await res.json().catch(() => ({}))) as {
           ok?: boolean;
@@ -162,6 +166,22 @@ const FOLLOW_UP_LINES = [
     font-weight: 400;
     line-height: 1.35;
     letter-spacing: 0.01em;
+  }
+  .follow-kicker {
+    margin-bottom: 0.15rem;
+  }
+  .follow-quiet {
+    color: var(--stone);
+    font-size: clamp(0.92rem, 1.5vw, 1.05rem);
+    max-width: 28rem;
+    margin-top: 0.2rem;
+  }
+  .hp {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
   }
   .sr-only {
     position: absolute;

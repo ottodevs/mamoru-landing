@@ -28,6 +28,6 @@ bun run build && bunx wrangler dev
 | `src/components/Countdown.astro` | Countdown to `2026-09-27T09:00:00+09:00` |
 | `src/components/EmailBar.astro` | Email bar and the on-the-list follow-up |
 | `src/styles/global.css` | Rice paper field, ink, Noto Serif |
-| `src/worker.ts` | Assets plus `/api/notify` |
+| `src/worker.ts` | Assets, `POST /api/notify`, and the private list at `/ops` |
 
-The waitlist KV namespace (`WAITLIST`) and the confirmation email (`RESEND_API_KEY`, `MAIL_FROM`) are optional Worker bindings. Nothing secret lives in this repo.
+`POST /api/notify` writes the address into KV `WAITLIST` or it does not say it saved. The list is not a marketing tool. `/ops` is the private panel (secret `LIST_GATE`, not in git). The welcome note sends only when the `EMAIL` binding can send from `notify@mamoru.lol`, and only once. Nothing secret lives in this repo.
