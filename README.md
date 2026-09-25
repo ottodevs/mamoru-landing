@@ -1,6 +1,6 @@
 # Mamoru landing
 
-Coming-soon page for [mamoru.lol](https://mamoru.lol). One screen on rice paper: the Mamoru lockup, `APY. DELIVERED.`, a countdown to the close of ETHGlobal Tokyo, and an email bar.
+Coming-soon page for [mamoru.lol](https://mamoru.lol). One screen on rice paper: the Mamoru lockup, `APY. DELIVERED.`, a countdown to the opening after ETHGlobal Tokyo, and an email bar.
 
 Built with [Astro](https://astro.build). Served by a Cloudflare Worker that also handles `POST /api/notify`.
 
