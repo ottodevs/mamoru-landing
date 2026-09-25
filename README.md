@@ -4,6 +4,8 @@ Coming-soon page for [mamoru.lol](https://mamoru.lol). One screen on rice paper:
 
 Built with [Astro](https://astro.build). Served by a Cloudflare Worker that also handles `POST /api/notify`.
 
+A push to `main` deploys this page to [mamoru.lol](https://mamoru.lol).
+
 ## Run it
 
 ```bash
