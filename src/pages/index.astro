@@ -1,6 +1,7 @@
 ---
 import Base from "../layouts/Base.astro";
 import Countdown from "../components/Countdown.astro";
+import EmailBar from "../components/EmailBar.astro";
 ---
 <Base title="Mamoru.lol" description="APY. Delivered. Opens after ETHGlobal Tokyo.">
   <main class="page">
@@ -21,6 +22,7 @@ import Countdown from "../components/Countdown.astro";
       </h1>
       <p class="teaser">The principal keeps working. The yield gets set aside.</p>
       <Countdown />
+      <EmailBar />
     </div>
   </main>
 </Base>
@@ -82,5 +84,9 @@ import Countdown from "../components/Countdown.astro";
 
   .stack :global(.countdown) {
     margin-top: clamp(1rem, 3.8vh, 2.25rem);
+  }
+
+  .stack :global(.email-bar) {
+    margin-top: clamp(1.25rem, 5.9vh, 3.5rem);
   }
 </style>

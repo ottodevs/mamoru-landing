@@ -1,0 +1,173 @@
+---
+/** On submit: POST /api/notify, then swap the bar for the follow-up. */
+const FOLLOW_UP_LINES = [
+  "You're on the list.",
+  "We'll write when mamoru.lol opens.",
+];
+---
+<section class="email-bar" aria-labelledby="email-bar-lead">
+  <div class="compose" id="mamoru-email-compose">
+    <p id="email-bar-lead" class="lead">Leave your email, we'll save you a spot.</p>
+    <form class="bar" id="mamoru-email-bar" method="post" action="/api/notify" novalidate>
+      <label class="sr-only" for="mamoru-email">Email</label>
+      <input
+        id="mamoru-email"
+        class="input"
+        type="email"
+        name="email"
+        autocomplete="email"
+        required
+        placeholder="you@example.com"
+        maxlength="254"
+      />
+      <button class="submit" type="submit">Notify me</button>
+    </form>
+    <p class="status" id="mamoru-email-status" role="status" aria-live="polite"></p>
+  </div>
+  <div class="follow-up" id="mamoru-email-followup" hidden>
+    {FOLLOW_UP_LINES.map((line) => <p class="follow-line">{line}</p>)}
+  </div>
+</section>
+
+<script>
+  const form = document.getElementById("mamoru-email-bar");
+  const statusEl = document.getElementById("mamoru-email-status");
+  const compose = document.getElementById("mamoru-email-compose");
+  const follow = document.getElementById("mamoru-email-followup");
+  if (
+    form instanceof HTMLFormElement &&
+    statusEl instanceof HTMLElement &&
+    compose instanceof HTMLElement &&
+    follow instanceof HTMLElement
+  ) {
+    const showFollowUp = () => {
+      compose.hidden = true;
+      follow.hidden = false;
+    };
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const emailInput = form.querySelector("#mamoru-email");
+      const email =
+        emailInput instanceof HTMLInputElement ? emailInput.value.trim() : "";
+      if (!email) {
+        statusEl.textContent = "Enter an email.";
+        return;
+      }
+      statusEl.textContent = "Sending…";
+      try {
+        const res = await fetch("/api/notify", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            accept: "application/json",
+          },
+          body: JSON.stringify({ email }),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          error?: string;
+        };
+        if (!res.ok || !data.ok) {
+          statusEl.textContent = data.error || "Could not subscribe. Try again.";
+          return;
+        }
+        showFollowUp();
+      } catch {
+        statusEl.textContent = "Network error. Try again.";
+      }
+    });
+  }
+</script>
+
+<style>
+  .email-bar {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    width: min(100%, 33.25rem);
+  }
+  .compose {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: clamp(0.75rem, 2.8vh, 1.6rem);
+    width: 100%;
+  }
+  .compose[hidden] {
+    display: none;
+  }
+  .lead {
+    margin: 0;
+    font-size: clamp(0.95rem, 2.2vh, 1.3rem);
+    font-weight: 400;
+    line-height: 1.3;
+    letter-spacing: 0.01em;
+  }
+  .bar {
+    display: flex;
+    gap: 1rem;
+    width: 100%;
+  }
+  .input {
+    font: inherit;
+    font-size: 1rem;
+    height: clamp(2.5rem, 5.33vh, 3rem);
+    padding: 0 0.875rem;
+    border: 1px solid var(--ink);
+    background: var(--rice);
+    color: var(--ink);
+    border-radius: 0;
+    min-width: 0;
+    flex: 0 1 19.75rem;
+  }
+  .input::placeholder {
+    color: var(--stone);
+    opacity: 1;
+  }
+  .input:focus {
+    outline: 1px solid var(--ink);
+    outline-offset: 1px;
+  }
+  .submit {
+    font: inherit;
+    font-size: 1rem;
+    height: clamp(2.5rem, 5.33vh, 3rem);
+    min-width: 8.375rem;
+    padding: 0 1.375rem;
+    border: 0;
+    border-radius: 0;
+    background: var(--ink);
+    color: var(--paper);
+    cursor: pointer;
+    flex: none;
+  }
+  .status {
+    margin: 0;
+    min-height: 1.2em;
+    font-size: 0.8rem;
+    color: var(--stone);
+  }
+  .follow-up {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+  .follow-up[hidden] {
+    display: none;
+  }
+  .follow-line {
+    margin: 0;
+    font-size: clamp(1.05rem, 1.8vw, 1.25rem);
+    font-weight: 400;
+    line-height: 1.35;
+    letter-spacing: 0.01em;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+</style>
