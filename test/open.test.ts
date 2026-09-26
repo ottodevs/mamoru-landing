@@ -40,6 +40,12 @@ function siteAssets(): Fetcher {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
+      if (url.pathname === "/mark-two-stones.png") {
+        return new Response(new Uint8Array([137, 80, 78, 71]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        });
+      }
       if (url.pathname === "/open/index.html") {
         return new Response("<!doctype html><html><head></head><body><h1>APY.</h1></body></html>", {
           status: 200,
@@ -94,7 +100,10 @@ describe("site gate", () => {
     );
     expect(preview.status).toBe(200);
     expect(preview.headers.get("x-robots-tag")).toContain("noindex");
-    expect(preview.headers.get("cache-control")).toBe("no-store");
+    expect(preview.headers.get("cache-control")).toBe("no-store, no-transform");
+    expect(preview.headers.get("permissions-policy")).toBe(
+      "camera=(), microphone=(), geolocation=()",
+    );
     const html = await preview.text();
     expect(html).toContain("APY.");
     expect(html).toContain("This becomes the front page when the countdown ends.");
@@ -103,7 +112,13 @@ describe("site gate", () => {
 
     const home = await worker.fetch(new Request("https://mamoru.lol/"), env);
     expect(home.status).toBe(200);
+    expect(home.headers.get("cache-control")).toContain("no-transform");
+    expect(home.headers.get("permissions-policy")).not.toContain("private-aggregation");
     expect(await home.text()).toBe("teaser");
+
+    const icon = await worker.fetch(new Request("https://mamoru.lol/favicon.ico"), env);
+    expect(icon.status).toBe(200);
+    expect(icon.headers.get("content-type")).toContain("image/png");
   });
 
   test("a removed address loses the preview", async () => {

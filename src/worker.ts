@@ -500,6 +500,41 @@ function notFound(): Response {
   });
 }
 
+/**
+ * HTML only. `no-transform` stops Cloudflare from injecting the Web Analytics
+ * beacon. A short Permissions-Policy keeps the browser from appending feature
+ * names it no longer understands.
+ */
+function finish(response: Response): Response {
+  const type = response.headers.get("content-type") || "";
+  if (!type.includes("text/html")) return response;
+  const headers = new Headers(response.headers);
+  const cache = headers.get("cache-control") ?? "no-store";
+  if (!/\bno-transform\b/i.test(cache)) {
+    headers.set("cache-control", `${cache}, no-transform`);
+  }
+  if (!headers.has("permissions-policy")) {
+    headers.set("permissions-policy", "camera=(), microphone=(), geolocation=()");
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+async function serveMark(request: Request, env: Env): Promise<Response> {
+  const assetUrl = new URL("/mark-two-stones.png", request.url);
+  const asset = await env.ASSETS.fetch(new Request(assetUrl.toString(), { method: "GET" }));
+  const type = asset.headers.get("content-type") || "";
+  if (!asset.ok || !type.startsWith("image/")) return notFound();
+  const headers = new Headers(asset.headers);
+  headers.set("content-type", type);
+  headers.set("cache-control", "public, max-age=86400");
+  if (request.method === "HEAD") return new Response(null, { status: 200, headers });
+  return new Response(asset.body, { status: 200, headers });
+}
+
 /** The post-countdown page. Preview adds a private bar and noindex. */
 async function serveSite(request: Request, env: Env, preview: boolean): Promise<Response> {
   const assetUrl = new URL("/open/index.html", request.url);
@@ -564,6 +599,11 @@ function appPageAsset(pathname: string): string | null {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    return finish(await dispatch(request, env));
+  },
+};
+
+async function dispatch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const host = url.hostname.toLowerCase().replace(/\.$/, "");
     const path = url.pathname;
@@ -574,6 +614,10 @@ export default {
       dest.protocol = "https:";
       dest.hostname = "mamoru.lol";
       return Response.redirect(dest.toString(), 308);
+    }
+
+    if (lower === "/favicon.ico" && (request.method === "GET" || request.method === "HEAD")) {
+      return serveMark(request, env);
     }
 
     // /app does not exist. Not on the apex, not on the app host.
@@ -628,5 +672,4 @@ export default {
       return serveSite(request, env, false);
     }
     return env.ASSETS.fetch(request);
-  },
-};
+}

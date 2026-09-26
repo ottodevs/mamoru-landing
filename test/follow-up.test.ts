@@ -55,6 +55,7 @@ describe("addresses", () => {
     expect(html).toContain("tok&quot;en");
     expect(html).not.toContain("Enviar las que faltan");
     expect(html).toContain("<h1>The list</h1>");
+    expect(html).toContain('rel="icon" href="/mark-two-stones.png"');
     expect(html).toContain('href="/ops/landing"');
     expect(html).not.toContain("La lista");
   });
