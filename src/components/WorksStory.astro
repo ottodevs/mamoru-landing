@@ -62,11 +62,8 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
       <text x="988" y="72">your choice</text>
     </g>
 
-    <g id="eth-mark" class="eth-fly" visibility="hidden">
-      <polygon class="eth-left" points="0,-14 0,5 -12,0" />
-      <polygon class="eth-right" points="0,-14 12,0 0,5" />
-      <polygon class="eth-left" points="-12,2.5 0,7 0,14" />
-      <polygon class="eth-right" points="12,2.5 0,14 0,7" />
+    <g id="eth-mark" class="eth-fly" opacity="0">
+      <polygon points="0,-11 9,0 0,11 -9,0" />
     </g>
   </svg>
 </section>
@@ -81,18 +78,29 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
   if (scene && quiet) scene.pauseAnimations();
 
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+  const ease = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+  const fade = (t: number) => {
+    const edge = 0.22;
+    if (t < edge) return t / edge;
+    if (t > 1 - edge) return (1 - t) / edge;
+    return 1;
+  };
 
   function travel(el: SVGGElement, path: SVGPathElement, ms: number) {
     return new Promise<void>((resolve) => {
       const len = path.getTotalLength();
       const t0 = performance.now();
-      el.setAttribute("visibility", "visible");
       const tick = (now: number) => {
-        const t = Math.min(1, (now - t0) / ms);
+        const raw = Math.min(1, (now - t0) / ms);
+        const t = ease(raw);
         const p = path.getPointAtLength(len * t);
         el.setAttribute("transform", `translate(${p.x} ${p.y})`);
-        if (t < 1) requestAnimationFrame(tick);
-        else resolve();
+        el.setAttribute("opacity", String(fade(raw)));
+        if (raw < 1) requestAnimationFrame(tick);
+        else {
+          el.setAttribute("opacity", "0");
+          resolve();
+        }
       };
       requestAnimationFrame(tick);
     });
@@ -100,10 +108,9 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
 
   async function fundLoop(el: SVGGElement, a: SVGPathElement, b: SVGPathElement) {
     for (;;) {
-      await travel(el, a, 3200);
+      await travel(el, a, 3600);
       await sleep(1000);
-      await travel(el, b, 3200);
-      el.setAttribute("visibility", "hidden");
+      await travel(el, b, 3600);
       await sleep(2000);
     }
   }
@@ -117,7 +124,6 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
     --tone-paired: #0e1b2e;
     --tone-mercenary: #6fa78f;
     --usdc: #2775ca;
-    --eth: #627eea;
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
@@ -152,11 +158,8 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
     stroke: var(--emerald);
   }
 
-  .eth-left {
-    fill: var(--eth);
-  }
-  .eth-right {
-    fill: color-mix(in srgb, var(--eth) 72%, #fff);
+  .eth-fly {
+    fill: var(--ink);
   }
   .usdc-disc {
     fill: var(--usdc);
