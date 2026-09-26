@@ -45,7 +45,7 @@ const usdcStarts = ["0s", "-0.9s", "-1.8s"];
         </animateMotion>
         <circle class="usdc-disc" r="14" />
         <circle class="usdc-ring" r="9.5" />
-        <text class="usdc-mark" y="5">$</text>
+        <text class="usdc-mark" y="5" fill="#fff">$</text>
       </g>
     ))}
 
@@ -186,6 +186,10 @@ const usdcStarts = ["0s", "-0.9s", "-1.8s"];
     font-size: 15px;
     fill: var(--ink);
     text-anchor: middle;
+  }
+  .scene text.usdc-mark {
+    fill: #fff;
+    font-size: 13px;
   }
   .scene .tag {
     font-size: 12px;
