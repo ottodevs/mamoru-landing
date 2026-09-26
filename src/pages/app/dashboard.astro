@@ -100,16 +100,21 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
           <p class="kicker heavy" id="total-title">Total balance</p>
           <p class="sum">{totalUsdc} <span class="unit">USDC</span></p>
         </div>
-        <ul class="apr">
-          <li>
-            <span class="apr-label">Current APR</span>
-            <strong>{currentApr}</strong>
-          </li>
-          <li>
-            <span class="apr-label">Monthly average</span>
-            <strong>{monthAvg}</strong>
-          </li>
-        </ul>
+        <div class="balance-side">
+          <ul class="apr">
+            <li>
+              <span class="apr-label">Current APR</span>
+              <strong>{currentApr}</strong>
+            </li>
+            <li>
+              <span class="apr-label">Monthly average</span>
+              <strong>{monthAvg}</strong>
+            </li>
+          </ul>
+          <button type="button" class="act stop" id="stop-open" aria-haspopup="dialog" aria-controls="xfer">
+            Stop allocation
+          </button>
+        </div>
       </div>
       <div class="acts">
         <button type="button" class="act" id="add-open" aria-expanded="false" aria-controls="fund-panel">
@@ -183,7 +188,6 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
             </li>
           ))}
         </ul>
-        <button type="button" class="stop" id="stop-open" aria-haspopup="dialog" aria-controls="xfer">Stop allocation</button>
       </div>
     </details>
 
@@ -364,6 +368,12 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     display: block;
     font-size: 1.2rem;
     line-height: 1.15;
+  }
+  .balance-side {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    flex-wrap: wrap;
   }
   .apr {
     list-style: none;
@@ -595,14 +605,12 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     font-size: 1.1rem;
     padding: 0.55rem 0.75rem;
   }
-  .cta, .stop {
+  .cta {
     font-family: var(--font-mono);
     font-size: 0.75rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     cursor: pointer;
-  }
-  .cta {
     background: var(--ink);
     color: var(--rice);
     border: 0;
@@ -692,12 +700,11 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     text-overflow: ellipsis;
   }
   .pool-amt { font-family: var(--font-mono); font-size: 0.85rem; }
-  .stop {
-    justify-self: start;
+  .act.stop {
     background: transparent;
     color: #9b2c2c;
     border: 1px solid #9b2c2c;
-    padding: 0.6rem 0.95rem;
+    flex: 0 0 auto;
   }
 
   .ledger {
