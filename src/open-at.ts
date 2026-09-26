@@ -1,5 +1,5 @@
-/** The instant the countdown page is retired. Opened 2026-09-26 (was 2026-09-27 09:00 JST). */
-export const OPEN_AT_ISO = "2026-09-26T11:00:00Z";
+/** The instant the countdown page is retired. 2026-09-27 09:00 JST. */
+export const OPEN_AT_ISO = "2026-09-27T09:00:00+09:00";
 
 export const OPEN_AT_MS = Date.parse(OPEN_AT_ISO);
 
