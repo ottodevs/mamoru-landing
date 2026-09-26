@@ -115,14 +115,6 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
           Transfer
         </button>
       </div>
-    </section>
-
-    <section class="row" aria-label="Idle assets and fund">
-      <aside class="card idle">
-        <p class="title">Idle assets</p>
-        <p class="sum-sm">{idleUsdc} USDC</p>
-        <p class="sub">{idleTokens} tokens idle</p>
-      </aside>
       <form
         class="card fund"
         id="fund-panel"
@@ -189,6 +181,12 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
       </div>
     </details>
 
+    <section class="card idle wide" aria-labelledby="idle-title">
+      <p class="title" id="idle-title">Idle assets</p>
+      <p class="sum-sm">{idleUsdc} USDC</p>
+      <p class="sub">{idleTokens} tokens idle</p>
+    </section>
+
     <details class="card fold wide">
       <summary>
         <span>
@@ -238,7 +236,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
       <div class="xfer-sheet" data-pane="stop" hidden>
         <header class="xfer-head">
-          <p class="title heavy">Transfer working capital</p>
+          <p class="title heavy">Transfer working assets</p>
           <button type="button" class="xfer-close">Close</button>
         </header>
         <p class="xfer-meta">{workingEth} ETH</p>
@@ -247,7 +245,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
         </p>
         <div class="xfer-row">
           <label>
-            <span class="sr">Working capital amount</span>
+            <span class="sr">Working assets amount</span>
             <input id="xfer-stop" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="4.20" data-unit="ETH" />
           </label>
           <button type="button" class="xfer-max" data-for="xfer-stop">Max</button>
@@ -320,7 +318,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     color: var(--stone);
     font-size: 0.88rem;
   }
-  .balance { flex: 0 0 auto; margin-bottom: var(--s4); }
+  .balance { flex: 0 0 auto; margin-bottom: var(--s2); }
   .balance > .kicker.heavy {
     font-size: 0.86rem;
     font-weight: 700;
@@ -478,26 +476,22 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     margin-top: 0.9rem;
   }
 
-  .row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1.75rem;
-    align-items: stretch;
-    flex: 0 0 auto;
-    margin-bottom: var(--s2);
-  }
   .card {
     border-top: 1px solid var(--wash);
     background: transparent;
     padding: var(--s2) 0;
   }
   .wide { width: 100%; flex: 0 0 auto; }
-  .fund, .idle {
+  .fund {
+    margin-top: var(--s3);
     display: flex;
     flex-direction: column;
-    justify-content: center;
     gap: var(--s1);
-    min-height: 5.5rem;
+  }
+  .idle {
+    display: flex;
+    flex-direction: column;
+    gap: 0.05rem;
   }
   .fund-row {
     display: grid;
@@ -659,7 +653,6 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
   }
 
   @media (max-width: 760px) {
-    .row { grid-template-columns: 1fr; }
     .pools li, .ledger li { grid-template-columns: 1fr; gap: 0.25rem; }
     .ledger code { justify-self: start; }
     .xfer-row { grid-template-columns: 1fr auto; }
