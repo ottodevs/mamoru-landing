@@ -8,46 +8,68 @@ const rewardsUsdc = "3,180";
 const totalUsdc = "19,980";
 const harvestedUsdc = "3,180";
 
-const tokens = [
-  { symbol: "USDC", share: "50%" },
-  { symbol: "WETH", share: "28%" },
-  { symbol: "WBTC", share: "7%" },
-  { symbol: "ETH", share: "15%" },
-];
-
 const pools = [
-  { name: "Uniswap v3 WETH / USDC", note: "35% sleeve · paired" },
-  { name: "Uniswap v3 WBTC / USDC", note: "paired" },
-  { name: "Aave v3 USDC", note: "50% sleeve · stables" },
-  { name: "Morpho ETH", note: "15% sleeve · mercenary" },
+  {
+    pair: "WETH / USDC",
+    a: "WETH",
+    b: "USDC",
+    address: "0x8ad5…c41a",
+  },
+  {
+    pair: "WBTC / USDC",
+    a: "WBTC",
+    b: "USDC",
+    address: "0x4e91…12f0",
+  },
+  {
+    pair: "USDC",
+    a: "USDC",
+    b: "",
+    address: "0xa0b8…e65d",
+  },
+  {
+    pair: "ETH",
+    a: "ETH",
+    b: "",
+    address: "0x388c…8182",
+  },
 ];
 
-const harvests = [
-  { when: "29 Aug 2026", amount: 1580, label: "1,580 USDC" },
-  { when: "5 Sep 2026", amount: 390, label: "390 USDC" },
-  { when: "12 Sep 2026", amount: 410, label: "410 USDC" },
-  { when: "19 Sep 2026", amount: 380, label: "380 USDC" },
-  { when: "26 Sep 2026", amount: 420, label: "420 USDC" },
+const months = [
+  { label: "Apr", value: 420 },
+  { label: "May", value: 680 },
+  { label: "Jun", value: 910 },
+  { label: "Jul", value: 1_480 },
+  { label: "Aug", value: 2_370 },
+  { label: "Sep", value: 3_180 },
 ];
-
-const cum = harvests.reduce<number[]>((acc, h) => {
-  acc.push((acc.at(-1) ?? 0) + h.amount);
-  return acc;
-}, []);
-const maxCum = Math.max(...cum);
-const chartW = 240;
-const chartH = 88;
-const padX = 8;
-const padY = 10;
-const chartPoints = cum.map((v, i) => {
-  const x = padX + (i * (chartW - padX * 2)) / (cum.length - 1);
-  const y = chartH - padY - (v / maxCum) * (chartH - padY * 2);
-  return { x, y };
+const yTicks = [0, 1000, 2000, 3000];
+const maxY = 3200;
+const chartW = 320;
+const chartH = 160;
+const left = 36;
+const right = 12;
+const top = 10;
+const bottom = 28;
+const innerW = chartW - left - right;
+const innerH = chartH - top - bottom;
+const chartPoints = months.map((m, i) => {
+  const x = left + (i * innerW) / (months.length - 1);
+  const y = top + innerH - (m.value / maxY) * innerH;
+  return { x, y, label: m.label };
 });
 const line = chartPoints.map((p) => `${p.x},${p.y}`).join(" ");
-const area = `${padX},${chartH - padY} ${line} ${chartW - padX},${chartH - padY}`;
+const area = `${left},${top + innerH} ${line} ${left + innerW},${top + innerH}`;
+
+const harvests = [
+  { when: "26 Sep 2026", amount: "420 USDC", tx: "0x7c2a…9e14" },
+  { when: "19 Sep 2026", amount: "380 USDC", tx: "0xb19d…44c8" },
+  { when: "12 Sep 2026", amount: "410 USDC", tx: "0x03f1…a6b0" },
+  { when: "5 Sep 2026", amount: "390 USDC", tx: "0xde80…21aa" },
+  { when: "29 Aug 2026", amount: "1,580 USDC", tx: "0x91ab…c02f" },
+];
 ---
-<Base title="Mamoru — Dashboard" description="Working capital, idle ETH, and USDC ready to send.">
+<Base title="Mamoru — Dashboard" description="Working capital, idle ETH, and harvested USDC.">
   <main class="page">
     <header class="top">
       <a class="brand" href="/">
@@ -66,42 +88,45 @@ const area = `${padX},${chartH - padY} ${line} ${chartW - padX},${chartH - padY}
       </ul>
     </section>
 
-    <section class="fund" aria-labelledby="fund-title">
-      <h1 id="fund-title">Fund Mamoru</h1>
-      <form class="fund-row" action="#" method="post" onsubmit="return false;">
-        <span class="asset" aria-label="Asset">ETH</span>
-        <label class="amount">
-          <span class="sr">Amount</span>
-          <input type="text" name="amount" inputmode="decimal" placeholder="0.00" autocomplete="off" />
-        </label>
-        <button type="submit" class="cta">Fund</button>
+    <section class="row" aria-label="Fund and idle">
+      <form class="card fund" action="#" method="post" onsubmit="return false;" aria-labelledby="fund-title">
+        <p class="kicker" id="fund-title">Fund Mamoru</p>
+        <div class="fund-row">
+          <span class="asset">ETH</span>
+          <label class="amount">
+            <span class="sr">Amount</span>
+            <input type="text" name="amount" inputmode="decimal" placeholder="0.00" autocomplete="off" />
+          </label>
+          <button type="submit" class="cta">Fund</button>
+        </div>
       </form>
+      <aside class="card idle">
+        <p class="kicker">Idle capital</p>
+        <p class="sum-sm">{idleEth} ETH</p>
+        <p class="idle-copy">ETH pending to allocate by Mamoru.</p>
+      </aside>
     </section>
 
-    <section class="split" aria-label="Working and idle">
-      <details class="wallet">
+    <section class="row" aria-label="Working and harvested">
+      <details class="card fold">
         <summary>
           <span>
-            <span class="kicker">Wallet</span>
-            <span class="sum-sm">Working {workingEth} ETH</span>
+            <span class="kicker">Working capital</span>
+            <span class="sum-sm">{workingEth} ETH</span>
           </span>
         </summary>
-        <div class="wallet-body">
-          <p class="kicker">Tokens at work</p>
-          <ul class="tokens">
-            {tokens.map((t) => (
-              <li>
-                <span class="tok">{t.symbol}</span>
-                <span class="share">{t.share}</span>
-              </li>
-            ))}
-          </ul>
-          <p class="kicker pools-k">Pools</p>
+        <div class="fold-body">
           <ul class="pools">
             {pools.map((p) => (
               <li>
-                <span class="pool-name">{p.name}</span>
-                <span class="pool-note">{p.note}</span>
+                <span class="pair" aria-hidden="true">
+                  <span class={`logo ${p.a.toLowerCase()}`}>{p.a.slice(0, 1)}</span>
+                  {p.b ? <span class={`logo ${p.b.toLowerCase()} second`}>{p.b.slice(0, 1)}</span> : null}
+                </span>
+                <span class="pool-meta">
+                  <span class="pool-pair">{p.pair}</span>
+                  <span class="pool-addr">{p.address}</span>
+                </span>
               </li>
             ))}
           </ul>
@@ -109,38 +134,52 @@ const area = `${padX},${chartH - padY} ${line} ${chartW - padX},${chartH - padY}
         </div>
       </details>
 
-      <aside class="idle">
-        <p class="kicker">Idle capital</p>
-        <p class="sum-sm">{idleEth} ETH</p>
-        <p class="idle-copy">ETH pending to allocate by Mamoru.</p>
-      </aside>
+      <details class="card fold">
+        <summary>
+          <span>
+            <span class="kicker">Total harvested</span>
+            <span class="sum-sm">{harvestedUsdc} USDC</span>
+          </span>
+        </summary>
+        <div class="fold-body">
+          <svg class="chart" viewBox={`0 0 ${chartW} ${chartH}`} role="img" aria-label="USDC harvested by month">
+            {yTicks.map((tick) => {
+              const y = top + innerH - (tick / maxY) * innerH;
+              return (
+                <g>
+                  <line class="grid" x1={left} x2={left + innerW} y1={y} y2={y} />
+                  <text class="axis" x={left - 6} y={y + 3}>{tick === 0 ? "0" : `${tick / 1000}k`}</text>
+                </g>
+              );
+            })}
+            <polyline class="chart-area" points={area} />
+            <polyline class="chart-line" points={line} />
+            {chartPoints.map((p) => (
+              <g>
+                <circle class="chart-dot" cx={p.x} cy={p.y} r="2.4" />
+                <text class="axis month" x={p.x} y={chartH - 8}>{p.label}</text>
+              </g>
+            ))}
+          </svg>
+        </div>
+      </details>
     </section>
 
-    <section class="history" aria-labelledby="history-title">
-      <details>
+    <section class="history-wrap" aria-labelledby="history-title">
+      <details class="card fold wide">
         <summary>
           <span class="kicker" id="history-title">History</span>
         </summary>
         <ul class="ledger">
-          {harvests.toReversed().map((h) => (
+          {harvests.map((h) => (
             <li>
               <time>{h.when}</time>
-              <span>{h.label}</span>
+              <span>{h.amount}</span>
+              <code>{h.tx}</code>
             </li>
           ))}
         </ul>
       </details>
-      <div class="counter" aria-label="Total harvested">
-        <p class="kicker">Total harvested</p>
-        <p class="sum-sm">{harvestedUsdc} USDC</p>
-        <svg class="chart" viewBox={`0 0 ${chartW} ${chartH}`} role="img" aria-label="USDC harvested over time">
-          <polyline class="chart-area" points={area} />
-          <polyline class="chart-line" points={line} />
-          {chartPoints.map((p) => (
-            <circle class="chart-dot" cx={p.x} cy={p.y} r="2.4" />
-          ))}
-        </svg>
-      </div>
     </section>
 
     <p class="honesty">Illustration — example mix, not a promised rate.</p>
@@ -161,7 +200,7 @@ const area = `${padX},${chartH - padY} ${line} ${chartW - padX},${chartH - padY}
     padding: 1.5rem 0 4rem;
     display: flex;
     flex-direction: column;
-    gap: 1.5rem;
+    gap: 1.25rem;
   }
   .top {
     display: flex;
@@ -198,7 +237,6 @@ const area = `${padX},${chartH - padY} ${line} ${chartW - padX},${chartH - padY}
     margin: 0.35rem 0 0;
     font-size: clamp(1.8rem, 4vw, 2.6rem);
     font-weight: 400;
-    letter-spacing: 0.01em;
     color: var(--emerald);
   }
   .unit {
@@ -208,6 +246,7 @@ const area = `${padX},${chartH - padY} ${line} ${chartW - padX},${chartH - padY}
   }
   .sum-sm {
     margin: 0.2rem 0 0;
+    display: block;
     font-size: clamp(1.25rem, 2.4vw, 1.7rem);
   }
   .legs {
@@ -218,29 +257,31 @@ const area = `${padX},${chartH - padY} ${line} ${chartW - padX},${chartH - padY}
     flex-wrap: wrap;
     gap: 1.25rem 2rem;
   }
-  .legs li {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
+  .legs li { display: flex; flex-direction: column; gap: 0.2rem; }
   .legs span { color: var(--stone); font-size: 0.9rem; }
   .legs strong { font-weight: 400; }
 
-  .fund, .wallet, .idle, .history details, .counter {
+  .row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    align-items: stretch;
+  }
+  .card {
     border: 1px solid var(--wash);
     background: color-mix(in srgb, var(--paper) 82%, transparent);
-    padding: 1.25rem 1.35rem;
+    padding: 1.15rem 1.25rem;
+    min-height: 7.25rem;
   }
-  .fund h1 {
-    margin: 0;
-    font-size: clamp(1.4rem, 3vw, 1.9rem);
-    font-weight: 400;
+  .fund, .idle {
+    display: grid;
+    align-content: center;
+    gap: 0.55rem;
   }
   .fund-row {
-    margin-top: 1.1rem;
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: 0.65rem;
+    gap: 0.5rem;
     align-items: stretch;
   }
   .asset {
@@ -248,7 +289,7 @@ const area = `${padX},${chartH - padY} ${line} ${chartW - padX},${chartH - padY}
     align-items: center;
     border: 1px solid var(--ink);
     background: var(--paper);
-    padding: 0.65rem 1rem;
+    padding: 0.55rem 0.85rem;
     font-family: var(--font-mono);
     letter-spacing: 0.1em;
   }
@@ -259,12 +300,12 @@ const area = `${padX},${chartH - padY} ${line} ${chartW - padX},${chartH - padY}
     background: transparent;
     color: var(--ink);
     font: inherit;
-    font-size: 1.15rem;
-    padding: 0.65rem 0.85rem;
+    font-size: 1.1rem;
+    padding: 0.55rem 0.75rem;
   }
   .cta, .stop {
     font-family: var(--font-mono);
-    font-size: 0.78rem;
+    font-size: 0.75rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     cursor: pointer;
@@ -273,101 +314,77 @@ const area = `${padX},${chartH - padY} ${line} ${chartW - padX},${chartH - padY}
     background: var(--ink);
     color: var(--rice);
     border: 0;
-    padding: 0.75rem 1.4rem;
+    padding: 0.6rem 1.15rem;
   }
+  .idle-copy { margin: 0; color: var(--stone); line-height: 1.4; }
 
-  .split {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-    align-items: stretch;
-  }
-  .wallet, .idle { min-height: 7.5rem; }
-  .wallet { padding: 0; }
-  .wallet summary, .history summary {
+  .fold { padding: 0; }
+  .fold summary {
     list-style: none;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    padding: 1.25rem 1.35rem;
-    min-height: 7.5rem;
+    padding: 1.15rem 1.25rem;
+    min-height: 7.25rem;
   }
-  .wallet summary::-webkit-details-marker,
-  .history summary::-webkit-details-marker { display: none; }
-  .wallet summary::after,
-  .history summary::after {
-    content: "▾";
+  .fold summary::-webkit-details-marker { display: none; }
+  .fold summary::after { content: "▾"; color: var(--stone); }
+  .fold[open] summary { min-height: 0; }
+  .fold[open] summary::after { content: "▴"; }
+  .fold-body { padding: 0 1.25rem 1.25rem; display: grid; gap: 0.75rem; }
+
+  .pools { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.7rem; }
+  .pools li {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.75rem;
+    align-items: center;
+  }
+  .pair {
+    display: flex;
+    align-items: center;
+  }
+  .logo {
+    width: 1.7rem;
+    height: 1.7rem;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.04em;
+    color: var(--rice);
+    background: var(--ink);
+  }
+  .logo.usdc { background: var(--emerald); }
+  .logo.weth, .logo.eth { background: var(--ink); }
+  .logo.wbtc { background: #8a6a3a; }
+  .logo.second { margin-left: -0.45rem; }
+  .pool-meta { display: flex; flex-direction: column; gap: 0.12rem; }
+  .pool-addr {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
     color: var(--stone);
   }
-  .wallet[open] summary {
-    min-height: 0;
-  }
-  .wallet[open] summary::after,
-  .history[open] summary::after { content: "▴"; }
-  .wallet-body { padding: 0 1.35rem 1.35rem; display: grid; gap: 0.75rem; }
-  .tokens {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-  .tokens li {
-    display: flex;
-    align-items: baseline;
-    gap: 0.4rem;
-    border: 1px solid var(--wash);
-    padding: 0.4rem 0.7rem;
-  }
-  .tok { font-family: var(--font-mono); letter-spacing: 0.06em; }
-  .share { color: var(--stone); font-size: 0.85rem; }
-  .pools-k { margin-top: 0.4rem; }
-  .pools { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.55rem; }
-  .pools li { display: flex; flex-direction: column; gap: 0.15rem; }
-  .pool-note { color: var(--stone); font-size: 0.88rem; }
-
-  .idle { display: grid; gap: 0.45rem; align-content: center; }
-  .idle-copy { margin: 0; color: var(--stone); line-height: 1.4; }
   .stop {
-    margin-top: 0.4rem;
     justify-self: start;
     background: transparent;
     color: var(--emerald);
     border: 1px solid var(--emerald);
-    padding: 0.65rem 1rem;
+    padding: 0.6rem 0.95rem;
   }
 
-  .history {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-    align-items: start;
+  .chart { width: 100%; height: auto; }
+  .grid { stroke: var(--wash); stroke-width: 1; }
+  .axis {
+    fill: var(--stone);
+    font-size: 9px;
+    font-family: var(--font-mono);
+    text-anchor: end;
   }
-  .history details { padding: 0; }
-  .history summary { min-height: 0; }
-  .ledger {
-    list-style: none;
-    margin: 0;
-    padding: 0 1.35rem 1.25rem;
-    display: grid;
-    gap: 0.55rem;
-  }
-  .ledger li {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    border-top: 1px solid var(--wash);
-    padding-top: 0.55rem;
-  }
-  .counter { display: grid; gap: 0.35rem; align-content: start; }
-  .chart {
-    width: 100%;
-    height: auto;
-    margin-top: 0.5rem;
-  }
+  .axis.month { text-anchor: middle; }
   .chart-area {
     fill: color-mix(in srgb, var(--emerald) 18%, transparent);
     stroke: none;
@@ -381,15 +398,32 @@ const area = `${padX},${chartH - padY} ${line} ${chartW - padX},${chartH - padY}
   }
   .chart-dot { fill: var(--emerald); }
 
-  .honesty {
+  .wide { width: 100%; }
+  .ledger {
+    list-style: none;
     margin: 0;
-    color: var(--stone);
-    font-size: 0.88rem;
+    padding: 0 1.25rem 1.2rem;
+    display: grid;
+    gap: 0.55rem;
+  }
+  .ledger li {
+    display: grid;
+    grid-template-columns: 8.5rem 1fr auto;
+    gap: 1rem;
+    border-top: 1px solid var(--wash);
+    padding-top: 0.55rem;
+    align-items: baseline;
+  }
+  .ledger code {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--emerald);
   }
 
+  .honesty { margin: 0; color: var(--stone); font-size: 0.88rem; }
+
   @media (max-width: 760px) {
-    .fund-row, .split, .history {
-      grid-template-columns: 1fr;
-    }
+    .row { grid-template-columns: 1fr; }
+    .ledger li { grid-template-columns: 1fr; gap: 0.2rem; }
   }
 </style>
