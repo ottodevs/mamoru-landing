@@ -5,7 +5,7 @@ import { sealSession } from "../src/ops";
 import worker, { type Env } from "../src/worker";
 
 describe("open instant", () => {
-  test("flips at 2026-09-27 09:00 JST and not a millisecond before", () => {
+  test("flips at OPEN_AT and not a millisecond before", () => {
     expect(isOpen(OPEN_AT_MS - 1)).toBe(false);
     expect(isOpen(OPEN_AT_MS)).toBe(true);
     expect(homeDocument("/", OPEN_AT_MS - 1)).toBe("teaser");
@@ -100,9 +100,7 @@ describe("site gate", () => {
   test("strangers and the raw file never see the page", async () => {
     const env = opsEnv();
     const stranger = await worker.fetch(new Request("https://mamoru.lol/ops/landing"), env);
-    expect(stranger.status).toBe(302);
-    expect(stranger.headers.get("location") ?? "").toContain("https://accounts.google.com/");
-    expect(stranger.headers.get("x-robots-tag")).toContain("noindex");
+    expect(stranger.status).toBe(404);
     const absent = await worker.fetch(new Request("https://mamoru.lol/ops/login"), env);
     expect(absent.status).toBe(404);
 
@@ -112,7 +110,7 @@ describe("site gate", () => {
     expect(rawFile.status).toBe(404);
   });
 
-  test("an allowlisted session gets the preview, and / stays the teaser until the instant", async () => {
+  test("the public home is the site and /ops/landing is gone", async () => {
     const env = opsEnv();
     const token = await sealSession("k1", "ottodevs@gmail.com");
     const preview = await worker.fetch(
@@ -121,23 +119,12 @@ describe("site gate", () => {
       }),
       env,
     );
-    expect(preview.status).toBe(200);
-    expect(preview.headers.get("x-robots-tag")).toContain("noindex");
-    expect(preview.headers.get("cache-control")).toBe("no-store, no-transform");
-    expect(preview.headers.get("permissions-policy")).toBe(
-      "camera=(), microphone=(), geolocation=()",
-    );
-    const html = await preview.text();
-    expect(html).toContain("APY.");
-    expect(html).toContain("This becomes the front page when the countdown ends.");
-    expect(html).toContain('href="/ops"');
-    expect(preview.headers.get("content-encoding")).toBeNull();
+    expect(preview.status).toBe(404);
 
     const home = await worker.fetch(new Request("https://mamoru.lol/"), env);
     expect(home.status).toBe(200);
-    expect(home.headers.get("cache-control")).toContain("no-transform");
-    expect(home.headers.get("permissions-policy")).not.toContain("private-aggregation");
-    expect(await home.text()).toBe("teaser");
+    expect(home.headers.get("cache-control")).toContain("must-revalidate");
+    expect(await home.text()).toContain("APY.");
 
     const icon = await worker.fetch(new Request("https://mamoru.lol/favicon.ico"), env);
     expect(icon.status).toBe(200);
@@ -170,19 +157,11 @@ describe("hosts", () => {
     expect(apex.status).toBe(404);
   });
 
-  test("the app stays behind the same Google allowlist until the countdown ends", async () => {
+  test("the app is public after open", async () => {
     const env = opsEnv();
-    const stranger = await worker.fetch(new Request("https://app.mamoru.lol/onboarding"), env);
-    expect(stranger.status).toBe(302);
-    expect(stranger.headers.get("location") ?? "").toContain("https://accounts.google.com/");
-
-    const token = await sealSession("k1", "ottodevs@gmail.com");
-    const home = await worker.fetch(
-      new Request("https://app.mamoru.lol/", { headers: { cookie: `mamoru_list=${token}` } }),
-      env,
-    );
-    expect(home.status).toBe(200);
-    expect(home.headers.get("location")).toBeNull();
-    expect(await home.text()).toContain("Mamoru — App");
+    const stranger = await worker.fetch(new Request("https://app.mamoru.lol/"), env);
+    expect(stranger.status).toBe(200);
+    expect(stranger.headers.get("location")).toBeNull();
+    expect(await stranger.text()).toContain("Mamoru — App");
   });
 });

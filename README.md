@@ -1,6 +1,6 @@
 # Mamoru landing
 
-Coming-soon page for [mamoru.lol](https://mamoru.lol). One screen on rice paper: the Mamoru lockup, `APY. DELIVERED.`, a countdown to the opening after ETHGlobal Tokyo, and an email bar.
+Public landing for [mamoru.lol](https://mamoru.lol). Rice paper, `APY DELIVERED`, How it works, allocation, FAQs. The countdown teaser retired 2026-09-26.
 
 Built with [Astro](https://astro.build). Served by a Cloudflare Worker that also handles `POST /api/notify`.
 
@@ -24,8 +24,9 @@ bun run build && bunx wrangler dev
 
 | Path | What it is |
 |---|---|
-| `src/pages/index.astro` | The screen: lockup, hero, teaser, countdown, email bar |
-| `src/components/Countdown.astro` | Countdown to `2026-09-27T09:00:00+09:00` |
+| `src/pages/index.astro` | Retired teaser (lockup, countdown, email bar) |
+| `src/pages/open.astro` | Public landing at `/` after open |
+| `src/components/Countdown.astro` | Countdown used on the teaser |
 | `src/components/EmailBar.astro` | Email bar and the on-the-list follow-up |
 | `src/styles/global.css` | Rice paper field, ink, Noto Serif |
 | `src/worker.ts` | Assets, `POST /api/notify`, and the private list at `/ops` |
