@@ -8,13 +8,13 @@ export const APP_HREF = "https://app.mamoru.lol";
 
 const MIX = [
   {
-    pct: 15,
+    pct: 10,
     name: "Mercenary Capital",
     note: "High risk, high reward",
     tone: "mercenary",
   },
   {
-    pct: 35,
+    pct: 40,
     name: "BTC / ETH + Stablecoins",
     note: "Derivatives paired with stablecoins",
     tone: "paired",
