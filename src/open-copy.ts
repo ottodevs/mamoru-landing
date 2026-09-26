@@ -36,7 +36,7 @@ export const OPEN_COPY = {
   ],
   cta: "Launch APP",
   onboard: {
-    storageKey: "mamoru-onboarded-v3",
+    storageKey: "mamoru-onboarded-v4",
     skip: "Skip",
     next: "Next",
     finish: "Finish",

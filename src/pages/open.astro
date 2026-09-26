@@ -148,10 +148,15 @@ const emailHref = `mailto:${copy.footer.email}`;
     const KEY = storageKey;
     const APP = appHref;
     const root = document.getElementById("mamoru-onboard");
-    try {
-      if (new URLSearchParams(location.search).has("onboard")) {
-        localStorage.removeItem(KEY);
+    const forceOnboard = (() => {
+      try {
+        return new URLSearchParams(location.search).has("onboard");
+      } catch {
+        return false;
       }
+    })();
+    try {
+      if (forceOnboard) localStorage.removeItem(KEY);
     } catch {}
     function seen() {
       try { return localStorage.getItem(KEY) === "1"; } catch { return false; }
@@ -192,6 +197,7 @@ const emailHref = `mailto:${copy.footer.email}`;
       event.preventDefault();
       goApp();
     });
+    if (forceOnboard) show(0);
   </script>
 </Base>
 
