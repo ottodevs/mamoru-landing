@@ -48,9 +48,9 @@ export const OPEN_COPY = {
         mix: false,
       },
       {
-        title: "What happens next?",
+        title: "What's next?",
         body: [
-          "Mamoru applies a conservative allocation of 50%-35%-15% and will send USDC to a wallet of your choice.",
+          "Capital will follow 50%-35%-15% rule and rewards will be nurture stablecoin Pool.",
         ],
         mix: false,
       },

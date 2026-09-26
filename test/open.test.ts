@@ -34,12 +34,12 @@ describe("open instant", () => {
     expect("plain" in OPEN_COPY.works).toBe(false);
     expect(OPEN_COPY.onboard.screens.map((s) => s.title)).toEqual([
       "Fund Mamoru",
-      "What happens next?",
+      "What's next?",
       "You keep control",
     ]);
     expect(OPEN_COPY.onboard.screens[0].body[0]).toBe("Send the ETH you want to invest.");
     expect(OPEN_COPY.onboard.screens[1].body[0]).toBe(
-      "Mamoru applies a conservative allocation of 50%-35%-15% and will send USDC to a wallet of your choice.",
+      "Capital will follow 50%-35%-15% rule and rewards will be nurture stablecoin Pool.",
     );
     expect(OPEN_COPY.onboard.screens[2].body).toEqual([
       "No forced lockups or third-party dependencies.",
