@@ -7,8 +7,8 @@ type Token = "ETH" | "WETH" | "USDC" | "WBTC";
 const workingUsdc = "16,800";
 const walletEth = "2.40";
 const totalUsdc = "17,220";
-const currentApr = "5.20%";
-const monthAvg = "4.80%";
+const currentApr = "5.2%";
+const monthAvg = "4.8%";
 const idleUsdc = "0";
 const idleTokens = 0;
 
@@ -94,20 +94,22 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     </header>
 
     <section class="balance" aria-labelledby="total-title">
-      <div class="totals">
-        <p class="kicker heavy" id="total-title">Total balance</p>
-        <p class="sum">{totalUsdc} <span class="unit">USDC</span></p>
+      <div class="balance-top">
+        <div>
+          <p class="kicker heavy" id="total-title">Total balance</p>
+          <p class="sum">{totalUsdc} <span class="unit">USDC</span></p>
+        </div>
+        <ul class="apr">
+          <li>
+            <span class="apr-label">Current APR</span>
+            <strong>{currentApr}</strong>
+          </li>
+          <li>
+            <span class="apr-label">Monthly average</span>
+            <strong>{monthAvg}</strong>
+          </li>
+        </ul>
       </div>
-      <ul class="apr">
-        <li>
-          <span class="apr-label">Current APR</span>
-          <strong id="apr-now">{currentApr}</strong>
-        </li>
-        <li>
-          <span class="apr-label">Monthly average</span>
-          <strong>{monthAvg}</strong>
-        </li>
-      </ul>
       <div class="acts">
         <button type="button" class="act" id="add-open" aria-haspopup="dialog" aria-controls="add">
           Add capital
@@ -341,16 +343,14 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     color: var(--stone);
     font-size: 0.88rem;
   }
-  .balance {
-    flex: 0 0 auto;
-    margin-bottom: 2rem;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(12.5rem, 16.5rem);
-    grid-template-rows: auto auto;
-    gap: 1rem 1.25rem;
-    align-items: stretch;
+  .balance { flex: 0 0 auto; margin-bottom: 2rem; }
+  .balance-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1.25rem;
+    flex-wrap: wrap;
   }
-  .totals { grid-column: 1; grid-row: 1; min-width: 0; }
   .balance .kicker.heavy {
     font-size: 0.86rem;
     font-weight: 700;
@@ -382,19 +382,17 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     list-style: none;
     margin: 0;
     padding: 0;
-    grid-column: 2;
-    grid-row: 1 / 3;
     display: flex;
-    flex-direction: column;
-    gap: 0.55rem;
+    flex-wrap: wrap;
+    gap: 0.7rem;
+    align-self: center;
   }
   .apr li {
-    flex: 1;
     display: flex;
     flex-direction: column;
-    justify-content: center;
-    gap: 0.2rem;
-    padding: 0.65rem 1rem;
+    gap: 0.15rem;
+    min-width: 8.5rem;
+    padding: 0.7rem 1rem 0.75rem;
     border: 1px solid var(--emerald);
     background: color-mix(in srgb, var(--emerald) 10%, var(--paper));
   }
@@ -406,12 +404,11 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     color: var(--emerald);
   }
   .apr strong {
-    font-size: clamp(1.6rem, 3.2vw, 2.15rem);
+    font-size: 1.85rem;
     font-weight: 500;
     letter-spacing: -0.02em;
     line-height: 1;
     color: var(--emerald);
-    font-variant-numeric: tabular-nums;
   }
   .line {
     display: flex;
@@ -421,13 +418,10 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
   }
   .fold-main { display: flex; flex-direction: column; min-width: 0; }
   .acts {
-    grid-column: 1;
-    grid-row: 2;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+    display: flex;
+    flex-wrap: wrap;
     gap: 0.7rem;
-    align-items: stretch;
-    margin-top: 0;
+    margin-top: var(--s3);
   }
   .act {
     background: var(--emerald);
@@ -437,12 +431,8 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     font-size: 0.75rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    padding: 0.85rem 1.2rem;
+    padding: 0.65rem 1.2rem;
     cursor: pointer;
-  }
-  .acts .act {
-    width: 100%;
-    min-height: 3.1rem;
   }
   .act[aria-expanded="true"] {
     outline: 1px solid var(--ink);
@@ -780,29 +770,12 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     .pools li, .ledger li { grid-template-columns: 1fr; gap: 0.25rem; }
     .ledger code { justify-self: start; }
     .xfer-row { grid-template-columns: 1fr auto; }
-    .balance { grid-template-columns: 1fr; grid-template-rows: auto auto auto; }
-    .apr { grid-column: 1; grid-row: 2; }
-    .acts { grid-column: 1; grid-row: 3; }
-    .apr li { min-height: 4.2rem; }
+    .apr { width: 100%; }
+    .apr li { flex: 1; min-width: 0; }
   }
 </style>
 
 <script>
-  const aprNow = document.querySelector<HTMLElement>("#apr-now");
-  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (aprNow && !reduceMotion) {
-    const base = 5.2;
-    let value = base;
-    let target = base;
-    const step = () => {
-      if (Math.random() < 0.08) target = base + (Math.random() - 0.5) * 0.18;
-      value += (target - value) * 0.12;
-      aprNow.textContent = `${value.toFixed(2)}%`;
-      window.setTimeout(step, 140);
-    };
-    step();
-  }
-
   const input = document.querySelector<HTMLInputElement>("#fund-amount");
   const available = 2.4;
   document.querySelectorAll<HTMLButtonElement>("[data-pct]").forEach((btn) => {
