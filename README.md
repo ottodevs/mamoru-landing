@@ -26,6 +26,7 @@ bun run build && bunx wrangler dev
 |---|---|
 | `src/pages/index.astro` | The screen: lockup, hero, teaser, countdown, email bar |
 | `src/pages/open.astro` | Next landing, gated at `/ops/landing` until open |
+| `src/pages/app/*.astro` | UI mockup, private at `/ops/app` (Google, same allowlist). The real app is `ottodevs/mamoru` on app.mamoru.lol |
 | `src/components/Countdown.astro` | Countdown to `2026-09-27T09:00:00+09:00` |
 | `src/components/EmailBar.astro` | Email bar and the on-the-list follow-up |
 | `src/styles/global.css` | Rice paper field, ink, Noto Serif |

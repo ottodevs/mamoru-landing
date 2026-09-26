@@ -12,6 +12,7 @@
  * /ops is Google sign-in only, allowlisted by exact email (src/google.ts).
  * Anything without a valid allowlisted session is sent to the root.
  * /ops/landing is that same gate, showing the page that replaces / at OPEN_AT.
+ * /ops/app is that same gate, showing the UI mockup. It does not open at OPEN_AT.
  * /open is the built file for that page. Browsers never fetch it by path.
  */
 
@@ -361,6 +362,11 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
     );
   }
 
+  const mock = mockPageAsset(url.pathname);
+  if (!session && mock && request.method === "GET") {
+    return beginGoogle(oauth, secure, url.hostname, redirectUri, mockReturn(url.pathname));
+  }
+
   // Return from Google. Any doubt sends to the root with no session.
   if (url.pathname === "/ops/callback" && request.method === "GET") {
     const clear = [clearOauthCookie(secure, url.hostname)];
@@ -408,6 +414,10 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
   ) {
     if (isOpen()) return notFound();
     return serveSite(request, env, true);
+  }
+
+  if (mock && (request.method === "GET" || request.method === "HEAD")) {
+    return serveMock(request, env, mock);
   }
 
   if (url.pathname === "/ops/logout" && request.method === "POST") {
@@ -578,9 +588,9 @@ const APP_HOST = "app.mamoru.lol";
 const RETURN_TO = new Set([
   "https://mamoru.lol/ops",
   "https://mamoru.lol/ops/landing",
-  "https://app.mamoru.lol/",
-  "https://app.mamoru.lol/onboarding",
-  "https://app.mamoru.lol/dashboard",
+  "https://mamoru.lol/ops/app",
+  "https://mamoru.lol/ops/app/onboarding",
+  "https://mamoru.lol/ops/app/dashboard",
 ]);
 
 function allowedReturn(raw: string | null | undefined): string | null {
@@ -589,12 +599,30 @@ function allowedReturn(raw: string | null | undefined): string | null {
   return raw;
 }
 
-function appPageAsset(pathname: string): string | null {
-  const path = pathname.replace(/\/+$/, "") || "/";
-  if (path === "/") return "/app/index.html";
-  if (path === "/onboarding") return "/app/onboarding/index.html";
-  if (path === "/dashboard") return "/app/dashboard/index.html";
+/** The UI mockup, kept private under /ops/app for design iteration. */
+function mockPageAsset(pathname: string): string | null {
+  const path = pathname.replace(/\/+$/, "");
+  if (path === "/ops/app") return "/app/index.html";
+  if (path === "/ops/app/onboarding") return "/app/onboarding/index.html";
+  if (path === "/ops/app/dashboard") return "/app/dashboard/index.html";
   return null;
+}
+
+function mockReturn(pathname: string): string {
+  return `https://mamoru.lol${pathname.replace(/\/+$/, "")}`;
+}
+
+async function serveMock(request: Request, env: Env, assetPath: string): Promise<Response> {
+  const assetUrl = new URL(assetPath, request.url);
+  const asset = await env.ASSETS.fetch(new Request(assetUrl.toString(), { method: "GET" }));
+  if (!asset.ok) return notFound();
+  const headers = new Headers(asset.headers);
+  headers.set("content-type", "text/html; charset=utf-8");
+  headers.delete("content-length");
+  headers.set("cache-control", "no-store");
+  headers.set("x-robots-tag", "noindex, nofollow");
+  if (request.method === "HEAD") return new Response(null, { status: 200, headers });
+  return new Response(asset.body, { status: 200, headers });
 }
 
 export default {
@@ -623,42 +651,8 @@ async function dispatch(request: Request, env: Env): Promise<Response> {
     // /app does not exist. Not on the apex, not on the app host.
     if (lower === "/app" || lower.startsWith("/app/")) return notFound();
 
-    if (host === APP_HOST) {
-      const page = appPageAsset(path);
-      if (!isOpen()) {
-        const oauth = oauthConfig(env);
-        const session = oauth
-          ? await openSession(oauth.sessionSecret, request.headers.get("cookie"))
-          : null;
-        if (!session || !isAllowed(session.email)) {
-          if (!oauth || !page) return notFound();
-          const next =
-            page === "/app/index.html"
-              ? "https://app.mamoru.lol/"
-              : `https://app.mamoru.lol${path.replace(/\/+$/, "")}`;
-          return beginGoogle(
-            oauth,
-            secureRequest(request),
-            host,
-            "https://mamoru.lol/ops/callback",
-            next,
-          );
-        }
-      }
-      const assetPath = appPageAsset(path);
-      if (assetPath && (request.method === "GET" || request.method === "HEAD")) {
-        const assetUrl = new URL(assetPath, request.url);
-        const asset = await env.ASSETS.fetch(new Request(assetUrl.toString(), { method: "GET" }));
-        if (!asset.ok) return notFound();
-        const headers = new Headers(asset.headers);
-        headers.set("content-type", "text/html; charset=utf-8");
-        headers.delete("content-length");
-        headers.set("cache-control", "no-store");
-        if (!isOpen()) headers.set("x-robots-tag", "noindex, nofollow");
-        if (request.method === "HEAD") return new Response(null, { status: 200, headers });
-        return new Response(asset.body, { status: 200, headers });
-      }
-    }
+    // app.mamoru.lol belongs to the mamoru-app Worker. Nothing here answers it.
+    if (host === APP_HOST) return notFound();
 
     if (path === "/ops" || path.startsWith("/ops/")) {
       return handleOps(request, env);

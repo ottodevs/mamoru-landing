@@ -177,19 +177,26 @@ describe("hosts", () => {
     expect(apex.status).toBe(404);
   });
 
-  test("the app stays behind the same Google allowlist until the countdown ends", async () => {
+  test("the mockup lives behind the /ops Google allowlist and the app host is not served here", async () => {
     const env = opsEnv();
-    const stranger = await worker.fetch(new Request("https://app.mamoru.lol/onboarding"), env);
+    const stranger = await worker.fetch(new Request("https://mamoru.lol/ops/app/onboarding"), env);
     expect(stranger.status).toBe(302);
     expect(stranger.headers.get("location") ?? "").toContain("https://accounts.google.com/");
 
     const token = await sealSession("k1", "ottodevs@gmail.com");
     const home = await worker.fetch(
-      new Request("https://app.mamoru.lol/", { headers: { cookie: `mamoru_list=${token}` } }),
+      new Request("https://mamoru.lol/ops/app", { headers: { cookie: `mamoru_list=${token}` } }),
       env,
     );
     expect(home.status).toBe(200);
-    expect(home.headers.get("location")).toBeNull();
+    expect(home.headers.get("x-robots-tag")).toContain("noindex");
     expect(await home.text()).toContain("Mamoru — App");
+
+    const appHost = await worker.fetch(
+      new Request("https://app.mamoru.lol/", { headers: { cookie: `mamoru_list=${token}` } }),
+      env,
+    );
+    expect(appHost.status).toBe(404);
   });
+
 });
