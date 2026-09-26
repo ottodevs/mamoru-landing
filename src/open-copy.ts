@@ -6,6 +6,27 @@
 
 export const APP_HREF = "https://app.mamoru.lol";
 
+const MIX = [
+  {
+    pct: 15,
+    name: "Mercenary Capital",
+    note: "",
+    tone: "mercenary",
+  },
+  {
+    pct: 35,
+    name: "BTC / ETH + Stablecoins",
+    note: "derivatives paired with stablecoins",
+    tone: "paired",
+  },
+  {
+    pct: 50,
+    name: "Stablecoins",
+    note: "Liquidity, yield and market depth.",
+    tone: "stables",
+  },
+] as const;
+
 export const OPEN_COPY = {
   title: "Mamoru",
   description: "The principal keeps working. The yield gets set aside.",
@@ -19,26 +40,7 @@ export const OPEN_COPY = {
     skip: "Skip",
     next: "Next",
     finish: "Finish",
-    mix: [
-      {
-        pct: 15,
-        name: "Mercenary Capital",
-        note: "",
-        tone: "mercenary",
-      },
-      {
-        pct: 35,
-        name: "BTC / ETH + Stablecoins",
-        note: "derivatives paired with stablecoins",
-        tone: "paired",
-      },
-      {
-        pct: 50,
-        name: "Stablecoins",
-        note: "Liquidity, yield and market depth.",
-        tone: "stables",
-      },
-    ],
+    mix: MIX,
     screens: [
       {
         title: "Fund Mamoru",
@@ -85,13 +87,21 @@ export const OPEN_COPY = {
       wallet: "Your wallet",
       agent: "Agent account",
       pools: "Pools",
+      payout: "Wallet of your choice",
       eth: "ETH",
       usdc: "USDC",
+      aria: "ETH moves from your wallet to the agent account and into the pools. USDC harvests to a wallet of your choice.",
     },
   },
   spend: {
     heading: "DeFi yield for the real world",
     body: "No more yield that just keeps stacking onchain. Mamoru turns your DeFi yield into stablecoins you can actually use while your principal keeps working.",
+  },
+  allocation: {
+    eyebrow: "Portfolio allocation",
+    heading: ["Three assets.", "One Strategy."],
+    body: "A diversified allocation designed to capture yield.",
+    mix: MIX,
   },
   questions: {
     heading: "FAQs",

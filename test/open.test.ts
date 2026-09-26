@@ -45,6 +45,8 @@ describe("open instant", () => {
     expect(`${OPEN_COPY.hero.line1} ${OPEN_COPY.hero.line2}`).toBe("APY DELIVERED");
     expect(OPEN_COPY.questions.items.map((i) => i.q)).not.toContain("How do I reach you?");
     expect(OPEN_COPY.footer.x).toEqual({ handle: "@entermamoru", href: "https://x.com/entermamoru" });
+    expect(OPEN_COPY.works.scene.payout).toBe("Wallet of your choice");
+    expect(OPEN_COPY.allocation.mix.reduce((sum, m) => sum + m.pct, 0)).toBe(100);
   });
 });
 

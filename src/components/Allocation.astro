@@ -1,0 +1,216 @@
+---
+import { OPEN_COPY } from "../open-copy";
+
+interface Props {
+  variant?: "page" | "aside";
+}
+
+const { variant = "page" } = Astro.props;
+const { eyebrow, heading, body, mix } = OPEN_COPY.allocation;
+const label = mix.map((seg) => `${seg.pct}% ${seg.name}`).join(", ");
+---
+<section class:list={["alloc", variant]} id="allocation" aria-labelledby="alloc-title">
+  <div class="alloc-wrap">
+    <div class="alloc-copy">
+      <p class="eyebrow">{eyebrow}</p>
+      <h2 id="alloc-title">
+        {heading.map((line) => <span>{line}</span>)}
+      </h2>
+      <p class="lead">{body}</p>
+    </div>
+
+    <figure class="board" role="img" aria-label={label}>
+      {mix.map((seg, index) => (
+        <>
+          <div class={`seg ${seg.tone}`} style={`grid-row:${index + 1}`}>{seg.pct}%</div>
+          <div class={`key ${seg.tone}`} style={`grid-row:${index + 1}`}>
+            <span class="tick" aria-hidden="true"><span class="dot"></span></span>
+            <span class="key-text">
+              <span class="key-name">{seg.name}</span>
+              <span class="key-pct">{seg.pct}%</span>
+              {seg.note ? <span class="key-note">{seg.note}</span> : null}
+            </span>
+          </div>
+        </>
+      ))}
+    </figure>
+  </div>
+</section>
+
+<style>
+  .alloc {
+    --tone-stables: #a7a9ac;
+    --tone-paired: #0e1b2e;
+    --tone-mercenary: #6fa78f;
+    width: 100%;
+    padding: clamp(4rem, 9vw, 6.5rem) clamp(1.15rem, 5vw, 4.5rem);
+    box-sizing: border-box;
+    scroll-margin-top: var(--nav-h, 4.5rem);
+  }
+  .alloc-wrap {
+    max-width: 68rem;
+    margin-inline: auto;
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: clamp(2rem, 6vw, 5rem);
+    align-items: start;
+  }
+
+  .eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin: 0 0 clamp(1.25rem, 3vw, 2rem);
+    font-size: 0.75rem;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--emerald);
+  }
+  .eyebrow::after {
+    content: "";
+    width: 2rem;
+    height: 1px;
+    background: currentColor;
+  }
+  h2 {
+    margin: 0;
+    font-size: clamp(2.2rem, 5vw, 3.6rem);
+    font-weight: 400;
+    letter-spacing: 0.005em;
+    line-height: 1.08;
+  }
+  h2 span {
+    display: block;
+  }
+  .lead {
+    margin: clamp(1.25rem, 3vw, 1.75rem) 0 0;
+    max-width: 20rem;
+    font-size: 1.125rem;
+    line-height: 1.5;
+    color: color-mix(in srgb, var(--ink) 62%, var(--paper));
+  }
+
+  .board {
+    margin: 0;
+    display: grid;
+    grid-template-columns: clamp(6rem, 12vw, 8.75rem) 1fr;
+    grid-template-rows: 15fr 35fr 50fr;
+    height: clamp(26rem, 44vw, 32rem);
+    column-gap: 0;
+  }
+  .aside {
+    padding: 0;
+  }
+  .aside .alloc-wrap {
+    max-width: none;
+    grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
+    gap: clamp(1.25rem, 3vw, 2.5rem);
+  }
+  .aside .board {
+    height: clamp(18rem, 38vw, 26rem);
+  }
+  .seg {
+    grid-column: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: clamp(1.05rem, 1.6vw, 1.25rem);
+    letter-spacing: 0.02em;
+  }
+  .seg.mercenary {
+    background: var(--tone-mercenary);
+    color: var(--ink);
+    border-radius: 0.55rem 0.55rem 0 0;
+  }
+  .seg.paired {
+    background: var(--tone-paired);
+    color: var(--paper);
+  }
+  .seg.stables {
+    background: var(--tone-stables);
+    color: var(--ink);
+    border-radius: 0 0 0.55rem 0.55rem;
+  }
+
+  .key {
+    grid-column: 2;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 1rem;
+    min-height: 0;
+  }
+  .tick {
+    position: relative;
+    display: block;
+    width: 4rem;
+    height: 1px;
+    margin-left: 1rem;
+    background: color-mix(in srgb, var(--ink) 22%, transparent);
+  }
+  .dot {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0.9rem;
+    height: 0.9rem;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 0.45rem var(--rice);
+  }
+  .mercenary .dot {
+    background: var(--tone-mercenary);
+  }
+  .paired .dot {
+    background: var(--tone-paired);
+  }
+  .stables .dot {
+    background: var(--tone-stables);
+  }
+  .key-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .key-name {
+    font-size: clamp(1.15rem, 1.8vw, 1.35rem);
+    line-height: 1.25;
+  }
+  .key-pct {
+    font-size: 1rem;
+    letter-spacing: 0.02em;
+  }
+  .mercenary .key-pct {
+    color: var(--emerald);
+  }
+  .paired .key-pct {
+    color: var(--tone-paired);
+  }
+  .key-note {
+    max-width: 16rem;
+    margin-top: 0.35rem;
+    font-size: 0.95rem;
+    line-height: 1.45;
+    color: color-mix(in srgb, var(--ink) 58%, var(--paper));
+  }
+
+  @media (max-width: 760px) {
+    .alloc-wrap {
+      grid-template-columns: 1fr;
+    }
+    .board {
+      grid-template-columns: 4.75rem 1fr;
+      height: 28rem;
+    }
+    .tick {
+      width: 2.25rem;
+      margin-left: 0.6rem;
+    }
+    .key {
+      gap: 0.75rem;
+    }
+    .key-note {
+      font-size: 0.9rem;
+    }
+  }
+</style>
