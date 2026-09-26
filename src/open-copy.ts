@@ -36,7 +36,7 @@ export const OPEN_COPY = {
   ],
   cta: "Launch APP",
   onboard: {
-    storageKey: "mamoru-onboarded-v2",
+    storageKey: "mamoru-onboarded-v3",
     skip: "Skip",
     next: "Next",
     finish: "Finish",
@@ -49,8 +49,8 @@ export const OPEN_COPY = {
       },
       {
         title: "What happens next?",
-        body: [],
-        mix: true,
+        body: ["Mamoru applies a conservative allocation 50-35-15"],
+        mix: false,
       },
       {
         title: "You keep control",

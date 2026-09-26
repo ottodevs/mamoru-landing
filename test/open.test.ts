@@ -38,7 +38,14 @@ describe("open instant", () => {
       "You keep control",
     ]);
     expect(OPEN_COPY.onboard.screens[0].body[0]).toBe("Send the ETH you want to invest.");
-    expect(OPEN_COPY.onboard.mix.map((m) => m.pct)).toEqual([15, 35, 50]);
+    expect(OPEN_COPY.onboard.screens[1].body[0]).toBe(
+      "Mamoru applies a conservative allocation 50-35-15",
+    );
+    expect(OPEN_COPY.onboard.screens[2].body).toEqual([
+      "No forced lockups or third-party dependencies.",
+      "Free to exit anytime.",
+    ]);
+    expect(OPEN_COPY.onboard.screens.every((s) => s.mix === false)).toBe(true);
   });
 
   test("hero, FAQs and footer", () => {
