@@ -1,5 +1,8 @@
 ---
 import Base from "../../layouts/Base.astro";
+import TokenMark from "../../components/TokenMark.astro";
+
+type Token = "ETH" | "WETH" | "USDC" | "WBTC";
 
 const workingEth = "4.20";
 const idleEth = "0.80";
@@ -8,30 +11,55 @@ const rewardsUsdc = "3,180";
 const totalUsdc = "19,980";
 const harvestedUsdc = "3,180";
 
-const pools = [
+const inUse: Token[] = ["ETH", "WETH", "WBTC", "USDC"];
+
+const pools: {
+  protocol: string;
+  pair: string;
+  a: Token;
+  b?: Token;
+  address: string;
+  chain: string;
+  sleeve: string;
+  amount: string;
+}[] = [
   {
+    protocol: "Uniswap v3",
     pair: "WETH / USDC",
     a: "WETH",
     b: "USDC",
-    address: "0x8ad5…c41a",
+    address: "0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8",
+    chain: "Ethereum",
+    sleeve: "35% · paired",
+    amount: "1.47 ETH",
   },
   {
+    protocol: "Uniswap v3",
     pair: "WBTC / USDC",
     a: "WBTC",
     b: "USDC",
-    address: "0x4e91…12f0",
+    address: "0x99ac8cA7087fA4A2A1FB6357269965A2014ABc35",
+    chain: "Ethereum",
+    sleeve: "paired",
+    amount: "0.29 ETH",
   },
   {
+    protocol: "Aave v3",
     pair: "USDC",
     a: "USDC",
-    b: "",
-    address: "0xa0b8…e65d",
+    address: "0x98C23E9d8f34FEFb1B7BD6a91B7FF122F4e16F5c",
+    chain: "Ethereum",
+    sleeve: "50% · stables",
+    amount: "2.10 ETH",
   },
   {
+    protocol: "Morpho",
     pair: "ETH",
     a: "ETH",
-    b: "",
-    address: "0x388c…8182",
+    address: "0x388C818CA8B9251b393131C08a736A67ccB19297",
+    chain: "Ethereum",
+    sleeve: "15% · mercenary",
+    amount: "0.34 ETH",
   },
 ];
 
@@ -46,7 +74,7 @@ const months = [
 const yTicks = [0, 1000, 2000, 3000];
 const maxY = 3200;
 const chartW = 320;
-const chartH = 160;
+const chartH = 168;
 const left = 36;
 const right = 12;
 const top = 10;
@@ -62,12 +90,15 @@ const line = chartPoints.map((p) => `${p.x},${p.y}`).join(" ");
 const area = `${left},${top + innerH} ${line} ${left + innerW},${top + innerH}`;
 
 const harvests = [
-  { when: "26 Sep 2026", amount: "420 USDC", tx: "0x7c2a…9e14" },
-  { when: "19 Sep 2026", amount: "380 USDC", tx: "0xb19d…44c8" },
-  { when: "12 Sep 2026", amount: "410 USDC", tx: "0x03f1…a6b0" },
-  { when: "5 Sep 2026", amount: "390 USDC", tx: "0xde80…21aa" },
-  { when: "29 Aug 2026", amount: "1,580 USDC", tx: "0x91ab…c02f" },
+  { when: "26 Sep 2026", amount: "420 USDC", tx: "0x7c2a91e0b19d44c803f1a6b09e14c2" },
+  { when: "19 Sep 2026", amount: "380 USDC", tx: "0xb19d03aa7c2a91e044c8de80a6b0" },
+  { when: "12 Sep 2026", amount: "410 USDC", tx: "0x03f191abde8021aac02f7c2a91e0" },
+  { when: "5 Sep 2026", amount: "390 USDC", tx: "0xde80b19d44c8a6b07c2a91e0c02f" },
+  { when: "29 Aug 2026", amount: "1,580 USDC", tx: "0x91abc02f7c2a91e0b19d44c803f1" },
 ];
+
+const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
+const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 ---
 <Base title="Mamoru — Dashboard" description="Working capital, idle ETH, and harvested USDC.">
   <main class="page">
@@ -107,80 +138,82 @@ const harvests = [
       </aside>
     </section>
 
-    <section class="row" aria-label="Working and harvested">
-      <details class="card fold">
-        <summary>
-          <span>
-            <span class="kicker">Working capital</span>
-            <span class="sum-sm">{workingEth} ETH</span>
-          </span>
-        </summary>
-        <div class="fold-body">
-          <ul class="pools">
-            {pools.map((p) => (
-              <li>
-                <span class="pair" aria-hidden="true">
-                  <span class={`logo ${p.a.toLowerCase()}`}>{p.a.slice(0, 1)}</span>
-                  {p.b ? <span class={`logo ${p.b.toLowerCase()} second`}>{p.b.slice(0, 1)}</span> : null}
-                </span>
-                <span class="pool-meta">
-                  <span class="pool-pair">{p.pair}</span>
-                  <span class="pool-addr">{p.address}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
-          <button type="button" class="stop">Stop strategy</button>
-        </div>
-      </details>
+    <details class="card fold wide">
+      <summary>
+        <span>
+          <span class="kicker">Working capital</span>
+          <span class="sum-sm">{workingEth} ETH</span>
+        </span>
+      </summary>
+      <div class="fold-body">
+        <p class="kicker">Assets in use</p>
+        <ul class="strip">
+          {inUse.map((sym) => (
+            <li>
+              <TokenMark symbol={sym} size={28} />
+              <span>{sym}</span>
+            </li>
+          ))}
+        </ul>
+        <p class="kicker">Where it sits</p>
+        <ul class="pools">
+          {pools.map((p) => (
+            <li>
+              <span class="pair">
+                <TokenMark symbol={p.a} size={28} />
+                {p.b ? <span class="overlap"><TokenMark symbol={p.b} size={28} /></span> : null}
+              </span>
+              <span class="pool-meta">
+                <span class="pool-pair">{p.protocol} · {p.pair}</span>
+                <span class="pool-addr">{p.chain} · {shortAddr(p.address)}</span>
+                <span class="pool-note">{p.sleeve}</span>
+              </span>
+              <span class="pool-amt">{p.amount}</span>
+            </li>
+          ))}
+        </ul>
+        <button type="button" class="stop">Stop strategy</button>
+      </div>
+    </details>
 
-      <details class="card fold">
-        <summary>
-          <span>
-            <span class="kicker">Total harvested</span>
-            <span class="sum-sm">{harvestedUsdc} USDC</span>
-          </span>
-        </summary>
-        <div class="fold-body">
-          <svg class="chart" viewBox={`0 0 ${chartW} ${chartH}`} role="img" aria-label="USDC harvested by month">
-            {yTicks.map((tick) => {
-              const y = top + innerH - (tick / maxY) * innerH;
-              return (
-                <g>
-                  <line class="grid" x1={left} x2={left + innerW} y1={y} y2={y} />
-                  <text class="axis" x={left - 6} y={y + 3}>{tick === 0 ? "0" : `${tick / 1000}k`}</text>
-                </g>
-              );
-            })}
-            <polyline class="chart-area" points={area} />
-            <polyline class="chart-line" points={line} />
-            {chartPoints.map((p) => (
-              <g>
-                <circle class="chart-dot" cx={p.x} cy={p.y} r="2.4" />
-                <text class="axis month" x={p.x} y={chartH - 8}>{p.label}</text>
-              </g>
-            ))}
-          </svg>
-        </div>
-      </details>
-    </section>
-
-    <section class="history-wrap" aria-labelledby="history-title">
-      <details class="card fold wide">
-        <summary>
-          <span class="kicker" id="history-title">History</span>
-        </summary>
+    <details class="card fold wide">
+      <summary>
+        <span>
+          <span class="kicker">Harvest details</span>
+          <span class="sum-sm">{harvestedUsdc} USDC</span>
+        </span>
+      </summary>
+      <div class="harvest">
         <ul class="ledger">
           {harvests.map((h) => (
             <li>
               <time>{h.when}</time>
               <span>{h.amount}</span>
-              <code>{h.tx}</code>
+              <code>{shortTx(h.tx)}</code>
             </li>
           ))}
         </ul>
-      </details>
-    </section>
+        <svg class="chart" viewBox={`0 0 ${chartW} ${chartH}`} role="img" aria-label="USDC harvested by month">
+          {yTicks.map((tick) => {
+            const y = top + innerH - (tick / maxY) * innerH;
+            return (
+              <g>
+                <line class="grid" x1={left} x2={left + innerW} y1={y} y2={y} />
+                <text class="axis" x={left - 6} y={y + 3}>{tick === 0 ? "0" : `${tick / 1000}k`}</text>
+              </g>
+            );
+          })}
+          <polyline class="chart-area" points={area} />
+          <polyline class="chart-line" points={line} />
+          {chartPoints.map((p) => (
+            <g>
+              <circle class="chart-dot" cx={p.x} cy={p.y} r="2.4" />
+              <text class="axis month" x={p.x} y={chartH - 8}>{p.label}</text>
+            </g>
+          ))}
+        </svg>
+      </div>
+    </details>
 
     <p class="honesty">Illustration — example mix, not a promised rate.</p>
   </main>
@@ -271,12 +304,13 @@ const harvests = [
     border: 1px solid var(--wash);
     background: color-mix(in srgb, var(--paper) 82%, transparent);
     padding: 1.15rem 1.25rem;
-    min-height: 7.25rem;
   }
+  .wide { width: 100%; }
   .fund, .idle {
     display: grid;
     align-content: center;
     gap: 0.55rem;
+    min-height: 7.25rem;
   }
   .fund-row {
     display: grid;
@@ -327,47 +361,51 @@ const harvests = [
     justify-content: space-between;
     gap: 1rem;
     padding: 1.15rem 1.25rem;
-    min-height: 7.25rem;
   }
   .fold summary::-webkit-details-marker { display: none; }
   .fold summary::after { content: "▾"; color: var(--stone); }
-  .fold[open] summary { min-height: 0; }
   .fold[open] summary::after { content: "▴"; }
-  .fold-body { padding: 0 1.25rem 1.25rem; display: grid; gap: 0.75rem; }
+  .fold-body, .harvest { padding: 0 1.25rem 1.25rem; }
+  .fold-body { display: grid; gap: 0.85rem; }
 
-  .pools { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.7rem; }
-  .pools li {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 0.75rem;
-    align-items: center;
+  .strip {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.1rem;
   }
-  .pair {
+  .strip li {
     display: flex;
     align-items: center;
-  }
-  .logo {
-    width: 1.7rem;
-    height: 1.7rem;
-    border-radius: 999px;
-    display: grid;
-    place-items: center;
+    gap: 0.45rem;
     font-family: var(--font-mono);
-    font-size: 0.62rem;
-    letter-spacing: 0.04em;
-    color: var(--rice);
-    background: var(--ink);
+    font-size: 0.8rem;
+    letter-spacing: 0.06em;
   }
-  .logo.usdc { background: var(--emerald); }
-  .logo.weth, .logo.eth { background: var(--ink); }
-  .logo.wbtc { background: #8a6a3a; }
-  .logo.second { margin-left: -0.45rem; }
-  .pool-meta { display: flex; flex-direction: column; gap: 0.12rem; }
-  .pool-addr {
+
+  .pools { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.85rem; }
+  .pools li {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 0.9rem;
+    align-items: center;
+    border-top: 1px solid var(--wash);
+    padding-top: 0.75rem;
+  }
+  .pair { display: flex; align-items: center; }
+  .overlap { margin-left: -0.45rem; }
+  .pool-meta { display: flex; flex-direction: column; gap: 0.12rem; min-width: 0; }
+  .pool-pair { font-size: 1rem; }
+  .pool-addr, .pool-note {
     font-family: var(--font-mono);
     font-size: 0.78rem;
     color: var(--stone);
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
+  .pool-amt { font-family: var(--font-mono); font-size: 0.85rem; }
   .stop {
     justify-self: start;
     background: transparent;
@@ -376,6 +414,12 @@ const harvests = [
     padding: 0.6rem 0.95rem;
   }
 
+  .harvest {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 1.25rem;
+    align-items: start;
+  }
   .chart { width: 100%; height: auto; }
   .grid { stroke: var(--wash); stroke-width: 1; }
   .axis {
@@ -398,18 +442,17 @@ const harvests = [
   }
   .chart-dot { fill: var(--emerald); }
 
-  .wide { width: 100%; }
   .ledger {
     list-style: none;
     margin: 0;
-    padding: 0 1.25rem 1.2rem;
+    padding: 0;
     display: grid;
     gap: 0.55rem;
   }
   .ledger li {
     display: grid;
-    grid-template-columns: 8.5rem 1fr auto;
-    gap: 1rem;
+    grid-template-columns: 7.5rem auto 1fr;
+    gap: 0.75rem;
     border-top: 1px solid var(--wash);
     padding-top: 0.55rem;
     align-items: baseline;
@@ -418,12 +461,14 @@ const harvests = [
     font-family: var(--font-mono);
     font-size: 0.8rem;
     color: var(--emerald);
+    justify-self: end;
   }
 
   .honesty { margin: 0; color: var(--stone); font-size: 0.88rem; }
 
   @media (max-width: 760px) {
-    .row { grid-template-columns: 1fr; }
-    .ledger li { grid-template-columns: 1fr; gap: 0.2rem; }
+    .row, .harvest { grid-template-columns: 1fr; }
+    .pools li, .ledger li { grid-template-columns: 1fr; gap: 0.25rem; }
+    .ledger code { justify-self: start; }
   }
 </style>
