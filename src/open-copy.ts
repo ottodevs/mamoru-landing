@@ -10,7 +10,7 @@ const MIX = [
   {
     pct: 15,
     name: "Mercenary Capital",
-    note: "high risk, high reward",
+    note: "High risk, high reward",
     tone: "mercenary",
   },
   {

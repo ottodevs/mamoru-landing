@@ -48,7 +48,7 @@ describe("open instant", () => {
     expect(OPEN_COPY.works.scene.payout).toBe("Wallet of your choice");
     expect(OPEN_COPY.works.scene.strategy).toBe("Strategy");
     expect(OPEN_COPY.allocation.mix.reduce((sum, m) => sum + m.pct, 0)).toBe(100);
-    expect(OPEN_COPY.allocation.mix[0].note).toBe("high risk, high reward");
+    expect(OPEN_COPY.allocation.mix[0].note).toBe("High risk, high reward");
     expect(OPEN_COPY.allocation.mix[1].note).toBe("Derivatives paired with stablecoins");
   });
 });
