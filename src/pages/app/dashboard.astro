@@ -71,11 +71,10 @@ const months = [
   { label: "Aug", value: 2_370 },
   { label: "Sep", value: 3_180 },
 ];
-const yTicks = [0, 1000, 2000, 3000];
 const maxY = 3200;
 const chartW = 320;
 const chartH = 168;
-const left = 36;
+const left = 12;
 const right = 12;
 const top = 10;
 const bottom = 28;
@@ -194,15 +193,6 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
           ))}
         </ul>
         <svg class="chart" viewBox={`0 0 ${chartW} ${chartH}`} role="img" aria-label="USDC harvested by month">
-          {yTicks.map((tick) => {
-            const y = top + innerH - (tick / maxY) * innerH;
-            return (
-              <g>
-                <line class="grid" x1={left} x2={left + innerW} y1={y} y2={y} />
-                <text class="axis" x={left - 6} y={y + 3}>{tick === 0 ? "0" : `${tick / 1000}k`}</text>
-              </g>
-            );
-          })}
           <polyline class="chart-area" points={area} />
           <polyline class="chart-line" points={line} />
           {chartPoints.map((p) => (
@@ -421,14 +411,12 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     align-items: start;
   }
   .chart { width: 100%; height: auto; }
-  .grid { stroke: var(--wash); stroke-width: 1; }
-  .axis {
+  .axis.month {
     fill: var(--stone);
     font-size: 9px;
     font-family: var(--font-mono);
-    text-anchor: end;
+    text-anchor: middle;
   }
-  .axis.month { text-anchor: middle; }
   .chart-area {
     fill: color-mix(in srgb, var(--emerald) 18%, transparent);
     stroke: none;
