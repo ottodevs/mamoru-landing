@@ -2,6 +2,9 @@
  * The one note we send after someone leaves an email.
  * Copy closed by Brais, plus the custody line Ot asked for.
  * One note. No list rental, no second automated send.
+ *
+ * Outbound path: Loops Free transactional (not CF Email Sending).
+ * Keep this file as the source of truth for the Loops template body.
  */
 
 export const FOLLOW_UP_SUBJECT = "Welcome to Mamoru";

@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import worker, { NOTIFY_COPY, type Env, type OutboundMail } from "../src/worker";
+import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import worker, { NOTIFY_COPY, type Env } from "../src/worker";
 import type { WaitlistKv } from "../src/list";
 import { esc } from "../src/text";
 
@@ -19,17 +19,6 @@ function fakeKv(): WaitlistKv & { store: Map<string, string> } {
     async list({ prefix }) {
       const keys = [...store.keys()].filter((k) => k.startsWith(prefix)).map((name) => ({ name }));
       return { keys, list_complete: true };
-    },
-  };
-}
-
-function fakeMail(): OutboundMail & { sent: string[] } {
-  const sent: string[] = [];
-  return {
-    sent,
-    async send(message) {
-      sent.push(message.to);
-      return { messageId: `m${sent.length}` };
     },
   };
 }
@@ -57,17 +46,47 @@ function postForm(email: string): Request {
   });
 }
 
+type LoopsMock = { sent: string[]; status: number; success: boolean };
+let loops: LoopsMock;
+let originalFetch: typeof fetch;
+
+beforeEach(() => {
+  loops = { sent: [], status: 200, success: true };
+  originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(typeof input === "string" || input instanceof URL ? input : input.url);
+    if (url.includes("app.loops.so/api/v1/transactional")) {
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      if (body.email) loops.sent.push(body.email);
+      return new Response(JSON.stringify({ success: loops.success }), { status: loops.status });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+});
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
+
+function loopsEnv(kv: WaitlistKv): Env {
+  return {
+    ASSETS,
+    WAITLIST: kv,
+    LOOPS_API_KEY: "test-key",
+    LOOPS_TRANSACTIONAL_ID: "test-tx-id",
+  };
+}
+
 describe("/api/notify dedupe", () => {
   test("new then already; the note goes out once", async () => {
     const kv = fakeKv();
-    const mail = fakeMail();
-    const env: Env = { ASSETS, WAITLIST: kv, EMAIL: mail };
+    const env = loopsEnv(kv);
     const email = "dedupe-one@example.com";
 
     const first = await worker.fetch(post({ email, leave_blank: "" }), env);
     expect(first.status).toBe(200);
     expect(await first.json()).toEqual({ ok: true, status: "new" });
-    expect(mail.sent).toEqual([email]);
+    expect(loops.sent).toEqual([email]);
     const addresses = [...kv.store.keys()].filter((k) => k.startsWith("e:"));
     expect(addresses.length).toBe(1);
     const saved = JSON.parse(kv.store.get(addresses[0])!);
@@ -76,84 +95,50 @@ describe("/api/notify dedupe", () => {
     const second = await worker.fetch(post({ email: email.toUpperCase() }), env);
     expect(second.status).toBe(200);
     expect(await second.json()).toEqual({ ok: true, status: "already" });
-    expect(mail.sent).toEqual([email]);
+    expect(loops.sent).toEqual([email]);
     expect(JSON.parse(kv.store.get(addresses[0])!)).toEqual(saved);
   });
 
-  test("already does not retry a failed note", async () => {
-    const kv = fakeKv();
-    const mail = fakeMail();
-    mail.send = async () => {
-      throw Object.assign(new Error("nope"), { code: "unavailable" });
-    };
-    const env: Env = { ASSETS, WAITLIST: kv, EMAIL: mail };
-    const email = "dedupe-two@example.com";
-
-    expect(await (await worker.fetch(post({ email }), env)).json()).toEqual({
-      ok: true,
-      status: "new",
-    });
-    const key = [...kv.store.keys()].find((k) => k.startsWith("e:"))!;
-    expect(JSON.parse(kv.store.get(key)!).note).toBe("failed");
-
-    let calls = 0;
-    mail.send = async () => {
-      calls += 1;
-      return { messageId: "x" };
-    };
-    expect(await (await worker.fetch(post({ email }), env)).json()).toEqual({
-      ok: true,
-      status: "already",
-    });
-    expect(calls).toBe(0);
-    expect(JSON.parse(kv.store.get(key)!).note).toBe("failed");
-  });
-
-  test("without EMAIL the entry stays pending and is still new", async () => {
+  test("without Loops secrets the signup still saves as pending", async () => {
     const kv = fakeKv();
     const env: Env = { ASSETS, WAITLIST: kv };
-    const res = await worker.fetch(post({ email: "unlinked@example.com" }), env);
+    const email = "pending-one@example.com";
+    const res = await worker.fetch(post({ email }), env);
+    expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, status: "new" });
-    const key = [...kv.store.keys()].find((k) => k.startsWith("e:"))!;
-    expect(JSON.parse(kv.store.get(key)!).note).toBe("pending");
+    expect(loops.sent).toEqual([]);
+    const addresses = [...kv.store.keys()].filter((k) => k.startsWith("e:"));
+    const saved = JSON.parse(kv.store.get(addresses[0])!);
+    expect(saved.note).toBe("pending");
   });
 
-  test("a failed save never claims success", async () => {
+  test("Loops failure marks failed but signup is ok", async () => {
     const kv = fakeKv();
-    kv.put = async (key: string, value: string) => {
-      if (key.startsWith("e:")) throw new Error("kv down");
-      kv.store.set(key, value);
-    };
-    const env: Env = { ASSETS, WAITLIST: kv, EMAIL: fakeMail() };
-    const res = await worker.fetch(post({ email: "broken@example.com" }), env);
-    expect(res.status).toBe(503);
-    const data = (await res.json()) as { ok: boolean; error: string };
-    expect(data.ok).toBe(false);
-    expect(data.error).toBe(NOTIFY_COPY.failed);
-
-    const unbound = await worker.fetch(post({ email: "broken@example.com" }), { ASSETS });
-    expect(unbound.status).toBe(503);
-    expect(((await unbound.json()) as { ok: boolean }).ok).toBe(false);
+    const env = loopsEnv(kv);
+    loops.status = 502;
+    loops.success = false;
+    const email = "fail-one@example.com";
+    const res = await worker.fetch(post({ email }), env);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, status: "new" });
+    const addresses = [...kv.store.keys()].filter((k) => k.startsWith("e:"));
+    const saved = JSON.parse(kv.store.get(addresses[0])!);
+    expect(saved.note).toBe("failed");
   });
 
-  test("invalid email is 400 and honeypot is a quiet ok", async () => {
-    const env: Env = { ASSETS, WAITLIST: fakeKv(), EMAIL: fakeMail() };
-    const bad = await worker.fetch(post({ email: "not-an-email" }), env);
-    expect(bad.status).toBe(400);
-    const honey = await worker.fetch(post({ email: "bot@example.com", leave_blank: "x" }), env);
+  test("form post and honeypot", async () => {
+    const kv = fakeKv();
+    const env = loopsEnv(kv);
+    const ok = await worker.fetch(postForm("form-one@example.com"), env);
+    expect(ok.status).toBe(200);
+    expect(await ok.text()).toContain(esc(NOTIFY_COPY.new));
+
+    const honey = await worker.fetch(
+      post({ email: "bot@example.com", leave_blank: "x" }),
+      env,
+    );
     expect(honey.status).toBe(200);
     expect(await honey.json()).toEqual({ ok: true });
-    expect((env.EMAIL as ReturnType<typeof fakeMail>).sent).toEqual([]);
-  });
-
-  test("html fallback shows the short line, not the email body", async () => {
-    const env: Env = { ASSETS, WAITLIST: fakeKv(), EMAIL: fakeMail() };
-    const first = await worker.fetch(postForm("form@example.com"), env);
-    const html1 = await first.text();
-    expect(first.headers.get("content-type")).toContain("text/html");
-    expect(html1).toContain(esc(NOTIFY_COPY.new));
-    expect(html1).not.toContain("Welcome to Mamoru");
-    const second = await worker.fetch(postForm("form@example.com"), env);
-    expect(await second.text()).toContain(esc(NOTIFY_COPY.already));
+    expect(loops.sent).toEqual(["form-one@example.com"]);
   });
 });

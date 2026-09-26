@@ -6,7 +6,8 @@
  *   GOOGLE_CLIENT_ID      secret. Google OAuth client for /ops.
  *   GOOGLE_CLIENT_SECRET  secret. Same client.
  *   OPS_SESSION_SECRET    secret. Signs the /ops session and OAuth state cookies.
- *   EMAIL                 Cloudflare Email binding. One welcome note, from notify@mamoru.lol.
+ *   LOOPS_API_KEY         secret. Loops Free API — welcome note send.
+ *   LOOPS_TRANSACTIONAL_ID vars. Published Loops transactional template id.
  *
  * /ops is Google sign-in only, allowlisted by exact email (src/google.ts).
  * Anything without a valid allowlisted session is sent to the root.
@@ -14,7 +15,6 @@
  * /open is the built file for that page. Browsers never fetch it by path.
  */
 
-import { FOLLOW_UP_SUBJECT, FOLLOW_UP_TEXT, MAIL_FROM, followUpHtml } from "./follow-up";
 import {
   bumpedLimit,
   deleteEntry,
@@ -50,30 +50,18 @@ import {
 import { homeDocument, isOpen } from "./open-at";
 import { esc, normalizeEmail, sameSecret } from "./text";
 
-export interface OutboundMail {
-  send(message: {
-    to: string;
-    from: { email: string; name?: string };
-    subject: string;
-    html?: string;
-    text?: string;
-    attachments?: {
-      content: ArrayBuffer;
-      filename: string;
-      type: string;
-      disposition: "inline" | "attachment";
-      contentId?: string;
-    }[];
-  }): Promise<{ messageId: string }>;
-}
-
 export interface Env {
   ASSETS: Fetcher;
   WAITLIST?: WaitlistKv;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   OPS_SESSION_SECRET?: string;
-  EMAIL?: OutboundMail;
+  LOOPS_API_KEY?: string;
+  LOOPS_TRANSACTIONAL_ID?: string;
+}
+
+function loopsReady(env: Env): boolean {
+  return Boolean(env.LOOPS_API_KEY && env.LOOPS_TRANSACTIONAL_ID);
 }
 
 type NotifyInput = { email: string; honey: string };
@@ -118,50 +106,46 @@ async function readNotify(request: Request): Promise<NotifyInput | null> {
   return null;
 }
 
-async function markBytes(request: Request, env: Env): Promise<ArrayBuffer | null> {
-  try {
-    const url = new URL("/mark-two-stones.png", request.url);
-    const res = await env.ASSETS.fetch(new Request(url.toString()));
-    if (!res.ok) return null;
-    return await res.arrayBuffer();
-  } catch {
-    return null;
-  }
-}
-
+/**
+ * Welcome note via Loops Free transactional API.
+ * Template copy lives in Loops (Brais lines + custody). Worker only triggers send.
+ * @see https://loops.so/docs/api-reference/send-transactional-email
+ */
 async function deliver(
-  request: Request,
   env: Env,
   email: string,
 ): Promise<"sent" | "failed" | "unlinked"> {
-  if (!env.EMAIL) return "unlinked";
-  const mark = await markBytes(request, env);
+  const apiKey = env.LOOPS_API_KEY;
+  const transactionalId = env.LOOPS_TRANSACTIONAL_ID;
+  if (!apiKey || !transactionalId) return "unlinked";
   try {
-    await env.EMAIL.send({
-      to: email,
-      from: { email: MAIL_FROM.email, name: MAIL_FROM.name },
-      subject: FOLLOW_UP_SUBJECT,
-      text: FOLLOW_UP_TEXT,
-      html: followUpHtml(mark != null),
-      attachments: mark
-        ? [
-            {
-              content: mark,
-              filename: "mamoru.png",
-              type: "image/png",
-              disposition: "inline",
-              contentId: "mamoru-mark",
-            },
-          ]
-        : undefined,
+    const res = await fetch("https://app.loops.so/api/v1/transactional", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+        "Idempotency-Key": `mamoru-welcome:${email}`,
+      },
+      body: JSON.stringify({
+        email,
+        transactionalId,
+        addToAudience: false,
+      }),
     });
-    return "sent";
-  } catch (error) {
-    const code =
-      error && typeof error === "object" && "code" in error
-        ? String((error as { code: unknown }).code)
-        : "error";
-    console.error("followup_failed", code);
+    if (res.ok) {
+      const data = (await res.json().catch(() => null)) as { success?: boolean } | null;
+      if (data && data.success === false) {
+        console.error("loops_followup_failed", res.status);
+        return "failed";
+      }
+      return "sent";
+    }
+    // 409 = idempotency replay within 24h → treat as already sent
+    if (res.status === 409) return "sent";
+    console.error("loops_followup_failed", res.status);
+    return "failed";
+  } catch {
+    console.error("loops_followup_failed", "network");
     return "failed";
   }
 }
@@ -170,11 +154,11 @@ export type NotifyStatus = "new" | "already";
 
 /**
  * Save once. An address already on the list is left exactly as it is:
- * no rewrite, no second note. The welcome note only goes out when EMAIL is
- * bound; without it the entry stays "pending" and the signup still counts.
+ * no rewrite, no second note. The welcome note only goes out when Loops is
+ * wired; without it the entry stays "pending" and the signup still counts.
  */
 export async function saveAndNote(
-  request: Request,
+  _request: Request,
   env: Env,
   kv: WaitlistKv,
   email: string,
@@ -183,8 +167,8 @@ export async function saveAndNote(
   if (existing) return "already";
   const entry: Entry = { email, at: new Date().toISOString(), note: "pending" };
   await writeEntry(kv, entry);
-  if (!env.EMAIL) return "new";
-  const result = await deliver(request, env, email);
+  if (!loopsReady(env)) return "new";
+  const result = await deliver(env, email);
   if (result === "unlinked") return "new";
   try {
     await writeEntry(kv, {
@@ -453,13 +437,13 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
     if (!(await sameSecret(String(form.get("csrf") ?? ""), session.csrf))) {
       return redirectOps(request, "bad", []);
     }
-    if (!env.EMAIL) return redirectOps(request, "waiting", []);
+    if (!loopsReady(env)) return redirectOps(request, "waiting", []);
     const { entries } = await listEntries(env.WAITLIST);
     let failed = false;
     let sent = 0;
     for (const entry of entries) {
       if (entry.note === "sent" || sent >= 25) continue;
-      const result = await deliver(request, env, entry.email);
+      const result = await deliver(env, entry.email);
       if (result === "sent") {
         sent += 1;
         await writeEntry(env.WAITLIST, {
@@ -487,7 +471,7 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
         truncated,
         csrf: session.csrf,
         flash,
-        mailReady: Boolean(env.EMAIL),
+        mailReady: loopsReady(env),
         who: session.email,
       }),
       [flashCookie("", secure)],

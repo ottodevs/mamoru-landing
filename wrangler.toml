@@ -24,14 +24,13 @@ run_worker_first = true
 # Form live = segundo Ot GO only. Keep false until then.
 [vars]
 SHOW_EMAIL_FORM = "false"
-# LOOPS_FORM_ID = ""  # set after Loops form created; still keep SHOW_EMAIL_FORM false
+# LOOPS_FORM_ID = ""  # unused while KV+/ops list path stands (SHOW_EMAIL_FORM false)
+# Welcome note via Loops Free transactional (not CF Email Sending).
+# LOOPS_TRANSACTIONAL_ID is non-secret; set after template is published in Loops.
+LOOPS_TRANSACTIONAL_ID = "cmuhwutct03ex0j0g4gniv28r"
 
 # Address list. Keys are hashes. Values stay in this account.
 [[kv_namespaces]]
 binding = "WAITLIST"
 id = "69293a22f249404e9e0a1bca6878252e"
 
-# One welcome note from notify@mamoru.lol. No other sender.
-[[send_email]]
-name = "EMAIL"
-allowed_sender_addresses = ["notify@mamoru.lol"]

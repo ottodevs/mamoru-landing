@@ -177,7 +177,7 @@ export function flashCookie(flash: Flash, secure: boolean): string {
 
 const FLASH_COPY: Record<Exclude<Flash, "">, string> = {
   sent: "Notes sent.",
-  waiting: "Still waiting. The domain cannot send yet.",
+  waiting: "Still waiting. Loops is not wired yet.",
   failed: "Some notes did not go out. The address stays on the list.",
   removed: "Removed from the list.",
   bad: "That did not go through. Try again.",
@@ -273,7 +273,7 @@ export function renderList(opts: {
   const waiting = opts.entries.length - sent;
   const flash = opts.flash ? `<p class="flash">${FLASH_COPY[opts.flash]}</p>` : "";
   const mail = opts.mailReady
-    ? `<p class="quiet">The note goes out once, from notify@mamoru.lol. If it says Failed, the domain cannot send yet. The address is still saved.</p>`
+    ? `<p class="quiet">The note goes out once via Loops (Welcome to Mamoru). If it says Failed, Loops rejected the send. The address is still saved.</p>`
     : `<p class="quiet">The list is saved. The note cannot go out yet: sending from the domain is not connected.</p>`;
   const more = opts.truncated
     ? `<p class="quiet">There are more. These are the first ${opts.entries.length}.</p>`
