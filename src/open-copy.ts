@@ -86,11 +86,11 @@ export const OPEN_COPY = {
     scene: {
       wallet: "Your wallet",
       agent: "Agent account",
-      pools: "Pools",
+      strategy: "Strategy",
       payout: "Wallet of your choice",
       eth: "ETH",
       usdc: "USDC",
-      aria: "ETH moves from your wallet to the agent account and into the pools. USDC harvests to a wallet of your choice.",
+      aria: "ETH moves from your wallet to the agent account and into the strategy. USDC harvests to a wallet of your choice.",
     },
   },
   spend: {

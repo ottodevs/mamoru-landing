@@ -34,18 +34,18 @@ const emailHref = `mailto:${copy.footer.email}`;
       <a class="cta js-launch" href={APP_HREF}>{copy.cta}</a>
     </section>
 
-    <section class="band pair" aria-label="How it works">
-      <div class="pair-row">
-        <WorksStory />
-        <Allocation variant="aside" />
-      </div>
+    <section class="band flow" aria-label="How it works">
+      <WorksStory />
     </section>
 
-    <section class="band" id="spend" aria-labelledby="spend-title">
-      <div class="wrap">
-        <h2 id="spend-title">{copy.spend.heading}</h2>
-        <p class="body">{copy.spend.body}</p>
-        <a class="cta spend-cta js-launch" href={APP_HREF}>{copy.cta}</a>
+    <section class="band pair" aria-label="Allocation and yield">
+      <div class="pair-row">
+        <Allocation variant="aside" />
+        <section class="spend" id="spend" aria-labelledby="spend-title">
+          <h2 id="spend-title">{copy.spend.heading}</h2>
+          <p class="body">{copy.spend.body}</p>
+          <a class="cta spend-cta js-launch" href={APP_HREF}>{copy.cta}</a>
+        </section>
       </div>
     </section>
 
@@ -348,11 +348,14 @@ const emailHref = `mailto:${copy.footer.email}`;
     max-width: 68rem;
     margin-inline: auto;
   }
+  .flow {
+    padding-bottom: clamp(2rem, 4vw, 3rem);
+  }
   .pair-row {
     max-width: 76rem;
     margin-inline: auto;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
     gap: clamp(2rem, 5vw, 4rem);
     align-items: center;
   }

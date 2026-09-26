@@ -2,23 +2,24 @@
 import { OPEN_COPY } from "../open-copy";
 
 const { heading, scene } = OPEN_COPY.works;
-const vessels = [
-  { tone: "stables", x: 396, h: 40 },
-  { tone: "paired", x: 422, h: 28 },
-  { tone: "mercenary", x: 448, h: 16 },
+const bars = [
+  { tone: "mercenary", y: 104, h: 12 },
+  { tone: "paired", y: 116, h: 26 },
+  { tone: "stables", y: 142, h: 28 },
 ];
+const usdcStarts = ["0s", "-0.9s", "-1.8s"];
 ---
 <section class="works" id="works" aria-labelledby="works-title">
   <h2 id="works-title">{heading}</h2>
-  <svg class="scene" viewBox="0 0 520 340" role="img" aria-label={scene.aria}>
-    <path id="route-connect" class="route" d="M148 92 H196" />
-    <path id="route-fund" class="route" d="M324 92 H372" />
-    <path id="route-usdc" class="route" d="M436 136 V220" />
+  <svg class="scene" viewBox="0 0 1120 240" role="img" aria-label={scene.aria}>
+    <path id="route-connect" class="route" d="M224 132 H312" />
+    <path id="route-fund" class="route" d="M512 132 H600" />
+    <path id="route-usdc" class="route" d="M800 132 H888" />
 
-    <path class="edge e-eth" d="M148 92 H196" />
-    <path class="edge e-eth" d="M324 92 H372" />
-    <path class="edge e-usdc" d="M436 136 V212" />
-    <path class="head" d="M428 204 L436 220 L444 204" />
+    <path class="edge e-eth" d="M224 132 H312" />
+    <path class="edge e-eth" d="M512 132 H600" />
+    <path class="edge e-usdc" d="M800 132 H876" />
+    <path class="head" d="M868 124 L888 132 L868 140" />
 
     <g class="dots d-eth">
       {["0s", "-0.7s", "-1.4s"].map((begin) => (
@@ -36,56 +37,51 @@ const vessels = [
         </circle>
       ))}
     </g>
-    <g class="dots d-usdc">
-      {["0s", "-0.7s", "-1.4s"].map((begin) => (
-        <circle r="3.5">
-          <animateMotion dur="2.1s" begin={begin} repeatCount="indefinite">
-            <mpath href="#route-usdc" />
-          </animateMotion>
-        </circle>
-      ))}
-    </g>
+
+    {usdcStarts.map((begin) => (
+      <g class="usdc-fly">
+        <animateMotion dur="2.6s" begin={begin} repeatCount="indefinite">
+          <mpath href="#route-usdc" />
+        </animateMotion>
+        <circle class="usdc-disc" r="14" />
+        <circle class="usdc-ring" r="9.5" />
+        <text class="usdc-mark" y="5">$</text>
+      </g>
+    ))}
 
     <g class="node n-wallet">
-      <rect class="box" x="20" y="48" width="128" height="88" />
-      <rect class="glyph" x="62" y="76" width="44" height="30" />
-      <path class="glyph" d="M62 85 H106" />
-      <circle class="glyph-dot" cx="97" cy="96" r="2.4" />
-      <text x="84" y="36">{scene.wallet}</text>
+      <rect class="box" x="24" y="84" width="200" height="96" />
+      <rect class="glyph" x="102" y="112" width="44" height="30" />
+      <path class="glyph" d="M102 121 H146" />
+      <circle class="glyph-dot" cx="137" cy="132" r="2.4" />
+      <text x="124" y="68">{scene.wallet}</text>
     </g>
 
     <g class="node n-agent">
-      <rect class="box" x="196" y="48" width="128" height="88" />
-      <image href="/mark-two-stones.png" x="242" y="72" width="36" height="36" />
-      <text x="260" y="36">{scene.agent}</text>
+      <rect class="box" x="312" y="84" width="200" height="96" />
+      <image href="/mark-two-stones.png" x="394" y="108" width="36" height="36" />
+      <text x="412" y="68">{scene.agent}</text>
     </g>
 
-    <g class="node n-pools">
-      <rect class="box" x="372" y="48" width="128" height="88" />
-      {vessels.map((v) => (
-        <>
-          <rect class="vessel" x={v.x} y="76" width="20" height="44" />
-          <rect class={`fill ${v.tone}`} x={v.x + 1} y={119 - v.h} width="18" height={v.h} />
-        </>
+    <g class="node n-strategy">
+      <rect class="box" x="600" y="84" width="200" height="96" />
+      {bars.map((bar) => (
+        <rect class={`bar ${bar.tone}`} x="678" y={bar.y} width="44" height={bar.h} />
       ))}
-      <text x="436" y="36">{scene.pools}</text>
+      <text x="700" y="68">{scene.strategy}</text>
     </g>
 
     <g class="node n-payout">
-      <rect class="box" x="372" y="220" width="128" height="88" />
-      <rect class="glyph" x="414" y="248" width="44" height="30" />
-      <path class="glyph" d="M414 257 H458" />
-      <circle class="glyph-dot" cx="449" cy="268" r="2.4" />
-      <text x="436" y="198">Wallet of</text>
-      <text x="436" y="214">your choice</text>
+      <rect class="box" x="888" y="84" width="200" height="96" />
+      <rect class="glyph" x="966" y="112" width="44" height="30" />
+      <path class="glyph" d="M966 121 H1010" />
+      <circle class="glyph-dot" cx="1001" cy="132" r="2.4" />
+      <text x="988" y="56">Wallet of</text>
+      <text x="988" y="72">your choice</text>
     </g>
 
-    <text class="tag t-eth" x="172" y="80">{scene.eth}</text>
-    <text class="tag t-eth" x="348" y="80">{scene.eth}</text>
-    <g class="chip">
-      <rect x="406" y="160" width="60" height="22" />
-      <text x="436" y="176">{scene.usdc}</text>
-    </g>
+    <text class="tag t-eth" x="268" y="118">{scene.eth}</text>
+    <text class="tag t-eth" x="556" y="118">{scene.eth}</text>
   </svg>
 </section>
 
@@ -101,9 +97,11 @@ const vessels = [
     --tone-stables: #a7a9ac;
     --tone-paired: #0e1b2e;
     --tone-mercenary: #6fa78f;
+    --usdc: #2775ca;
     display: flex;
     flex-direction: column;
-    gap: 1.25rem;
+    gap: 1.5rem;
+    width: 100%;
     min-width: 0;
   }
 
@@ -127,14 +125,14 @@ const vessels = [
   .edge {
     fill: none;
     stroke: var(--ink);
-    stroke-width: 1.5;
+    stroke-width: 1.6;
     stroke-linecap: round;
   }
   .e-usdc,
   .head {
     stroke: var(--emerald);
     fill: none;
-    stroke-width: 1.6;
+    stroke-width: 1.8;
     stroke-linecap: round;
     stroke-linejoin: round;
   }
@@ -142,8 +140,19 @@ const vessels = [
   .dots circle {
     fill: var(--ink);
   }
-  .d-usdc circle {
-    fill: var(--emerald);
+  .usdc-disc {
+    fill: var(--usdc);
+  }
+  .usdc-ring {
+    fill: none;
+    stroke: #fff;
+    stroke-width: 1.5;
+  }
+  .usdc-mark {
+    fill: #fff;
+    font-family: var(--font-serif);
+    font-size: 13px;
+    text-anchor: middle;
   }
 
   .box {
@@ -162,44 +171,30 @@ const vessels = [
   .glyph-dot {
     fill: var(--ink);
   }
-  .vessel {
-    fill: none;
-    stroke: var(--ink);
-    stroke-width: 1;
+  .bar.mercenary {
+    fill: var(--tone-mercenary);
   }
-  .fill.stables {
-    fill: var(--tone-stables);
-  }
-  .fill.paired {
+  .bar.paired {
     fill: var(--tone-paired);
   }
-  .fill.mercenary {
-    fill: var(--tone-mercenary);
+  .bar.stables {
+    fill: var(--tone-stables);
   }
 
   .scene text {
     font-family: var(--font-serif);
-    font-size: 14px;
+    font-size: 15px;
     fill: var(--ink);
     text-anchor: middle;
   }
   .scene .tag {
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.14em;
-  }
-  .chip rect {
-    fill: var(--paper);
-    stroke: var(--emerald);
-    stroke-width: 1.2;
-  }
-  .scene .chip text {
-    font-size: 11px;
-    letter-spacing: 0.14em;
-    fill: var(--emerald);
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .dots {
+    .dots,
+    .usdc-fly {
       display: none;
     }
   }
