@@ -1,76 +1,355 @@
 ---
 import Base from "../../layouts/Base.astro";
+
+const workingEth = "4.20";
+const idleEth = "0.80";
+const totalEth = "5.00";
+const readyUsdc = "1,240";
+const harvestedUsdc = "3,180";
+
+const tokens = [
+  { symbol: "USDC", share: "50%" },
+  { symbol: "WETH", share: "28%" },
+  { symbol: "WBTC", share: "7%" },
+  { symbol: "ETH", share: "15%" },
+];
+
+const pools = [
+  { name: "Uniswap v3 WETH / USDC", note: "35% sleeve · paired" },
+  { name: "Uniswap v3 WBTC / USDC", note: "paired" },
+  { name: "Aave v3 USDC", note: "50% sleeve · stables" },
+  { name: "Morpho ETH", note: "15% sleeve · mercenary" },
+];
+
+const harvests = [
+  { when: "26 Sep 2026", amount: "420 USDC" },
+  { when: "19 Sep 2026", amount: "380 USDC" },
+  { when: "12 Sep 2026", amount: "410 USDC" },
+  { when: "5 Sep 2026", amount: "390 USDC" },
+  { when: "29 Aug 2026", amount: "1,580 USDC" },
+];
 ---
-<Base title="Mamoru — Dashboard" description="Positions, health, and savings status.">
+<Base title="Mamoru — Dashboard" description="Working capital, idle ETH, and USDC ready to send.">
   <main class="page">
-    <div class="stack">
-      <p class="badge" role="status">Demo / dry-run · Live LP HOLD</p>
-      <p class="eyebrow"><a href="/">Home</a> / Dashboard</p>
-      <h1 class="hero">Dashboard</h1>
-      <p class="teaser">Pool positions and status. Numbers stay empty until Base deposit and gates are green. No APR or return promises.</p>
-      <section class="grid" aria-label="Dashboard panels">
-        <article class="card">
-          <h2>Strategy status</h2>
-          <p class="muted">Balanced mix illustration: 50% stablecoin · 35% BTC/ETH-stable LP · 15% high-yield.</p>
-          <p class="honesty">Example mix — not a return promise.</p>
-          <p class="status">Status: idle · dry-run</p>
-        </article>
-        <article class="card">
-          <h2>Portfolio</h2>
-          <p class="muted">Isolated agent capital. Main wallet untouched.</p>
-          <p class="value">—</p>
-          <p class="status">Status: not funded</p>
-        </article>
-        <article class="card">
-          <h2>Positions</h2>
-          <p class="muted">Uniswap LP ranges appear after dry-run and gates pass. Live LP HOLD.</p>
-          <p class="value">None</p>
-          <p class="status">Status: idle</p>
-        </article>
-        <article class="card">
-          <h2>Accumulated USDC savings</h2>
-          <p class="muted">Harvest converts pool yield to USDC. Not a savings calendar.</p>
-          <p class="value">—</p>
-          <p class="zero">No savings yet — harvest 0 is not a loss.</p>
-        </article>
-        <article class="card">
-          <h2>Savings history</h2>
-          <p class="muted">Transparent record of harvests and withdrawals when live.</p>
-          <p class="value">Empty</p>
-          <p class="status">Status: dry-run</p>
-        </article>
-        <article class="card">
-          <h2>Actions</h2>
-          <p class="muted">Pause · Withdraw capital · Withdraw savings — available after live grant.</p>
-          <div class="action-row">
-            <button type="button" class="btn ghost" disabled aria-disabled="true">Pause</button>
-            <button type="button" class="btn ghost" disabled aria-disabled="true">Withdraw capital</button>
-            <button type="button" class="btn ghost" disabled aria-disabled="true">Withdraw savings</button>
-          </div>
-        </article>
-      </section>
-      <nav class="actions"><a class="btn ghost" href="/onboarding">Back to onboarding</a></nav>
-    </div>
+    <header class="top">
+      <a class="brand" href="/">
+        <img src="/mark-two-stones.png" width="28" height="28" alt="" />
+        <span>Mamoru</span>
+      </a>
+      <p class="badge" role="status">Mock · illustration</p>
+    </header>
+
+    <section class="total" aria-labelledby="total-title">
+      <p class="kicker" id="total-title">Total balance</p>
+      <p class="sum">{totalEth} ETH <span class="plus">+</span> {readyUsdc} USDC</p>
+      <ul class="legs">
+        <li><span>Working</span> <strong>{workingEth} ETH</strong></li>
+        <li><span>Idle</span> <strong>{idleEth} ETH</strong></li>
+        <li><span>Ready to send</span> <strong>{readyUsdc} USDC</strong></li>
+      </ul>
+    </section>
+
+    <section class="fund" aria-labelledby="fund-title">
+      <h1 id="fund-title">Fund Mamoru</h1>
+      <p class="lede">Send ETH from your wallet. The agent works with that isolated capital.</p>
+      <form class="fund-row" action="#" method="post" onsubmit="return false;">
+        <label class="asset" aria-label="Asset">
+          <span class="asset-sym">ETH</span>
+          <span class="asset-name">Ethereum</span>
+        </label>
+        <label class="amount">
+          <span class="sr">Amount</span>
+          <input type="text" name="amount" inputmode="decimal" placeholder="0.00" autocomplete="off" />
+        </label>
+        <button type="submit" class="cta">Fund</button>
+      </form>
+      <p class="hint">ETH only. Main wallet stays untouched.</p>
+    </section>
+
+    <section class="split" aria-label="Working and idle">
+      <details class="wallet" open>
+        <summary>
+          <span>
+            <span class="kicker">Wallet</span>
+            <span class="sum-sm">Working {workingEth} ETH</span>
+          </span>
+        </summary>
+        <div class="wallet-body">
+          <p class="kicker">Tokens at work</p>
+          <ul class="tokens">
+            {tokens.map((t) => (
+              <li>
+                <span class="tok">{t.symbol}</span>
+                <span class="share">{t.share}</span>
+              </li>
+            ))}
+          </ul>
+          <p class="kicker pools-k">Pools</p>
+          <ul class="pools">
+            {pools.map((p) => (
+              <li>
+                <span class="pool-name">{p.name}</span>
+                <span class="pool-note">{p.note}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </details>
+
+      <aside class="idle">
+        <p class="kicker">Idle</p>
+        <p class="sum-sm">{idleEth} ETH</p>
+        <p class="idle-copy">ETH received, not yet assigned. Mamoru will put it to work from here.</p>
+        <button type="button" class="stop">Stop strategy</button>
+      </aside>
+    </section>
+
+    <section class="history" aria-labelledby="history-title">
+      <details>
+        <summary>
+          <span class="kicker" id="history-title">History</span>
+        </summary>
+        <ul class="ledger">
+          {harvests.map((h) => (
+            <li>
+              <time>{h.when}</time>
+              <span>{h.amount}</span>
+            </li>
+          ))}
+        </ul>
+      </details>
+      <div class="counter" aria-label="Total harvested">
+        <p class="kicker">Total harvested</p>
+        <p class="sum-sm">{harvestedUsdc} USDC</p>
+      </div>
+    </section>
+
+    <p class="honesty">Illustration — example mix, not a promised rate.</p>
   </main>
 </Base>
+
 <style>
-  .page { min-height: 100dvh; display: flex; justify-content: center; padding: clamp(1.5rem, 5vh, 3.5rem) clamp(1rem, 5vw, 4rem) 3rem; }
-  .stack { width: 100%; max-width: 52rem; display: flex; flex-direction: column; gap: 1rem; }
-  .badge { margin: 0; width: fit-content; font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--emerald); border: 1px solid var(--wash); padding: 0.25rem 0.65rem; border-radius: 999px; }
-  .eyebrow { margin: 0; font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--stone); }
-  .eyebrow a { text-decoration: none; }
-  .hero { margin: 0; font-size: clamp(2rem, 5vw, 3rem); font-weight: 400; }
-  .teaser { margin: 0; color: var(--stone); line-height: 1.45; max-width: 40rem; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0.85rem; margin-top: 0.5rem; }
-  .card { border: 1px solid var(--wash); background: color-mix(in srgb, var(--paper) 85%, transparent); padding: 1rem 1.1rem; display: grid; gap: 0.45rem; }
-  .card h2 { margin: 0; font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.05em; text-transform: uppercase; font-weight: 400; }
-  .muted { margin: 0; color: var(--stone); font-size: 0.92rem; line-height: 1.4; }
-  .honesty { margin: 0; font-family: var(--font-mono); font-size: 0.75rem; color: var(--emerald); }
-  .value { margin: 0.2rem 0 0; font-size: 1.35rem; }
-  .zero { margin: 0; color: var(--stone); font-size: 0.9rem; line-height: 1.4; }
-  .status { margin: 0; font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--stone); }
-  .action-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-  .actions { display: flex; gap: 0.75rem; margin-top: 0.5rem; }
-  .btn { display: inline-flex; align-items: center; justify-content: center; min-width: 7rem; padding: 0.65rem 1rem; border-radius: 999px; text-decoration: none; font-family: var(--font-mono); font-size: 0.8rem; letter-spacing: 0.04em; text-transform: uppercase; border: 1px solid var(--wash); color: var(--ink); background: transparent; cursor: pointer; }
-  .btn:disabled, .btn[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+  .sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .page {
+    width: min(72rem, calc(100% - 2rem));
+    margin: 0 auto;
+    padding: 1.5rem 0 4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+  .top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    text-decoration: none;
+    font-size: 1.15rem;
+  }
+  .badge {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--emerald);
+    border: 1px solid var(--wash);
+    padding: 0.25rem 0.65rem;
+  }
+  .kicker {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--stone);
+  }
+  .sum {
+    margin: 0.35rem 0 0;
+    font-size: clamp(1.8rem, 4vw, 2.6rem);
+    font-weight: 400;
+    letter-spacing: 0.01em;
+  }
+  .plus { color: var(--stone); }
+  .sum-sm {
+    margin: 0.2rem 0 0;
+    font-size: clamp(1.25rem, 2.4vw, 1.7rem);
+  }
+  .legs {
+    list-style: none;
+    margin: 1rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.25rem 2rem;
+  }
+  .legs li {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .legs span { color: var(--stone); font-size: 0.9rem; }
+  .legs strong { font-weight: 400; }
+
+  .fund, .wallet, .idle, .history details, .counter {
+    border: 1px solid var(--wash);
+    background: color-mix(in srgb, var(--paper) 82%, transparent);
+    padding: 1.25rem 1.35rem;
+  }
+  .fund h1 {
+    margin: 0;
+    font-size: clamp(1.4rem, 3vw, 1.9rem);
+    font-weight: 400;
+  }
+  .lede { margin: 0.4rem 0 0; color: var(--stone); max-width: 36rem; }
+  .fund-row {
+    margin-top: 1.1rem;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.65rem;
+    align-items: stretch;
+  }
+  .asset {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    border: 1px solid var(--ink);
+    background: var(--paper);
+    padding: 0.65rem 0.9rem;
+    min-width: 8.5rem;
+  }
+  .asset-sym {
+    font-family: var(--font-mono);
+    letter-spacing: 0.08em;
+  }
+  .asset-name { color: var(--stone); font-size: 0.9rem; }
+  .amount input {
+    width: 100%;
+    height: 100%;
+    border: 1px solid var(--wash);
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 1.15rem;
+    padding: 0.65rem 0.85rem;
+  }
+  .cta, .stop {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  .cta {
+    background: var(--ink);
+    color: var(--rice);
+    border: 0;
+    padding: 0.75rem 1.4rem;
+  }
+  .hint { margin: 0.6rem 0 0; color: var(--stone); font-size: 0.9rem; }
+
+  .split {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(16rem, 0.7fr);
+    gap: 1rem;
+    align-items: start;
+  }
+  .wallet { padding: 0; }
+  .wallet summary, .history summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.25rem 1.35rem;
+  }
+  .wallet summary::-webkit-details-marker,
+  .history summary::-webkit-details-marker { display: none; }
+  .wallet summary::after,
+  .history summary::after {
+    content: "▾";
+    color: var(--stone);
+  }
+  .wallet[open] summary::after,
+  .history[open] summary::after { content: "▴"; }
+  .wallet-body { padding: 0 1.35rem 1.35rem; display: grid; gap: 0.75rem; }
+  .tokens {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .tokens li {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    border: 1px solid var(--wash);
+    padding: 0.4rem 0.7rem;
+  }
+  .tok { font-family: var(--font-mono); letter-spacing: 0.06em; }
+  .share { color: var(--stone); font-size: 0.85rem; }
+  .pools-k { margin-top: 0.4rem; }
+  .pools { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.55rem; }
+  .pools li { display: flex; flex-direction: column; gap: 0.15rem; }
+  .pool-note { color: var(--stone); font-size: 0.88rem; }
+
+  .idle { display: grid; gap: 0.5rem; align-content: start; }
+  .idle-copy { margin: 0; color: var(--stone); line-height: 1.4; }
+  .stop {
+    margin-top: 0.6rem;
+    justify-self: start;
+    background: transparent;
+    color: var(--ink);
+    border: 1px solid var(--ink);
+    padding: 0.65rem 1rem;
+  }
+
+  .history {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(14rem, 18rem);
+    gap: 1rem;
+    align-items: start;
+  }
+  .history details { padding: 0; }
+  .ledger {
+    list-style: none;
+    margin: 0;
+    padding: 0 1.35rem 1.25rem;
+    display: grid;
+    gap: 0.55rem;
+  }
+  .ledger li {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    border-top: 1px solid var(--wash);
+    padding-top: 0.55rem;
+  }
+  .counter { display: grid; gap: 0.25rem; align-content: start; }
+
+  .honesty {
+    margin: 0;
+    color: var(--stone);
+    font-size: 0.88rem;
+  }
+
+  @media (max-width: 760px) {
+    .fund-row, .split, .history {
+      grid-template-columns: 1fr;
+    }
+  }
 </style>
