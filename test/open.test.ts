@@ -52,8 +52,10 @@ describe("open instant", () => {
     expect(`${OPEN_COPY.hero.line1} ${OPEN_COPY.hero.line2}`).toBe("APY DELIVERED");
     expect(OPEN_COPY.questions.items.map((i) => i.q)).not.toContain("How do I reach you?");
     expect(OPEN_COPY.footer.x).toEqual({ handle: "@entermamoru", href: "https://x.com/entermamoru" });
-    expect(OPEN_COPY.works.scene.payout).toBe("Wallet of your choice");
-    expect(OPEN_COPY.works.scene.strategy).toBe("Strategy");
+    expect(OPEN_COPY.works.scene.payout).toBe("Stablecoin pool");
+    expect(OPEN_COPY.works.scene.strategy).toBe("Funds Allocation");
+    expect(OPEN_COPY.works.scene.agent).toBe("Mamoru Delegated Account");
+    expect(OPEN_COPY.allocation.heading).toEqual(["Three assets.", "One allocation."]);
     expect(OPEN_COPY.allocation.mix.reduce((sum, m) => sum + m.pct, 0)).toBe(100);
     expect(OPEN_COPY.allocation.mix[0].note).toBe("High risk, high reward");
     expect(OPEN_COPY.allocation.mix[1].note).toBe("Derivatives paired with stablecoins");

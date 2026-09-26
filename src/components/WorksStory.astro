@@ -3,59 +3,60 @@ import { OPEN_COPY } from "../open-copy";
 
 const { heading, scene } = OPEN_COPY.works;
 const bars = [
-  { tone: "mercenary", y: 104, h: 12 },
-  { tone: "paired", y: 116, h: 26 },
-  { tone: "stables", y: 142, h: 28 },
+  { tone: "mercenary", y: 108, h: 14, pct: "15" },
+  { tone: "paired", y: 122, h: 28, pct: "35" },
+  { tone: "stables", y: 150, h: 30, pct: "50" },
 ];
 ---
 <section class="works" id="works" aria-labelledby="works-title">
   <h2 id="works-title">{heading}</h2>
   <svg class="scene" viewBox="0 0 1120 240" role="img" aria-label={scene.aria}>
     <defs>
-      <clipPath id="payout-clip">
-        <rect x="888" y="84" width="200" height="96" />
+      <clipPath id="alloc-clip">
+        <rect x="790" y="84" width="240" height="96" />
       </clipPath>
     </defs>
-    <path id="route-connect" class="route" d="M224 132 H312" />
-    <path id="route-fund" class="route" d="M512 132 H600" />
-    <path id="route-usdc" class="route" d="M800 132 H940" />
+    <path id="route-connect" class="route" d="M310 132 H430" />
+    <path id="route-fund" class="route" d="M670 132 H790" />
+    <path id="route-usdc" class="route" d="M910 128 V158" />
 
-    <path class="edge e-eth" d="M224 132 H312" />
-    <path class="edge e-eth" d="M512 132 H600" />
-    <path class="edge e-usdc" d="M800 132 H888" />
+    <path class="edge e-eth" d="M310 132 H430" />
+    <path class="edge e-eth" d="M670 132 H790" />
 
     <g class="node n-wallet">
-      <rect class="box" x="24" y="84" width="200" height="96" />
-      <rect class="glyph" x="102" y="112" width="44" height="30" />
-      <path class="glyph" d="M102 121 H146" />
-      <circle class="glyph-dot" cx="137" cy="132" r="2.4" />
-      <text x="124" y="68">{scene.wallet}</text>
+      <rect class="box" x="70" y="84" width="240" height="96" />
+      <rect class="glyph" x="168" y="112" width="44" height="30" />
+      <path class="glyph" d="M168 121 H212" />
+      <circle class="glyph-dot" cx="203" cy="132" r="2.4" />
+      <text x="190" y="68">{scene.wallet}</text>
     </g>
 
     <g class="node n-agent">
-      <rect class="box" x="312" y="84" width="200" height="96" />
-      <image href="/mark-two-stones.png" x="394" y="108" width="36" height="36" />
-      <text x="412" y="68">{scene.agent}</text>
+      <rect class="box" x="430" y="84" width="240" height="96" />
+      <image href="/mark-two-stones.png" x="532" y="108" width="36" height="36" />
+      <text x="550" y="52">Mamoru Delegated</text>
+      <text x="550" y="70">Account</text>
     </g>
 
     <g class="node n-strategy">
-      <rect class="box" x="600" y="84" width="200" height="96" />
+      <rect class="box" x="790" y="84" width="240" height="96" />
       {bars.map((bar) => (
-        <rect class={`bar ${bar.tone}`} x="678" y={bar.y} width="44" height={bar.h} />
+        <g>
+          <rect
+            id={bar.tone === "stables" ? "bar-stables" : undefined}
+            class={`bar ${bar.tone}`}
+            x="888"
+            y={bar.y}
+            width="44"
+            height={bar.h}
+          />
+          <text class={`pct ${bar.tone}`} x="910" y={bar.y + bar.h / 2 + 4}>{bar.pct}</text>
+        </g>
       ))}
-      <text x="700" y="68">{scene.strategy}</text>
+      <text x="910" y="68">{scene.strategy}</text>
     </g>
 
-    <g class="node n-payout">
-      <rect class="box" x="888" y="84" width="200" height="96" />
-      <rect class="glyph" x="966" y="112" width="44" height="30" />
-      <path class="glyph" d="M966 121 H1010" />
-      <circle class="glyph-dot" cx="1001" cy="132" r="2.4" />
-      <text x="988" y="56">Wallet of</text>
-      <text x="988" y="72">your choice</text>
-    </g>
-
-    <g id="usdc-pile" clip-path="url(#payout-clip)"></g>
+    <g id="usdc-pile" clip-path="url(#alloc-clip)"></g>
     <g id="usdc-fly" class="usdc-fly" opacity="0">
       <circle class="usdc-disc" r="11" />
       <circle class="usdc-ring" r="7.5" />
@@ -144,17 +145,23 @@ const bars = [
     }
   }
 
+  const stablesBar = document.querySelector<SVGRectElement>("#bar-stables");
   const pileSlots = [
-    { x: 948, y: 168 },
-    { x: 968, y: 168 },
-    { x: 988, y: 168 },
-    { x: 1008, y: 168 },
-    { x: 1028, y: 168 },
-    { x: 958, y: 154 },
-    { x: 978, y: 154 },
-    { x: 998, y: 154 },
-    { x: 1018, y: 154 },
+    { x: 896, y: 172 },
+    { x: 910, y: 172 },
+    { x: 924, y: 172 },
+    { x: 903, y: 160 },
+    { x: 917, y: 160 },
+    { x: 910, y: 148 },
+    { x: 903, y: 136 },
+    { x: 917, y: 136 },
   ];
+  const growPool = (n: number) => {
+    if (!stablesBar) return;
+    const extra = Math.min(18, n * 2.2);
+    stablesBar.setAttribute("y", String(150 - extra));
+    stablesBar.setAttribute("height", String(30 + extra));
+  };
 
   function addPileCoin(at: { x: number; y: number }) {
     if (!usdcPile || !usdcFly) return;
@@ -176,6 +183,7 @@ const bars = [
         });
         await sleep(700);
         usdcPile?.replaceChildren();
+        growPool(0);
         n = 0;
       }
       const slot = pileSlots[n];
@@ -187,6 +195,7 @@ const bars = [
       fly.setAttribute("opacity", "0");
       addPileCoin(slot);
       n += 1;
+      growPool(n);
       await sleep(700);
     }
   }
@@ -261,8 +270,13 @@ const bars = [
     stroke: var(--ink);
     stroke-width: 1.2;
   }
-  .n-payout .box {
-    stroke: var(--emerald);
+  .scene text.pct {
+    font-size: 9px;
+    letter-spacing: 0;
+    pointer-events: none;
+  }
+  .scene text.pct.paired {
+    fill: var(--paper);
   }
   .glyph {
     fill: none;

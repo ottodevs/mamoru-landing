@@ -87,12 +87,12 @@ export const OPEN_COPY = {
     ],
     scene: {
       wallet: "Your wallet",
-      agent: "Agent account",
-      strategy: "Strategy",
-      payout: "Wallet of your choice",
+      agent: "Mamoru Delegated Account",
+      strategy: "Funds Allocation",
+      payout: "Stablecoin pool",
       eth: "ETH",
       usdc: "USDC",
-      aria: "ETH funds the agent once, then the strategy. USDC keeps harvesting to a wallet of your choice.",
+      aria: "ETH funds the Mamoru Delegated Account, then Funds Allocation. USDC harvests into the stablecoin pool.",
     },
   },
   spend: {
@@ -101,7 +101,7 @@ export const OPEN_COPY = {
   },
   allocation: {
     eyebrow: "Portfolio allocation",
-    heading: ["Three assets.", "One Strategy."],
+    heading: ["Three assets.", "One allocation."],
     body: "A diversified allocation designed to capture yield.",
     mix: MIX,
   },
