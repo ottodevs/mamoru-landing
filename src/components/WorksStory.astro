@@ -12,11 +12,36 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
 <section class="works" id="works" aria-labelledby="works-title">
   <h2 id="works-title">{heading}</h2>
   <svg class="scene" viewBox="0 0 1120 240" role="img" aria-label={scene.aria}>
+    <path id="route-connect" class="route" d="M224 132 H312" />
+    <path id="route-fund" class="route" d="M512 132 H600" />
     <path id="route-usdc" class="route" d="M800 132 H888" />
 
     <path class="edge e-eth" d="M224 132 H312" />
     <path class="edge e-eth" d="M512 132 H600" />
     <path class="edge e-usdc" d="M800 132 H888" />
+
+    <g class="eth-fly" opacity="0">
+      <set attributeName="opacity" to="1" begin="eth-hop-1.begin" />
+      <set attributeName="opacity" to="0" begin="eth-hop-1.end" />
+      <animateMotion id="eth-hop-1" dur="3.2s" begin="0s;eth-hop-2.end+2s" fill="freeze">
+        <mpath href="#route-connect" />
+      </animateMotion>
+      <polygon class="eth-left" points="0,-12 0,4 -10.5,0" />
+      <polygon class="eth-right" points="0,-12 10.5,0 0,4" />
+      <polygon class="eth-left" points="-10.5,2 0,6 0,12" />
+      <polygon class="eth-right" points="10.5,2 0,12 0,6" />
+    </g>
+    <g class="eth-fly" opacity="0">
+      <set attributeName="opacity" to="1" begin="eth-hop-2.begin" />
+      <set attributeName="opacity" to="0" begin="eth-hop-2.end" />
+      <animateMotion id="eth-hop-2" dur="3.2s" begin="eth-hop-1.end+1s" fill="freeze">
+        <mpath href="#route-fund" />
+      </animateMotion>
+      <polygon class="eth-left" points="0,-12 0,4 -10.5,0" />
+      <polygon class="eth-right" points="0,-12 10.5,0 0,4" />
+      <polygon class="eth-left" points="-10.5,2 0,6 0,12" />
+      <polygon class="eth-right" points="10.5,2 0,12 0,6" />
+    </g>
 
     {flyStarts.map((begin) => (
       <g class="usdc-fly">
@@ -76,6 +101,7 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
     --tone-paired: #0e1b2e;
     --tone-mercenary: #6fa78f;
     --usdc: #2775ca;
+    --eth: #627eea;
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
@@ -110,6 +136,12 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
     stroke: var(--emerald);
   }
 
+  .eth-left {
+    fill: var(--eth);
+  }
+  .eth-right {
+    fill: color-mix(in srgb, var(--eth) 72%, #fff);
+  }
   .usdc-disc {
     fill: var(--usdc);
   }
@@ -167,6 +199,7 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
   }
 
   @media (prefers-reduced-motion: reduce) {
+    .eth-fly,
     .usdc-fly {
       display: none;
     }

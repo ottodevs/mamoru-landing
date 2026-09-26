@@ -90,7 +90,7 @@ export const OPEN_COPY = {
       payout: "Wallet of your choice",
       eth: "ETH",
       usdc: "USDC",
-      aria: "ETH moves from your wallet to the agent account and into the strategy. USDC harvests to a wallet of your choice.",
+      aria: "ETH funds the agent once, then the strategy. USDC keeps harvesting to a wallet of your choice.",
     },
   },
   spend: {
