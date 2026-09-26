@@ -6,6 +6,7 @@ type Token = "ETH" | "WETH" | "USDC" | "WBTC";
 
 const workingEth = "4.20";
 const idleEth = "0.80";
+const walletEth = "2.40";
 const workingUsdc = "16,800";
 const claimableUsdc = "420";
 const totalUsdc = "17,220";
@@ -109,7 +110,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     </header>
 
     <section class="balance" aria-labelledby="total-title">
-      <p class="kicker" id="total-title">Total balance</p>
+      <p class="kicker heavy" id="total-title">Total balance</p>
       <p class="sum">{totalUsdc} <span class="unit">USDC</span></p>
       <ul class="legs">
         <li>
@@ -126,28 +127,35 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
     <section class="row" aria-label="Fund and idle">
       <form class="card fund" action="#" method="post" onsubmit="return false;" aria-labelledby="fund-title">
-        <p class="title" id="fund-title">Fund Mamoru</p>
+        <p class="title heavy" id="fund-title">Fund Mamoru</p>
         <div class="fund-row">
           <span class="asset">ETH</span>
           <label class="amount">
             <span class="sr">Amount</span>
-            <input type="text" name="amount" inputmode="decimal" placeholder="0.00" autocomplete="off" />
+            <input id="fund-amount" type="text" name="amount" inputmode="decimal" placeholder="0.00" autocomplete="off" />
           </label>
           <button type="submit" class="cta">Fund</button>
         </div>
+        <div class="fund-meta">
+          <p class="avail">{walletEth} ETH available</p>
+          <div class="pcts" role="group" aria-label="Fill amount">
+            <button type="button" data-pct="100">100%</button>
+            <button type="button" data-pct="50">50%</button>
+            <button type="button" data-pct="25">25%</button>
+          </div>
+        </div>
       </form>
       <aside class="card idle">
-        <p class="title">Idle capital</p>
+        <p class="title">ETH pending to allocate by Mamoru</p>
         <p class="sum-sm">{idleEth} ETH</p>
-        <p class="idle-copy">ETH pending to allocate by Mamoru.</p>
       </aside>
     </section>
 
     <details class="card fold wide">
       <summary>
         <span>
-          <span class="title">Working capital</span>
-          <span class="sum-sm">{workingEth} ETH</span>
+          <span class="title heavy">Working capital</span>
+          <span class="sum-sm work-eth">{workingEth} ETH</span>
         </span>
       </summary>
       <div class="fold-body">
@@ -173,11 +181,11 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
                 <span class="pool-addr">{p.chain} · {shortAddr(p.address)}</span>
                 <span class="pool-note">{p.sleeve}</span>
               </span>
-              <span class="pool-amt">{p.amount}</span>
+              <span class="pool-amt work-eth">{p.amount}</span>
             </li>
           ))}
         </ul>
-        <button type="button" class="stop">Stop strategy</button>
+        <button type="button" class="stop">Stop allocation</button>
       </div>
     </details>
 
@@ -261,6 +269,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     font-weight: 400;
     letter-spacing: 0.01em;
   }
+  .heavy { font-weight: 700; }
   .balance { flex: 0 0 auto; margin-bottom: var(--s4); }
   .sum {
     margin: var(--s1) 0 0;
@@ -365,7 +374,31 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     border: 0;
     padding: 0.6rem 1.15rem;
   }
-  .idle-copy { margin: 0; color: var(--stone); line-height: 1.35; font-size: 0.92rem; }
+  .fund-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem 0.8rem;
+    margin-top: 0.15rem;
+  }
+  .avail {
+    margin: 0;
+    color: var(--stone);
+    font-size: 0.85rem;
+  }
+  .pcts { display: flex; gap: 0.35rem; }
+  .pcts button {
+    border: 1px solid var(--wash);
+    background: transparent;
+    color: var(--ink);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    padding: 0.2rem 0.45rem;
+    cursor: pointer;
+  }
+  .work-eth { color: var(--emerald); }
 
   .fold { padding: var(--s2) 0; }
   .fold summary {
@@ -424,8 +457,8 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
   .stop {
     justify-self: start;
     background: transparent;
-    color: var(--emerald);
-    border: 1px solid var(--emerald);
+    color: #9b2c2c;
+    border: 1px solid #9b2c2c;
     padding: 0.6rem 0.95rem;
   }
 
@@ -483,3 +516,15 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     .ledger code { justify-self: start; }
   }
 </style>
+
+<script>
+  const input = document.querySelector<HTMLInputElement>("#fund-amount");
+  const available = 2.4;
+  document.querySelectorAll<HTMLButtonElement>("[data-pct]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!input) return;
+      const pct = Number(btn.dataset.pct) / 100;
+      input.value = (available * pct).toFixed(2);
+    });
+  });
+</script>
