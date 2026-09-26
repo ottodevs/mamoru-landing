@@ -7,8 +7,8 @@ type Token = "ETH" | "WETH" | "USDC" | "WBTC";
 const workingEth = "4.20";
 const idleEth = "0.80";
 const workingUsdc = "16,800";
-const rewardsUsdc = "3,180";
-const totalUsdc = "19,980";
+const claimableUsdc = "420";
+const totalUsdc = "17,220";
 const harvestedUsdc = "3,180";
 
 const inUse: Token[] = ["ETH", "WETH", "WBTC", "USDC"];
@@ -114,13 +114,13 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
       <p class="sum">{totalUsdc} <span class="unit">USDC</span></p>
       <ul class="legs">
         <li><span>Working capital</span> <strong>{workingUsdc} USDC</strong></li>
-        <li><span>Accumulated rewards</span> <strong>{rewardsUsdc} USDC</strong></li>
+        <li><span>Claimable rewards</span> <strong>{claimableUsdc} USDC</strong></li>
       </ul>
     </section>
 
     <section class="row" aria-label="Fund and idle">
       <form class="card fund" action="#" method="post" onsubmit="return false;" aria-labelledby="fund-title">
-        <p class="kicker" id="fund-title">Fund Mamoru</p>
+        <p class="title" id="fund-title">Fund Mamoru</p>
         <div class="fund-row">
           <span class="asset">ETH</span>
           <label class="amount">
@@ -131,7 +131,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
         </div>
       </form>
       <aside class="card idle">
-        <p class="kicker">Idle capital</p>
+        <p class="title">Idle capital</p>
         <p class="sum-sm">{idleEth} ETH</p>
         <p class="idle-copy">ETH pending to allocate by Mamoru.</p>
       </aside>
@@ -140,7 +140,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     <details class="card fold wide">
       <summary>
         <span>
-          <span class="kicker">Working capital</span>
+          <span class="title">Working capital</span>
           <span class="sum-sm">{workingEth} ETH</span>
         </span>
       </summary>
@@ -178,7 +178,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     <details class="card fold wide">
       <summary>
         <span>
-          <span class="kicker">Harvest details</span>
+          <span class="title">Total harvested</span>
           <span class="sum-sm">{harvestedUsdc} USDC</span>
         </span>
       </summary>
@@ -255,6 +255,12 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--stone);
+  }
+  .title {
+    margin: 0;
+    font-size: clamp(1.25rem, 2.4vw, 1.7rem);
+    font-weight: 400;
+    letter-spacing: 0.01em;
   }
   .sum {
     margin: 0.35rem 0 0;
