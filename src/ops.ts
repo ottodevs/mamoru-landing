@@ -233,6 +233,29 @@ function shell(title: string, body: string): string {
       padding: 0;
     }
     .row-actions { white-space: nowrap; }
+    .reveal-box {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+    }
+    label.reveal {
+      display: inline-block;
+      margin: 0.4rem 0 0.2rem;
+      color: #2f5d50;
+      cursor: pointer;
+    }
+    .reveal .when-shown { display: none; }
+    .reveal-box:checked ~ .reveal .when-hidden { display: none; }
+    .reveal-box:checked ~ .reveal .when-shown { display: inline; }
+    td.mail .full { display: none; }
+    td.mail:hover .mask,
+    td.mail:focus-within .mask,
+    .reveal-box:checked ~ table td.mail .mask { display: none; }
+    td.mail:hover .full,
+    td.mail:focus-within .full,
+    .reveal-box:checked ~ table td.mail .full { display: inline; }
   </style>
 </head>
 <body>
@@ -261,6 +284,19 @@ const NOTE_LABEL: Record<Entry["note"], string> = {
   failed: "Failed",
 };
 
+/** First two letters of the name, then the rest hidden. Short names keep one letter. */
+export function maskEmail(email: string): string {
+  const at = email.lastIndexOf("@");
+  if (at <= 0) return "•••";
+  const local = email.slice(0, at);
+  const domain = email.slice(at + 1);
+  const dot = domain.lastIndexOf(".");
+  const host = dot > 0 ? domain.slice(0, dot) : domain;
+  const tld = dot > 0 ? domain.slice(dot) : "";
+  const keep = (value: string) => value.slice(0, value.length <= 2 ? 1 : 2);
+  return `${keep(local)}•••@${keep(host)}•••${tld}`;
+}
+
 export function renderList(opts: {
   entries: Entry[];
   truncated: boolean;
@@ -281,7 +317,7 @@ export function renderList(opts: {
   const rows = opts.entries
     .map(
       (entry) => `<tr>
-        <td>${esc(entry.email)}</td>
+        <td class="mail"><span class="mask">${esc(maskEmail(entry.email))}</span><span class="full">${esc(entry.email)}</span></td>
         <td>${esc(when(entry.at))}</td>
         <td>${NOTE_LABEL[entry.note]}</td>
         <td class="row-actions">
@@ -295,7 +331,9 @@ export function renderList(opts: {
     )
     .join("");
   const table = opts.entries.length
-    ? `<table>
+    ? `<input class="reveal-box" id="reveal-mails" type="checkbox" />
+      <label class="reveal" for="reveal-mails"><span class="when-hidden">Reveal mail addresses</span><span class="when-shown">Hide mail addresses</span></label>
+      <table>
         <thead><tr><th>Email</th><th>When</th><th>Note</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`

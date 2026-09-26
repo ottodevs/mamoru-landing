@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { CUSTODY_LINE, FOLLOW_UP_LINES, FOLLOW_UP_TEXT, followUpHtml } from "../src/follow-up";
 import { isAllowed } from "../src/google";
 import { emailKey } from "../src/list";
-import { openSession, renderList, sealSession } from "../src/ops";
+import { maskEmail, openSession, renderList, sealSession } from "../src/ops";
 import { esc, normalizeEmail } from "../src/text";
 
 describe("follow-up", () => {
@@ -49,6 +49,8 @@ describe("addresses", () => {
       mailReady: false,
     });
     expect(html).toContain(esc(`evil<img>@example.com`));
+    expect(html).toContain(esc(maskEmail(`evil<img>@example.com`)));
+    expect(html).toContain("Reveal mail addresses");
     expect(html).not.toContain("<img>@example.com");
     expect(html).toContain("tok&quot;en");
     expect(html).not.toContain("Enviar las que faltan");
