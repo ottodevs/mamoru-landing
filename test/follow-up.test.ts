@@ -64,7 +64,10 @@ describe("addresses", () => {
 describe("ops gate", () => {
   test("allowlist is exact and case-insensitive", () => {
     expect(isAllowed("ottodevs@gmail.com")).toBe(true);
+    expect(isAllowed("otto.devs@gmail.com")).toBe(true);
     expect(isAllowed("Brais.Millarengo@gmail.com ")).toBe(true);
+    expect(isAllowed("braismillarengo@gmail.com")).toBe(true);
+    expect(isAllowed("brais.millarengo@googlemail.com")).toBe(true);
     expect(isAllowed("ottodevs+x@gmail.com")).toBe(false);
     expect(isAllowed("someone@example.com")).toBe(false);
     expect(isAllowed("")).toBe(false);

@@ -9,14 +9,28 @@ const TOKEN = "https://oauth2.googleapis.com/token";
 const JWKS = "https://www.googleapis.com/oauth2/v3/certs";
 const ISSUERS = new Set(["https://accounts.google.com", "accounts.google.com"]);
 
-/** Exact addresses that may open the list. Compared lowercase. */
-export const OPS_ALLOWLIST: ReadonlySet<string> = new Set([
-  "ottodevs@gmail.com",
-  "brais.millarengo@gmail.com",
-]);
+/**
+ * Exact addresses that may open the list.
+ * Match is case-insensitive. For gmail.com and googlemail.com only, dots in
+ * the local part are ignored. Plus-tags stay part of the address.
+ */
+function canonicalizeForAllowlist(email: string): string {
+  const trimmed = email.trim().toLowerCase();
+  const at = trimmed.lastIndexOf("@");
+  if (at <= 0) return trimmed;
+  let local = trimmed.slice(0, at);
+  let domain = trimmed.slice(at + 1);
+  if (domain === "googlemail.com") domain = "gmail.com";
+  if (domain === "gmail.com") local = local.replaceAll(".", "");
+  return `${local}@${domain}`;
+}
+
+export const OPS_ALLOWLIST: ReadonlySet<string> = new Set(
+  ["ottodevs@gmail.com", "brais.millarengo@gmail.com"].map(canonicalizeForAllowlist),
+);
 
 export function isAllowed(email: string): boolean {
-  return OPS_ALLOWLIST.has(email.trim().toLowerCase());
+  return OPS_ALLOWLIST.has(canonicalizeForAllowlist(email));
 }
 
 export type Identity = { email: string };
