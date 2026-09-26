@@ -14,31 +14,31 @@ export const OPEN_COPY = {
     { href: "#questions", label: "FAQs" },
   ],
   cta: "Launch APP",
-  mix: [
-    {
-      pct: 15,
-      name: "Mercenary Capital",
-      note: "",
-      tone: "mercenary",
-    },
-    {
-      pct: 35,
-      name: "BTC / ETH + Stablecoins",
-      note: "Derivatives paired with stablecoins.",
-      tone: "paired",
-    },
-    {
-      pct: 50,
-      name: "Stablecoins",
-      note: "Liquidity, yield and market depth.",
-      tone: "stables",
-    },
-  ],
   onboard: {
     storageKey: "mamoru-onboarded-v2",
     skip: "Skip",
     next: "Next",
     finish: "Finish",
+    mix: [
+      {
+        pct: 15,
+        name: "Mercenary Capital",
+        note: "",
+        tone: "mercenary",
+      },
+      {
+        pct: 35,
+        name: "BTC / ETH + Stablecoins",
+        note: "derivatives paired with stablecoins",
+        tone: "paired",
+      },
+      {
+        pct: 50,
+        name: "Stablecoins",
+        note: "Liquidity, yield and market depth.",
+        tone: "stables",
+      },
+    ],
     screens: [
       {
         title: "Fund Mamoru",
@@ -47,7 +47,7 @@ export const OPEN_COPY = {
       },
       {
         title: "What happens next?",
-        body: ["Mamoru applies a conservative allocation: 50-35-15."],
+        body: [],
         mix: true,
       },
       {
@@ -61,8 +61,8 @@ export const OPEN_COPY = {
     ],
   },
   hero: {
-    line1: "APY",
-    line2: "DELIVERED",
+    line1: "APY.",
+    line2: "DELIVERED.",
     lede: "The principal keeps working. The yield gets set aside.",
   },
   works: {
@@ -81,19 +81,6 @@ export const OPEN_COPY = {
         body: "Yield is automatically harvested from the pools, converted to USDC, and sent straight to the wallet of your choice.",
       },
     ],
-    scene: {
-      wallet: "Your wallet",
-      agent: "Agent",
-      pools: "Pools",
-      eth: "ETH",
-      usdc: "USDC",
-    },
-  },
-  allocation: {
-    eyebrow: "Portfolio allocation",
-    line1: "Three assets.",
-    line2: "One strategy.",
-    body: "A diversified allocation designed to capture yield.",
   },
   spend: {
     heading: "DeFi yield for the real world",
@@ -131,12 +118,19 @@ export const OPEN_COPY = {
           "It stays with us. We do not rent the list, and we do not send anything else.",
         ],
       },
+      {
+        q: "How do I reach you?",
+        a: [],
+        reach: [
+          { label: "hi@mamoru.lol", href: "mailto:hi@mamoru.lol" },
+          { label: "X @entermamoru", href: "https://x.com/entermamoru" },
+        ],
+      },
     ],
   },
   footer: {
     name: "Mamoru",
     line: "Non-custodial. No token.",
     email: "hi@mamoru.lol",
-    x: { handle: "@entermamoru", href: "https://x.com/entermamoru" },
   },
 } as const;
