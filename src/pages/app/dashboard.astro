@@ -120,10 +120,62 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
         <li>
           <span class="leg-label">Claimable rewards</span>
           <strong>{claimableUsdc} USDC</strong>
-          <button type="button" class="claim">Send to your wallet →</button>
         </li>
       </ul>
+      <button type="button" class="claim" id="xfer-open" aria-haspopup="dialog" aria-controls="xfer">
+        Transfer Assets
+      </button>
     </section>
+
+    <dialog class="xfer" id="xfer" aria-labelledby="xfer-title">
+      <div class="xfer-sheet">
+        <header class="xfer-head">
+          <p class="title heavy" id="xfer-title">Transfer assets</p>
+          <button type="button" class="xfer-close" id="xfer-close">Close</button>
+        </header>
+        <ul class="xfer-opts">
+          <li>
+            <p class="xfer-name">Transfer USDC</p>
+            <p class="xfer-meta">Max {claimableUsdc} USDC from claimable rewards</p>
+            <div class="xfer-row">
+              <label>
+                <span class="sr">USDC amount</span>
+                <input id="xfer-usdc" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="420" data-unit="USDC" />
+              </label>
+              <button type="button" class="xfer-max" data-for="xfer-usdc">Max</button>
+              <button type="button" class="cta xfer-go">Transfer</button>
+            </div>
+          </li>
+          <li>
+            <p class="xfer-name">Transfer pending ETH</p>
+            <p class="xfer-meta">ETH pending to allocate by Mamoru · {idleEth} ETH</p>
+            <div class="xfer-row">
+              <label>
+                <span class="sr">Pending ETH amount</span>
+                <input id="xfer-idle" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="0.80" data-unit="ETH" />
+              </label>
+              <button type="button" class="xfer-max" data-for="xfer-idle">Max</button>
+              <button type="button" class="cta xfer-go">Transfer</button>
+            </div>
+          </li>
+          <li>
+            <p class="xfer-name">Transfer working capital</p>
+            <p class="xfer-meta">{workingEth} ETH · {workingUsdc} USDC</p>
+            <p class="xfer-warn" role="status">
+              The amount shown may not match the final figure you receive. Some operations are still pending.
+            </p>
+            <div class="xfer-row">
+              <label>
+                <span class="sr">Working capital amount</span>
+                <input id="xfer-work" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="4.20" data-unit="ETH" />
+              </label>
+              <button type="button" class="xfer-max" data-for="xfer-work">Max</button>
+              <button type="button" class="cta xfer-go">Transfer</button>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </dialog>
 
     <section class="row" aria-label="Fund and idle">
       <form class="card fund" action="#" method="post" onsubmit="return false;" aria-labelledby="fund-title">
@@ -274,13 +326,19 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
   }
   .heavy { font-weight: 700; }
   .balance { flex: 0 0 auto; margin-bottom: var(--s4); }
+  .balance > .kicker.heavy {
+    font-size: 0.86rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    color: var(--ink);
+  }
   .sum {
     margin: var(--s1) 0 0;
     font-size: clamp(3.4rem, 9vw, 5.4rem);
     font-weight: 400;
     letter-spacing: -0.02em;
     line-height: 1;
-    color: var(--ink);
+    color: var(--emerald);
   }
   .unit {
     margin-left: 0.2em;
@@ -306,17 +364,109 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
   .leg-label { color: var(--stone); font-size: 0.88rem; }
   .legs strong { font-weight: 400; font-size: 1.15rem; }
   .claim {
-    margin-top: 0.15rem;
+    margin-top: var(--s2);
     padding: 0;
     border: 0;
     background: none;
     color: var(--emerald);
     font: inherit;
-    font-size: 0.88rem;
+    font-size: 0.95rem;
     letter-spacing: 0.02em;
     cursor: pointer;
   }
   .claim:hover { text-decoration: underline; }
+
+  .xfer {
+    width: min(36rem, calc(100% - 2rem));
+    max-height: calc(100dvh - 2rem);
+    margin: auto;
+    overflow: auto;
+    padding: 0;
+    border: 1px solid var(--wash);
+    background: var(--paper);
+    color: var(--ink);
+  }
+  .xfer::backdrop {
+    background: color-mix(in srgb, var(--ink) 38%, transparent);
+  }
+  .xfer-sheet { padding: 1.25rem 1.35rem 1.4rem; }
+  .xfer-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  .xfer-close {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--stone);
+    font: inherit;
+    font-size: 0.88rem;
+    cursor: pointer;
+  }
+  .xfer-close:hover { color: var(--ink); }
+  .xfer-opts {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.9rem;
+  }
+  .xfer-opts li {
+    border-top: 1px solid var(--wash);
+    padding-top: 0.85rem;
+    display: grid;
+    gap: 0.35rem;
+  }
+  .xfer-name {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+  }
+  .xfer-meta {
+    margin: 0;
+    color: var(--stone);
+    font-size: 0.88rem;
+  }
+  .xfer-warn {
+    margin: 0.15rem 0 0;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid color-mix(in srgb, #9b2c2c 55%, var(--wash));
+    background: color-mix(in srgb, #9b2c2c 8%, var(--paper));
+    color: #6b1f1f;
+    font-size: 0.88rem;
+    line-height: 1.4;
+  }
+  .xfer-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 0.4rem;
+    align-items: stretch;
+    margin-top: 0.25rem;
+  }
+  .xfer-row label { display: block; min-width: 0; }
+  .xfer-row input {
+    width: 100%;
+    border: 1px solid var(--wash);
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 1.05rem;
+    padding: 0.5rem 0.7rem;
+  }
+  .xfer-max {
+    border: 1px solid var(--wash);
+    background: transparent;
+    color: var(--ink);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.2rem 0.55rem;
+    cursor: pointer;
+  }
 
   .row {
     display: grid;
@@ -542,6 +692,8 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     .row, .harvest { grid-template-columns: 1fr; }
     .pools li, .ledger li { grid-template-columns: 1fr; gap: 0.25rem; }
     .ledger code { justify-self: start; }
+    .xfer-row { grid-template-columns: 1fr 1fr; }
+    .xfer-row label { grid-column: 1 / -1; }
   }
 </style>
 
@@ -553,6 +705,24 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
       if (!input) return;
       const pct = Number(btn.dataset.pct) / 100;
       input.value = (available * pct).toFixed(2);
+    });
+  });
+
+  const dialog = document.querySelector<HTMLDialogElement>("#xfer");
+  const openBtn = document.querySelector<HTMLButtonElement>("#xfer-open");
+  const closeBtn = document.querySelector<HTMLButtonElement>("#xfer-close");
+  openBtn?.addEventListener("click", () => dialog?.showModal());
+  closeBtn?.addEventListener("click", () => dialog?.close());
+  dialog?.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+
+  document.querySelectorAll<HTMLButtonElement>(".xfer-max").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.for;
+      const field = id ? document.querySelector<HTMLInputElement>(`#${id}`) : null;
+      if (!field) return;
+      field.value = field.dataset.max ?? "";
     });
   });
 </script>
