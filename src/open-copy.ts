@@ -37,8 +37,8 @@ export const OPEN_COPY = {
     ],
   },
   spend: {
-    heading: "DeFi yields you can actually spend",
-    body: "No more endless autocompounding that leaves you with no real value. Mamoru captures raw DeFi yield, converts it to stablecoins, and sends it to your pocket while your principal works.",
+    heading: "DeFi yield for the real world",
+    body: "No more yield that just keeps stacking onchain. Mamoru turns your DeFi yield into stablecoins you can actually use while your principal keeps working.",
   },
   questions: {
     heading: "FAQs",
