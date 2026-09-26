@@ -49,7 +49,9 @@ export const OPEN_COPY = {
       },
       {
         title: "What happens next?",
-        body: ["Mamoru applies a conservative allocation 50-35-15"],
+        body: [
+          "Mamoru applies a conservative allocation of 50%-35%-15% and will send USDC to a wallet of your choice.",
+        ],
         mix: false,
       },
       {

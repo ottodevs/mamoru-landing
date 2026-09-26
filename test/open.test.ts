@@ -39,7 +39,7 @@ describe("open instant", () => {
     ]);
     expect(OPEN_COPY.onboard.screens[0].body[0]).toBe("Send the ETH you want to invest.");
     expect(OPEN_COPY.onboard.screens[1].body[0]).toBe(
-      "Mamoru applies a conservative allocation 50-35-15",
+      "Mamoru applies a conservative allocation of 50%-35%-15% and will send USDC to a wallet of your choice.",
     );
     expect(OPEN_COPY.onboard.screens[2].body).toEqual([
       "No forced lockups or third-party dependencies.",
