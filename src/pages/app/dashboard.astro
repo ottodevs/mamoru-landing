@@ -7,7 +7,7 @@ type Token = "ETH" | "WETH" | "USDC" | "WBTC";
 const workingUsdc = "16,800";
 const walletEth = "2.40";
 const totalUsdc = "17,220";
-const currentApr = "5.2%";
+const currentApy = "5.20%";
 const monthAvg = "4.8%";
 const idleUsdc = "0";
 const idleTokens = 0;
@@ -101,8 +101,8 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
         </div>
         <ul class="apr">
           <li>
-            <span class="apr-label">Current APR</span>
-            <strong>{currentApr}</strong>
+            <span class="apr-label">Current APY</span>
+            <strong id="apy-now">{currentApy}</strong>
           </li>
           <li>
             <span class="apr-label">Monthly average</span>
@@ -409,6 +409,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     letter-spacing: -0.02em;
     line-height: 1;
     color: var(--emerald);
+    font-variant-numeric: tabular-nums;
   }
   .line {
     display: flex;
@@ -776,6 +777,21 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 </style>
 
 <script>
+  const apyNow = document.querySelector<HTMLElement>("#apy-now");
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (apyNow && !reduceMotion) {
+    const base = 5.2;
+    let value = base;
+    let target = base;
+    const step = () => {
+      if (Math.random() < 0.08) target = base + (Math.random() - 0.5) * 0.18;
+      value += (target - value) * 0.12;
+      apyNow.textContent = `${value.toFixed(2)}%`;
+      window.setTimeout(step, 140);
+    };
+    step();
+  }
+
   const input = document.querySelector<HTMLInputElement>("#fund-amount");
   const available = 2.4;
   document.querySelectorAll<HTMLButtonElement>("[data-pct]").forEach((btn) => {
