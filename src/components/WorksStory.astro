@@ -118,6 +118,10 @@ const layouts = [wide, tall];
         <g class="token eth" opacity="0">
           <polygon points="0,-9 7,0 0,9 -7,0" />
         </g>
+        <g class="token usdc" opacity="0">
+          <circle r="8" />
+          <circle class="usdc-ring" r="5" />
+        </g>
         {[0, 1, 2].map((k) => (
           <circle class="drop" r="4.5" cx={l.pool.x + (k - 1) * 16} cy={l.pool.y - 70} opacity="0" />
         ))}
@@ -151,13 +155,14 @@ const layouts = [wide, tall];
       (s) => getComputedStyle(s).display !== "none",
     );
 
-  function travel(el: SVGGElement, path: SVGPathElement, ms: number) {
+  function travel(el: SVGGElement, path: SVGPathElement, ms: number, back = false) {
     return new Promise<void>((resolve) => {
       const len = path.getTotalLength();
       const t0 = performance.now();
       const tick = (now: number) => {
         const raw = Math.min(1, (now - t0) / ms);
-        const p = path.getPointAtLength(len * ease(raw));
+        const at = ease(raw);
+        const p = path.getPointAtLength(len * (back ? 1 - at : at));
         const fade = raw < 0.15 ? raw / 0.15 : raw > 0.85 ? (1 - raw) / 0.15 : 1;
         el.setAttribute("transform", `translate(${p.x} ${p.y})`);
         el.setAttribute("opacity", String(fade));
@@ -197,6 +202,40 @@ const layouts = [wide, tall];
     pulse(svg, 2);
   }
 
+  // The allocation stone's three sleeves: stablecoins, bluechips, mercenary.
+  function sleeves(svg: SVGSVGElement) {
+    return [...svg.querySelectorAll<SVGPathElement>(".site-2 .stone path")];
+  }
+
+  async function withdraw(svg: SVGSVGElement, grooves: NodeListOf<SVGPathElement>) {
+    const usdc = svg.querySelector<SVGGElement>(".usdc");
+    const [stables, ...rest] = sleeves(svg);
+    if (!usdc || !stables) return;
+    // Stablecoins pay first: the largest sleeve gives a little.
+    stables.animate([{ transform: "scale(1)" }, { transform: "scale(0.9)" }], {
+      duration: 700,
+      easing: "cubic-bezier(.2,.8,.2,1)",
+      fill: "forwards",
+    });
+    await travel(usdc, grooves[1]!, 2200, true);
+    await travel(usdc, grooves[0]!, 2200, true);
+    pulse(svg, 0);
+    await sleep(900);
+    // Next cycle: the sleeves settle back to their proportions.
+    stables.animate([{ transform: "scale(0.9)" }, { transform: "scale(1)" }], {
+      duration: 1400,
+      easing: "cubic-bezier(.2,.8,.2,1)",
+      fill: "forwards",
+    });
+    rest.forEach((r, k) =>
+      r.animate(
+        [{ transform: "scale(1)" }, { transform: "scale(0.94)" }, { transform: "scale(1)" }],
+        { duration: 1400, delay: 120 * (k + 1), easing: "ease-in-out" },
+      ),
+    );
+    pulse(svg, 2);
+  }
+
   async function loop() {
     for (;;) {
       const svg = liveScene();
@@ -216,7 +255,9 @@ const layouts = [wide, tall];
       pulse(svg, 2);
       await sleep(700);
       await harvest(svg);
-      await sleep(2200);
+      await sleep(1600);
+      await withdraw(svg, grooves);
+      await sleep(2400);
     }
   }
 
@@ -345,6 +386,18 @@ const layouts = [wide, tall];
   }
   .drop {
     fill: var(--emerald);
+  }
+  .usdc circle {
+    fill: var(--emerald);
+  }
+  .usdc .usdc-ring {
+    fill: none;
+    stroke: var(--paper);
+    stroke-width: 1.4;
+  }
+  .site-2 .stone path {
+    transform-box: fill-box;
+    transform-origin: center;
   }
 
   /* Steps under the stones. */
