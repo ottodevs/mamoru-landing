@@ -37,6 +37,8 @@ describe("open instant", () => {
       "What happens next?",
       "You keep control",
     ]);
+    expect(OPEN_COPY.onboard.screens[0].body[0]).toBe("Send the ETH you want to invest.");
+    expect(OPEN_COPY.onboard.mix.map((m) => m.pct)).toEqual([15, 35, 50]);
   });
 });
 

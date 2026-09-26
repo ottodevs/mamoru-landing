@@ -121,6 +121,28 @@ const emailHref = `mailto:${copy.footer.email}`;
           {screen.body.map((para) => (
             <p class="onboard-body">{para}</p>
           ))}
+          {screen.mix ? (
+            <figure class="mix">
+              <div class="mix-bar" aria-hidden="true">
+                {copy.onboard.mix.map((seg) => (
+                  <div class={`mix-seg ${seg.tone}`} style={`flex:${seg.pct}`}>
+                    {seg.pct}%
+                  </div>
+                ))}
+              </div>
+              <ul class="mix-legend">
+                {copy.onboard.mix.map((seg) => (
+                  <li>
+                    <span class={`mix-dot ${seg.tone}`}></span>
+                    <span>
+                      <span class="mix-name">{seg.name} {seg.pct}%</span>
+                      {seg.note ? <span class="mix-note">{seg.note}</span> : null}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </figure>
+          ) : null}
           <div class="onboard-actions">
             {index < copy.onboard.screens.length - 1 ? (
               <>
@@ -139,6 +161,11 @@ const emailHref = `mailto:${copy.footer.email}`;
     const KEY = storageKey;
     const APP = appHref;
     const root = document.getElementById("mamoru-onboard");
+    try {
+      if (new URLSearchParams(location.search).has("onboard")) {
+        localStorage.removeItem(KEY);
+      }
+    } catch {}
     function seen() {
       try { return localStorage.getItem(KEY) === "1"; } catch { return false; }
     }
@@ -178,6 +205,9 @@ const emailHref = `mailto:${copy.footer.email}`;
       event.preventDefault();
       goApp();
     });
+    try {
+      if (new URLSearchParams(location.search).has("onboard")) show(0);
+    } catch {}
   </script>
 </Base>
 
@@ -567,9 +597,9 @@ const emailHref = `mailto:${copy.footer.email}`;
   }
 
   .onboard {
-    width: min(50vw, 40rem);
+    width: min(60vw, 48rem);
     max-width: 92vw;
-    max-height: min(86dvh, 40rem);
+    max-height: min(90dvh, 44rem);
     padding: 0;
     border: 0;
     background: transparent;
@@ -581,7 +611,7 @@ const emailHref = `mailto:${copy.footer.email}`;
   .onboard-card {
     padding: 2rem 1.85rem 1.75rem;
     border: 1px solid color-mix(in srgb, var(--ink) 22%, var(--wash));
-    background: color-mix(in srgb, var(--ink) 10%, var(--paper));
+    background: color-mix(in srgb, var(--ink) 14%, var(--paper));
     color: var(--ink);
     box-sizing: border-box;
   }
@@ -602,6 +632,69 @@ const emailHref = `mailto:${copy.footer.email}`;
     margin: 0.85rem 0 0;
     font-size: 1.05rem;
     line-height: 1.45;
+  }
+  .mix {
+    --mix-ink: #0f0f0e;
+    --mix-navy: #0e1b2e;
+    --mix-emerald: #6fa78f;
+    --mix-stone: #a7a9ac;
+    display: grid;
+    grid-template-columns: 4.5rem 1fr;
+    gap: 1.25rem 1.5rem;
+    align-items: center;
+    margin: 1.25rem 0 0;
+  }
+  .mix-bar {
+    display: flex;
+    flex-direction: column;
+    height: 12.5rem;
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
+  }
+  .mix-seg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--paper);
+    font-size: 0.8rem;
+    letter-spacing: 0.04em;
+  }
+  .mix-seg.mercenary { background: var(--mix-emerald); color: var(--mix-ink); }
+  .mix-seg.paired { background: var(--mix-navy); }
+  .mix-seg.stables { background: var(--mix-ink); }
+  .mix-legend {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.95rem;
+  }
+  .mix-legend li {
+    display: grid;
+    grid-template-columns: 0.7rem 1fr;
+    gap: 0.65rem;
+    align-items: start;
+  }
+  .mix-dot {
+    width: 0.7rem;
+    height: 0.7rem;
+    margin-top: 0.28rem;
+    display: block;
+  }
+  .mix-dot.mercenary { background: var(--mix-emerald); }
+  .mix-dot.paired { background: var(--mix-navy); }
+  .mix-dot.stables { background: var(--mix-ink); }
+  .mix-name {
+    display: block;
+    font-size: 1rem;
+    line-height: 1.25;
+  }
+  .mix-note {
+    display: block;
+    margin-top: 0.2rem;
+    font-size: 0.85rem;
+    line-height: 1.35;
+    color: var(--mix-stone);
   }
   .onboard-actions {
     display: flex;
@@ -639,6 +732,13 @@ const emailHref = `mailto:${copy.footer.email}`;
   @media (max-width: 760px) {
     .onboard {
       width: min(92vw, 40rem);
+    }
+    .mix {
+      grid-template-columns: 3.5rem 1fr;
+      gap: 1rem;
+    }
+    .mix-bar {
+      height: 10.5rem;
     }
   }
 
