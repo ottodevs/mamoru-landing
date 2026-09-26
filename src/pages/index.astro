@@ -23,6 +23,20 @@ import EmailBar from "../components/EmailBar.astro";
       <p class="teaser">The principal keeps working. The yield gets set aside.</p>
       <Countdown />
       <EmailBar />
+      <a
+        class="x-link"
+        href="https://x.com/entermamoru"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <svg class="x-mark" viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.725-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"
+          />
+        </svg>
+        <span>@entermamoru</span>
+      </a>
     </div>
   </main>
 </Base>
@@ -118,6 +132,31 @@ import EmailBar from "../components/EmailBar.astro";
   .stack :global(.email-bar) {
     margin-top: clamp(1.35rem, 6.4vh, 3.75rem);
     max-width: 100%;
+  }
+
+  .x-link {
+    margin-top: clamp(1.1rem, 4vh, 1.75rem);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--stone);
+    text-decoration: none;
+    font-size: 0.95rem;
+    letter-spacing: 0.01em;
+    line-height: 1;
+  }
+  .x-link:hover,
+  .x-link:focus-visible {
+    color: var(--ink);
+  }
+  .x-link:focus-visible {
+    outline: 1px solid var(--ink);
+    outline-offset: 4px;
+  }
+  .x-mark {
+    width: 0.85rem;
+    height: 0.85rem;
+    display: block;
   }
 
   @media (max-width: 52rem) {
