@@ -1,19 +1,30 @@
 name = "mamoru-lol"
+account_id = "ac5100a2c4cec1e240cbd20252ba9213"
 compatibility_date = "2026-09-25"
 main = "src/worker.ts"
 
+# Keep workers.dev until Porkbun NS → CF completes (zone pending).
 workers_dev = true
 preview_urls = true
 
+# Custom domains (zone 44832cd8bf23d12e9b92e1b7796ace9a pending NS)
 routes = [
   { pattern = "mamoru.lol", custom_domain = true },
   { pattern = "www.mamoru.lol", custom_domain = true },
+  { pattern = "app.mamoru.lol", custom_domain = true },
 ]
 
 [assets]
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "404-page"
+# Worker first so /ops and /api never fall through to Astro 404.html
+run_worker_first = true
+
+# Form live = segundo Ot GO only. Keep false until then.
+[vars]
+SHOW_EMAIL_FORM = "false"
+# LOOPS_FORM_ID = ""  # set after Loops form created; still keep SHOW_EMAIL_FORM false
 
 # Address list. Keys are hashes. Values stay in this account.
 [[kv_namespaces]]

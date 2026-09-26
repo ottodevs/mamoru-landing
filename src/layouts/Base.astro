@@ -3,10 +3,12 @@ import "../styles/global.css";
 interface Props {
   title?: string;
   description?: string;
+  canonical?: string;
 }
 const {
   title = "Mamoru.lol",
-  description = "APY. Delivered. Opens after ETHGlobal Tokyo.",
+  description = "APY. Delivered.",
+  canonical,
 } = Astro.props;
 ---
 <!doctype html>
@@ -15,8 +17,20 @@ const {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={description} />
+    {canonical && <link rel="canonical" href={canonical} />}
+    {canonical && <meta property="og:title" content={title} />}
+    {canonical && <meta property="og:description" content={description} />}
+    {canonical && <meta property="og:url" content={canonical} />}
+    {canonical && <meta property="og:image" content="https://mamoru.lol/mark-two-stones.png" />}
     <meta name="theme-color" content="#F8F5EF" />
     <link rel="icon" href="/mark-two-stones.png" type="image/png" />
+    <link
+      rel="preload"
+      href="/fonts/NotoSerif-400.ttf"
+      as="font"
+      type="font/ttf"
+      crossorigin
+    />
     <title>{title}</title>
   </head>
   <body>

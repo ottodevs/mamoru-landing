@@ -1,39 +1,23 @@
+import { b64url, b64urlDecode } from "./google";
 import type { Entry } from "./list";
 import { esc, sameSecret } from "./text";
 
 const COOKIE = "mamoru_list";
 const FLASH = "mamoru_flash";
+const OAUTH = "mamoru_oauth";
 const MAX_AGE = 60 * 60 * 12;
+const OAUTH_MAX_AGE = 60 * 10;
 
-type Session = { exp: number; csrf: string };
+export type Session = { exp: number; csrf: string; email: string };
+export type OauthState = {
+  exp: number;
+  state: string;
+  nonce: string;
+  verifier: string;
+  next?: string;
+};
 
-export type Flash =
-  | "sent"
-  | "waiting"
-  | "failed"
-  | "removed"
-  | "limited"
-  | "bad"
-  | "";
-
-function b64url(bytes: Uint8Array): string {
-  let bin = "";
-  for (const byte of bytes) bin += String.fromCharCode(byte);
-  return btoa(bin).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-}
-
-function b64urlDecode(value: string): Uint8Array | null {
-  if (!/^[A-Za-z0-9_-]+$/.test(value)) return null;
-  const pad = value.length % 4 === 0 ? "" : "=".repeat(4 - (value.length % 4));
-  try {
-    const bin = atob(value.replaceAll("-", "+").replaceAll("_", "/") + pad);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
-  } catch {
-    return null;
-  }
-}
+export type Flash = "sent" | "waiting" | "failed" | "removed" | "bad" | "";
 
 async function hmac(secret: string, data: string): Promise<Uint8Array> {
   const key = await crypto.subtle.importKey(
@@ -51,42 +35,75 @@ async function hmac(secret: string, data: string): Promise<Uint8Array> {
   return new Uint8Array(sig);
 }
 
-async function macEqual(secret: string, data: string, given: string): Promise<boolean> {
-  const expected = b64url(await hmac(secret, data));
-  return sameSecret(given, expected);
+async function seal(secret: string, data: unknown): Promise<string> {
+  const payload = b64url(new TextEncoder().encode(JSON.stringify(data)));
+  const mac = b64url(await hmac(secret, payload));
+  return `${payload}.${mac}`;
+}
+
+async function open<T>(secret: string, raw: string): Promise<Partial<T> | null> {
+  if (!raw) return null;
+  const dot = raw.indexOf(".");
+  if (dot < 1) return null;
+  const payload = raw.slice(0, dot);
+  const mac = raw.slice(dot + 1);
+  const expected = b64url(await hmac(secret, payload));
+  if (!(await sameSecret(mac, expected))) return null;
+  const bytes = b64urlDecode(payload);
+  if (!bytes) return null;
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as Partial<T>;
+  } catch {
+    return null;
+  }
+}
+
+function now(): number {
+  return Math.floor(Date.now() / 1000);
 }
 
 export async function openSession(
   secret: string,
   cookieHeader: string | null,
 ): Promise<Session | null> {
-  const raw = readCookie(cookieHeader, COOKIE);
-  if (!raw) return null;
-  const dot = raw.indexOf(".");
-  if (dot < 1) return null;
-  const payload = raw.slice(0, dot);
-  const mac = raw.slice(dot + 1);
-  if (!(await macEqual(secret, payload, mac))) return null;
-  const bytes = b64urlDecode(payload);
-  if (!bytes) return null;
-  try {
-    const data = JSON.parse(new TextDecoder().decode(bytes)) as Partial<Session>;
-    if (typeof data.exp !== "number" || typeof data.csrf !== "string") return null;
-    if (data.exp < Math.floor(Date.now() / 1000)) return null;
-    return { exp: data.exp, csrf: data.csrf };
-  } catch {
-    return null;
-  }
+  const data = await open<Session>(secret, readCookie(cookieHeader, COOKIE));
+  if (!data) return null;
+  if (typeof data.exp !== "number" || data.exp < now()) return null;
+  if (typeof data.csrf !== "string" || typeof data.email !== "string") return null;
+  return { exp: data.exp, csrf: data.csrf, email: data.email };
 }
 
-export async function sealSession(secret: string): Promise<string> {
+export async function sealSession(secret: string, email: string): Promise<string> {
   const session: Session = {
-    exp: Math.floor(Date.now() / 1000) + MAX_AGE,
+    exp: now() + MAX_AGE,
     csrf: crypto.randomUUID(),
+    email,
   };
-  const payload = b64url(new TextEncoder().encode(JSON.stringify(session)));
-  const mac = b64url(await hmac(secret, payload));
-  return `${payload}.${mac}`;
+  return seal(secret, session);
+}
+
+export async function openOauthState(
+  secret: string,
+  cookieHeader: string | null,
+): Promise<OauthState | null> {
+  const data = await open<OauthState>(secret, readCookie(cookieHeader, OAUTH));
+  if (!data) return null;
+  if (typeof data.exp !== "number" || data.exp < now()) return null;
+  if (
+    typeof data.state !== "string" ||
+    typeof data.nonce !== "string" ||
+    typeof data.verifier !== "string"
+  ) {
+    return null;
+  }
+  return { exp: data.exp, state: data.state, nonce: data.nonce, verifier: data.verifier };
+}
+
+export async function sealOauthState(
+  secret: string,
+  state: Omit<OauthState, "exp">,
+): Promise<string> {
+  return seal(secret, { ...state, exp: now() + OAUTH_MAX_AGE } satisfies OauthState);
 }
 
 export function readCookie(header: string | null, name: string): string {
@@ -105,7 +122,6 @@ export function readFlash(header: string | null): Flash {
     value === "waiting" ||
     value === "failed" ||
     value === "removed" ||
-    value === "limited" ||
     value === "bad"
   ) {
     return value;
@@ -113,29 +129,46 @@ export function readFlash(header: string | null): Flash {
   return "";
 }
 
+/** Lax, not Strict: the cookie must survive the top-level redirect back from Google. */
 function cookie(
   name: string,
   value: string,
   secure: boolean,
   maxAge: number,
+  path = "/ops",
+  domain?: string,
 ): string {
   const bits = [
     `${name}=${value}`,
-    "Path=/ops",
+    `Path=${path}`,
     "HttpOnly",
-    "SameSite=Strict",
+    "SameSite=Lax",
     `Max-Age=${maxAge}`,
   ];
+  if (domain) bits.push(`Domain=${domain}`);
   if (secure) bits.push("Secure");
   return bits.join("; ");
 }
 
-export function sessionCookie(token: string, secure: boolean): string {
-  return cookie(COOKIE, token, secure, MAX_AGE);
+/** Shared by mamoru.lol and app.mamoru.lol. Host-only on any other host. */
+function sessionDomain(host: string): string | undefined {
+  return host === "mamoru.lol" || host.endsWith(".mamoru.lol") ? ".mamoru.lol" : undefined;
 }
 
-export function clearSessionCookie(secure: boolean): string {
-  return cookie(COOKIE, "", secure, 0);
+export function sessionCookie(token: string, secure: boolean, host = ""): string {
+  return cookie(COOKIE, token, secure, MAX_AGE, "/", sessionDomain(host));
+}
+
+export function clearSessionCookie(secure: boolean, host = ""): string {
+  return cookie(COOKIE, "", secure, 0, "/", sessionDomain(host));
+}
+
+export function oauthCookie(token: string, secure: boolean): string {
+  return cookie(OAUTH, token, secure, OAUTH_MAX_AGE);
+}
+
+export function clearOauthCookie(secure: boolean): string {
+  return cookie(OAUTH, "", secure, 0);
 }
 
 export function flashCookie(flash: Flash, secure: boolean): string {
@@ -143,17 +176,16 @@ export function flashCookie(flash: Flash, secure: boolean): string {
 }
 
 const FLASH_COPY: Record<Exclude<Flash, "">, string> = {
-  sent: "Notas enviadas.",
-  waiting: "Siguen en espera. El envío del dominio aún no está conectado.",
-  failed: "Alguna nota no salió. La dirección sigue en la lista.",
-  removed: "Quitado de la lista.",
-  limited: "Demasiados intentos. Más tarde.",
-  bad: "Esa clave no abre la lista.",
+  sent: "Notes sent.",
+  waiting: "Still waiting. The domain cannot send yet.",
+  failed: "Some notes did not go out. The address stays on the list.",
+  removed: "Removed from the list.",
+  bad: "That did not go through. Try again.",
 };
 
 function shell(title: string, body: string): string {
   return `<!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -183,18 +215,10 @@ function shell(title: string, body: string): string {
     th, td { text-align: left; font-weight: 400; padding: 0.55rem 0.4rem 0.55rem 0; vertical-align: baseline; border-bottom: 1px solid #e4dfd4; }
     th { color: #8a8578; font-size: 0.85rem; }
     form.inline { display: inline; }
+    a { color: #2f5d50; }
     button, input {
       font: inherit;
       color: inherit;
-    }
-    input {
-      display: block;
-      width: min(100%, 18rem);
-      margin: 0.4rem 0 0.8rem;
-      padding: 0.55rem 0.7rem;
-      border: 1px solid #0f0f0e;
-      background: #f8f5ef;
-      border-radius: 0;
     }
     button {
       background: #0f0f0e;
@@ -220,21 +244,6 @@ function shell(title: string, body: string): string {
 </html>`;
 }
 
-export function renderLogin(flash: Flash): string {
-  const note = flash === "bad" || flash === "limited" ? `<p class="flash">${FLASH_COPY[flash]}</p>` : "";
-  return shell(
-    "La lista",
-    `<h1>La lista</h1>
-    <p>No es pública.</p>
-    ${note}
-    <form method="post" action="/ops/login">
-      <label for="gate">Clave</label>
-      <input id="gate" name="password" type="password" autocomplete="current-password" required />
-      <button type="submit">Entrar</button>
-    </form>`,
-  );
-}
-
 function when(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
@@ -247,9 +256,9 @@ function when(iso: string): string {
 }
 
 const NOTE_LABEL: Record<Entry["note"], string> = {
-  sent: "Enviada",
-  pending: "Esperando",
-  failed: "Falló",
+  sent: "Sent",
+  pending: "Waiting",
+  failed: "Failed",
 };
 
 export function renderList(opts: {
@@ -258,15 +267,16 @@ export function renderList(opts: {
   csrf: string;
   flash: Flash;
   mailReady: boolean;
+  who?: string;
 }): string {
   const sent = opts.entries.filter((e) => e.note === "sent").length;
   const waiting = opts.entries.length - sent;
   const flash = opts.flash ? `<p class="flash">${FLASH_COPY[opts.flash]}</p>` : "";
   const mail = opts.mailReady
-    ? `<p class="quiet">La nota sale una sola vez, desde notify@mamoru.lol. Si pone Falló, el dominio todavía no puede enviar. La dirección sí está guardada.</p>`
-    : `<p class="quiet">La lista se guarda. La nota todavía no puede salir: el envío del dominio no está conectado.</p>`;
+    ? `<p class="quiet">The note goes out once, from notify@mamoru.lol. If it says Failed, the domain cannot send yet. The address is still saved.</p>`
+    : `<p class="quiet">The list is saved. The note cannot go out yet: sending from the domain is not connected.</p>`;
   const more = opts.truncated
-    ? `<p class="quiet">Hay más. Aquí están las primeras ${opts.entries.length}.</p>`
+    ? `<p class="quiet">There are more. These are the first ${opts.entries.length}.</p>`
     : "";
   const rows = opts.entries
     .map(
@@ -278,7 +288,7 @@ export function renderList(opts: {
           <form class="inline" method="post" action="/ops/remove">
             <input type="hidden" name="csrf" value="${esc(opts.csrf)}" />
             <input type="hidden" name="email" value="${esc(entry.email)}" />
-            <button class="quiet" type="submit">Quitar</button>
+            <button class="quiet" type="submit">Remove</button>
           </form>
         </td>
       </tr>`,
@@ -286,30 +296,32 @@ export function renderList(opts: {
     .join("");
   const table = opts.entries.length
     ? `<table>
-        <thead><tr><th>Correo</th><th>Cuando</th><th>Nota</th><th></th></tr></thead>
+        <thead><tr><th>Email</th><th>When</th><th>Note</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`
-    : `<p>Todavía no hay nadie.</p>`;
+    : `<p>Nobody yet.</p>`;
   const send =
     waiting > 0 && opts.mailReady
       ? `<form method="post" action="/ops/send">
           <input type="hidden" name="csrf" value="${esc(opts.csrf)}" />
-          <button type="submit">Enviar las que faltan</button>
+          <button type="submit">Send the missing ones</button>
         </form>`
       : "";
+  const who = opts.who ? `<span class="quiet">Signed in as ${esc(opts.who)} · </span>` : "";
   return shell(
-    "La lista",
-    `<h1>La lista</h1>
-    <p>Estos correos se quedan aquí. Los custodiamos como fondos: no salen de esta casa, y no enviamos nada más.</p>
+    "The list",
+    `<h1>The list</h1>
+    <p>These emails stay here. We hold them the way we hold funds: they do not leave this house, and we send nothing else.</p>
     ${mail}
-    <p>${opts.entries.length} en la lista · ${sent} notas enviadas · ${waiting} sin nota</p>
+    <p>${opts.entries.length} on the list · ${sent} notes sent · ${waiting} without a note</p>
     ${flash}
     ${more}
     ${send}
     ${table}
+    <p><a href="/ops/landing">The site</a></p>
     <form method="post" action="/ops/logout">
       <input type="hidden" name="csrf" value="${esc(opts.csrf)}" />
-      <p><button class="quiet" type="submit">Salir</button></p>
+      <p>${who}<button class="quiet" type="submit">Sign out</button></p>
     </form>`,
   );
 }

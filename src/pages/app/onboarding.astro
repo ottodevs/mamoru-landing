@@ -1,0 +1,59 @@
+---
+import Base from "../../layouts/Base.astro";
+---
+<Base title="Mamoru — Onboarding" description="Fund Mamoru. What happens next. You keep control.">
+  <main class="page">
+    <div class="stack">
+      <p class="badge" role="status">Demo / dry-run · Live LP HOLD</p>
+      <p class="eyebrow"><a href="/">Home</a> / Onboarding</p>
+      <h1 class="hero">Three steps.</h1>
+      <p class="lead">Create your account, see how the agent deploys, then keep control. Deposit stays off until gates are green.</p>
+      <ol class="steps">
+        <li>
+          <div class="step-head"><strong>1. Fund Mamoru</strong><span class="pill">Screen 1</span></div>
+          <p class="body">Create your account and assign only the ETH you want to invest. The agent operates with that isolated capital. Funds at your main wallet are never exposed.</p>
+          <button type="button" class="btn primary" disabled aria-disabled="true">Create account</button>
+          <button type="button" class="btn ghost" disabled aria-disabled="true">Deposit ETH</button>
+        </li>
+        <li>
+          <div class="step-head"><strong>2. What happens next?</strong><span class="pill">Screen 2</span></div>
+          <p class="body">The agent automates your deployment following a balanced strategy: 50% in stablecoin pools, 35% in BTC/ETH-stable LP pools, and 15% in high-yield pools. It harvests the yield, converts it to USDC, and sends it to you.</p>
+          <p class="honesty">Example mix — not a return promise.</p>
+          <p class="path">Uniswap CORE path (quote → swap → LP) · automation coming · Live ARMED NO</p>
+        </li>
+        <li>
+          <div class="step-head"><strong>3. You keep control</strong><span class="pill">Screen 3</span></div>
+          <p class="body">No forced lockups or third-party dependencies. You can pause the agent, exit the pools, and withdraw your principal and earnings at any time to any wallet.</p>
+          <p class="body">Mamoru works for you, every action and transaction is transparently recorded</p>
+          <button type="button" class="btn primary" disabled aria-disabled="true">Go to deposit</button>
+        </li>
+      </ol>
+      <nav class="actions">
+        <a class="btn ghost" href="/dashboard">Open dashboard</a>
+        <a class="btn ghost" href="/">Back</a>
+      </nav>
+    </div>
+  </main>
+</Base>
+<style>
+  .page { min-height: 100dvh; display: flex; justify-content: center; padding: clamp(1.5rem, 5vh, 3.5rem) clamp(1rem, 5vw, 4rem) 3rem; }
+  .stack { width: 100%; max-width: 34rem; display: flex; flex-direction: column; gap: 1rem; }
+  .badge { margin: 0; width: fit-content; font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--emerald); border: 1px solid var(--wash); padding: 0.25rem 0.65rem; border-radius: 999px; }
+  .eyebrow { margin: 0; font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--stone); }
+  .eyebrow a { text-decoration: none; }
+  .hero { margin: 0; font-size: clamp(2rem, 5vw, 3rem); font-weight: 400; }
+  .lead { margin: 0; color: var(--stone); line-height: 1.45; }
+  .steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 1rem; }
+  .steps li { display: grid; gap: 0.55rem; padding: 1rem 1.1rem; border: 1px solid var(--wash); background: color-mix(in srgb, var(--paper) 80%, transparent); }
+  .step-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+  .steps strong { font-family: var(--font-mono); font-size: 0.8rem; letter-spacing: 0.05em; text-transform: uppercase; }
+  .pill { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--stone); border: 1px solid var(--wash); padding: 0.15rem 0.45rem; border-radius: 999px; }
+  .body { margin: 0; line-height: 1.45; }
+  .honesty { margin: 0; font-family: var(--font-mono); font-size: 0.78rem; color: var(--emerald); }
+  .path { margin: 0; font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--stone); }
+  .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; min-width: 8.5rem; padding: 0.7rem 1.2rem; border-radius: 999px; text-decoration: none; font-family: var(--font-mono); font-size: 0.85rem; letter-spacing: 0.04em; text-transform: uppercase; border: none; cursor: pointer; width: fit-content; }
+  .btn:disabled, .btn[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+  .btn.primary { background: var(--ink); color: var(--rice); }
+  .btn.ghost { border: 1px solid var(--wash); color: var(--ink); background: transparent; }
+</style>

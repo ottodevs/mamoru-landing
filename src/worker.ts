@@ -2,19 +2,19 @@
  * Assets, the landing waitlist, and the private list.
  * Addresses are stored. They are not logged.
  *
- *   WAITLIST   KV. Required for /api/notify.
- *   LIST_GATE  secret. Required for /ops.
- *   EMAIL      Cloudflare Email binding. One welcome note, from notify@mamoru.lol.
+ *   WAITLIST              KV. Required for /api/notify.
+ *   GOOGLE_CLIENT_ID      secret. Google OAuth client for /ops.
+ *   GOOGLE_CLIENT_SECRET  secret. Same client.
+ *   OPS_SESSION_SECRET    secret. Signs the /ops session and OAuth state cookies.
+ *   EMAIL                 Cloudflare Email binding. One welcome note, from notify@mamoru.lol.
+ *
+ * /ops is Google sign-in only, allowlisted by exact email (src/google.ts).
+ * Anything without a valid allowlisted session is sent to the root.
+ * /ops/landing is that same gate, showing the page that replaces / at OPEN_AT.
+ * /open is the built file for that page. Browsers never fetch it by path.
  */
 
-import {
-  CUSTODY_LINE,
-  FOLLOW_UP_LINES,
-  FOLLOW_UP_SUBJECT,
-  FOLLOW_UP_TEXT,
-  MAIL_FROM,
-  followUpHtml,
-} from "./follow-up";
+import { FOLLOW_UP_SUBJECT, FOLLOW_UP_TEXT, MAIL_FROM, followUpHtml } from "./follow-up";
 import {
   bumpedLimit,
   deleteEntry,
@@ -25,17 +25,29 @@ import {
   type WaitlistKv,
 } from "./list";
 import {
+  authorizeUrl,
+  exchangeCode,
+  isAllowed,
+  pkceChallenge,
+  randomToken,
+  verifyIdToken,
+} from "./google";
+import {
+  clearOauthCookie,
   clearSessionCookie,
   flashCookie,
+  oauthCookie,
+  openOauthState,
   openSession,
   opsHeaders,
   readFlash,
   renderList,
-  renderLogin,
+  sealOauthState,
   sealSession,
   sessionCookie,
   type Flash,
 } from "./ops";
+import { homeDocument, isOpen } from "./open-at";
 import { esc, normalizeEmail, sameSecret } from "./text";
 
 export interface OutboundMail {
@@ -58,7 +70,9 @@ export interface OutboundMail {
 export interface Env {
   ASSETS: Fetcher;
   WAITLIST?: WaitlistKv;
-  LIST_GATE?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  OPS_SESSION_SECRET?: string;
   EMAIL?: OutboundMail;
 }
 
@@ -152,31 +166,52 @@ async function deliver(
   }
 }
 
-async function saveAndNote(
+export type NotifyStatus = "new" | "already";
+
+/**
+ * Save once. An address already on the list is left exactly as it is:
+ * no rewrite, no second note. The welcome note only goes out when EMAIL is
+ * bound; without it the entry stays "pending" and the signup still counts.
+ */
+export async function saveAndNote(
   request: Request,
   env: Env,
   kv: WaitlistKv,
   email: string,
-): Promise<void> {
+): Promise<NotifyStatus> {
   const existing = await readEntry(kv, email);
-  const now = new Date().toISOString();
-  const base: Entry = existing ?? { email, at: now, note: "pending" };
-  if (base.note === "sent") return;
-  if (!existing) await writeEntry(kv, base);
+  if (existing) return "already";
+  const entry: Entry = { email, at: new Date().toISOString(), note: "pending" };
+  await writeEntry(kv, entry);
+  if (!env.EMAIL) return "new";
   const result = await deliver(request, env, email);
-  if (result === "unlinked") return;
-  await writeEntry(kv, {
-    ...base,
-    note: result === "sent" ? "sent" : "failed",
-    noteAt: new Date().toISOString(),
-  });
+  if (result === "unlinked") return "new";
+  try {
+    await writeEntry(kv, {
+      ...entry,
+      note: result === "sent" ? "sent" : "failed",
+      noteAt: new Date().toISOString(),
+    });
+  } catch {
+    // The address is already saved; a lost note state is not a failed signup.
+    console.error("note_state_write_failed");
+  }
+  return "new";
 }
 
-function htmlPage(title: string, lines: readonly string[]): Response {
+/** Short landing copy per outcome. The email body stays in follow-up.ts. */
+export const NOTIFY_COPY = {
+  new: "You're in.",
+  already: "You're already on the list.",
+  failed: "Could not save that. Try again.",
+} as const;
+
+function htmlPage(title: string, lines: readonly string[], status = 200): Response {
   const body = lines.map((line) => `<p>${esc(line)}</p>`).join("");
   return new Response(
-    `<!DOCTYPE html><html lang="en"><meta charset="utf-8" /><title>${title}</title><body style="background:#F8F5EF;color:#0F0F0E;font-family:Georgia,serif;padding:3rem">${body}</body></html>`,
+    `<!DOCTYPE html><html lang="en"><meta charset="utf-8" /><title>${title}</title><body style="background:#F8F5EF;color:#0F0F0E;font-family:Georgia,serif;padding:3rem">${body}<p><a href="/">Back</a></p></body></html>`,
     {
+      status,
       headers: {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
@@ -197,38 +232,37 @@ async function handleNotify(request: Request, env: Env): Promise<Response> {
       : json({ ok: false, error: "Invalid JSON" }, 400);
   }
   if (input.honey.trim()) {
-    return wantsHtml
-      ? htmlPage("Mamoru", [...FOLLOW_UP_LINES])
-      : json({ ok: true });
+    return wantsHtml ? htmlPage("Mamoru", [NOTIFY_COPY.new]) : json({ ok: true });
   }
   const email = normalizeEmail(input.email);
   if (!email) {
     return wantsHtml
-      ? htmlPage("Mamoru", ["Enter an email."])
+      ? htmlPage("Mamoru", ["Enter an email."], 400)
       : json({ ok: false, error: "Invalid email" }, 400);
   }
   if (!env.WAITLIST) {
     console.error("waitlist_unbound");
     return wantsHtml
-      ? htmlPage("Mamoru", ["Could not save that. Try again."])
-      : json({ ok: false, error: "Could not save that. Try again." }, 503);
+      ? htmlPage("Mamoru", [NOTIFY_COPY.failed], 503)
+      : json({ ok: false, error: NOTIFY_COPY.failed }, 503);
   }
   if (await bumpedLimit(env.WAITLIST, "rl", clientIp(request), 8)) {
     return wantsHtml
-      ? htmlPage("Mamoru", ["Try again later."])
+      ? htmlPage("Mamoru", ["Try again later."], 429)
       : json({ ok: false, error: "Try again later" }, 429);
   }
+  let status: NotifyStatus;
   try {
-    await saveAndNote(request, env, env.WAITLIST, email);
+    status = await saveAndNote(request, env, env.WAITLIST, email);
   } catch {
     console.error("waitlist_write_failed");
     return wantsHtml
-      ? htmlPage("Mamoru", ["Could not save that. Try again."])
-      : json({ ok: false, error: "Could not save that. Try again." }, 503);
+      ? htmlPage("Mamoru", [NOTIFY_COPY.failed], 503)
+      : json({ ok: false, error: NOTIFY_COPY.failed }, 503);
   }
   return wantsHtml
-    ? htmlPage("Mamoru", [...FOLLOW_UP_LINES, CUSTODY_LINE])
-    : json({ ok: true });
+    ? htmlPage("Mamoru", [NOTIFY_COPY[status]])
+    : json({ ok: true, status });
 }
 
 function secureRequest(request: Request): boolean {
@@ -250,35 +284,124 @@ function redirectOps(request: Request, flash: Flash, cookies: string[]): Respons
   return new Response(null, { status: 303, headers });
 }
 
+/** Anyone who is not signed in and allowlisted sees the landing. Nothing else. */
+function toRoot(request: Request, cookies: string[] = []): Response {
+  const headers = new Headers({
+    location: new URL("/", request.url).toString(),
+    "cache-control": "no-store",
+    "x-robots-tag": "noindex, nofollow",
+    "referrer-policy": "no-referrer",
+  });
+  for (const cookie of cookies) headers.append("set-cookie", cookie);
+  return new Response(null, { status: 302, headers });
+}
+
+type Oauth = { clientId: string; clientSecret: string; sessionSecret: string };
+
+function oauthConfig(env: Env): Oauth | null {
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.OPS_SESSION_SECRET) {
+    return null;
+  }
+  return {
+    clientId: env.GOOGLE_CLIENT_ID,
+    clientSecret: env.GOOGLE_CLIENT_SECRET,
+    sessionSecret: env.OPS_SESSION_SECRET,
+  };
+}
+
 async function handleOps(request: Request, env: Env): Promise<Response> {
-  if (!env.LIST_GATE) return new Response("Not found", { status: 404 });
+  const oauth = oauthConfig(env);
+  // Not configured: fail closed. The list is unreachable, the landing is all anyone sees.
+  if (!oauth) return toRoot(request);
+
   const url = new URL(request.url);
   const secure = secureRequest(request);
-  const session = await openSession(
-    env.LIST_GATE,
-    request.headers.get("cookie"),
-  );
-  const flash = readFlash(request.headers.get("cookie"));
+  const cookieHeader = request.headers.get("cookie");
+  // Must match the URI registered on the Google client byte for byte.
+  const callback = new URL("/ops/callback", request.url);
+  if (callback.hostname !== "localhost" && callback.hostname !== "127.0.0.1") {
+    callback.protocol = "https:";
+  }
+  const redirectUri = callback.toString();
+  const session = await openSession(oauth.sessionSecret, cookieHeader);
+  const flash = readFlash(cookieHeader);
 
-  if (url.pathname === "/ops/login" && request.method === "POST") {
-    if (!env.WAITLIST) return opsResponse(renderLogin("limited"), [], 503);
-    if (await bumpedLimit(env.WAITLIST, "gl", clientIp(request), 8)) {
-      return opsResponse(renderLogin("limited"), [], 429);
-    }
-    const form = await request.formData();
-    const password = String(form.get("password") ?? "");
-    if (!(await sameSecret(password, env.LIST_GATE))) {
-      return opsResponse(renderLogin("bad"), [], 401);
-    }
-    const token = await sealSession(env.LIST_GATE);
-    return redirectOps(request, "", [sessionCookie(token, secure)]);
+  // Start: send to Google. Only reachable by those who know the URL.
+  if (url.pathname === "/ops/login" && request.method === "GET") {
+    const next = safeAppNext(url.searchParams.get("next"));
+    if (session && next) return Response.redirect(next, 302);
+    if (session) return redirectOps(request, "", []);
+    const state = randomToken();
+    const nonce = randomToken();
+    const verifier = randomToken(48);
+    const sealed = await sealOauthState(oauth.sessionSecret, {
+      state,
+      nonce,
+      verifier,
+      next: safeAppNext(url.searchParams.get("next")) ?? "",
+    });
+    const headers = new Headers({
+      location: authorizeUrl({
+        clientId: oauth.clientId,
+        redirectUri,
+        state,
+        nonce,
+        codeChallenge: await pkceChallenge(verifier),
+      }),
+      "cache-control": "no-store",
+      "x-robots-tag": "noindex, nofollow",
+      "referrer-policy": "no-referrer",
+    });
+    headers.append("set-cookie", oauthCookie(sealed, secure));
+    return new Response(null, { status: 302, headers });
   }
 
-  if (!session) {
-    if (url.pathname !== "/ops" || request.method !== "GET") {
-      return opsResponse(renderLogin(flash), [flashCookie("", secure)], 401);
+  // Return from Google. Any doubt sends to the root with no session.
+  if (url.pathname === "/ops/callback" && request.method === "GET") {
+    const clear = [clearOauthCookie(secure)];
+    const stored = await openOauthState(oauth.sessionSecret, cookieHeader);
+    const code = url.searchParams.get("code") ?? "";
+    const state = url.searchParams.get("state") ?? "";
+    if (!stored || !code || !state) return toRoot(request, clear);
+    if (!(await sameSecret(state, stored.state))) return toRoot(request, clear);
+    const idToken = await exchangeCode({
+      clientId: oauth.clientId,
+      clientSecret: oauth.clientSecret,
+      redirectUri,
+      code,
+      codeVerifier: stored.verifier,
+    });
+    if (!idToken) return toRoot(request, clear);
+    const identity = await verifyIdToken(idToken, oauth.clientId, stored.nonce);
+    if (!identity || !isAllowed(identity.email)) return toRoot(request, clear);
+    const token = await sealSession(oauth.sessionSecret, identity.email);
+    const next = safeAppNext(stored.next ?? null);
+    const sessionSet = sessionCookie(token, secure, url.hostname);
+    if (next) {
+      const headers = new Headers({
+        location: next,
+        "cache-control": "no-store",
+        "x-robots-tag": "noindex, nofollow",
+        "referrer-policy": "no-referrer",
+      });
+      for (const item of [...clear, sessionSet]) headers.append("set-cookie", item);
+      return new Response(null, { status: 303, headers });
     }
-    return opsResponse(renderLogin(flash), [flashCookie("", secure)]);
+    return redirectOps(request, "", [...clear, sessionSet]);
+  }
+
+  if (!session) return toRoot(request);
+
+  // A stale session whose address was later removed from the allowlist ends here.
+  if (!isAllowed(session.email)) {
+    return toRoot(request, [clearSessionCookie(secure, url.hostname)]);
+  }
+
+  if (
+    (url.pathname === "/ops/landing" || url.pathname === "/ops/landing/") &&
+    request.method === "GET"
+  ) {
+    return serveSite(request, env, true);
   }
 
   if (url.pathname === "/ops/logout" && request.method === "POST") {
@@ -286,11 +409,11 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
     if (!(await sameSecret(String(form.get("csrf") ?? ""), session.csrf))) {
       return redirectOps(request, "bad", []);
     }
-    return redirectOps(request, "", [clearSessionCookie(secure)]);
+    return toRoot(request, [clearSessionCookie(secure, url.hostname)]);
   }
 
   if (!env.WAITLIST) {
-    return opsResponse("<p>La lista no está conectada.</p>", [], 503);
+    return opsResponse("<p>The list is not connected.</p>", [], 503);
   }
 
   if (url.pathname === "/ops/remove" && request.method === "POST") {
@@ -343,20 +466,170 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
         csrf: session.csrf,
         flash,
         mailReady: Boolean(env.EMAIL),
+        who: session.email,
       }),
       [flashCookie("", secure)],
     );
   }
 
-  return new Response("Not found", { status: 404 });
+  return new Response("Not found.", { status: 404 });
+}
+
+const PREVIEW_STYLE =
+  ".mamoru-preview{padding-bottom:3.25rem}" +
+  ".mamoru-preview-bar{position:fixed;left:0;right:0;bottom:0;z-index:4;display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;padding:.7rem 1.25rem;background:#f4f0e6;color:#0f0f0e;border-top:1px solid #d9d2c3;font:16px/1.4 Georgia,serif}" +
+  ".mamoru-preview-bar a{color:#2f5d50}";
+
+const PREVIEW_BAR =
+  '<div class="mamoru-preview-bar"><span>Preview. This becomes the front page when the countdown ends.</span><a href="/ops">The list</a></div>';
+
+function notFound(): Response {
+  return new Response("Not found.", {
+    status: 404,
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store",
+      "x-robots-tag": "noindex, nofollow",
+    },
+  });
+}
+
+/** The post-countdown page. Preview adds a private bar and noindex. */
+async function serveSite(request: Request, env: Env, preview: boolean): Promise<Response> {
+  const assetUrl = new URL("/open/index.html", request.url);
+  const asset = await env.ASSETS.fetch(new Request(assetUrl.toString(), { method: "GET" }));
+  if (!asset.ok) return notFound();
+  const headers = new Headers(asset.headers);
+  headers.set("content-type", "text/html; charset=utf-8");
+  headers.set("x-content-type-options", "nosniff");
+  headers.set("referrer-policy", "strict-origin-when-cross-origin");
+  headers.delete("content-length");
+  if (preview) {
+    headers.set("cache-control", "no-store");
+    headers.set("x-robots-tag", "noindex, nofollow");
+    headers.delete("content-encoding");
+    let html = await asset.text();
+    const style = `<style>${PREVIEW_STYLE}</style>`;
+    html = html.includes("</head>")
+      ? html.replace("</head>", `${style}</head>`)
+      : style + html;
+    if (html.includes("<body>")) {
+      html = html.replace("<body>", `<body class="mamoru-preview">${PREVIEW_BAR}`);
+    } else if (/<body\s[^>]*>/i.test(html)) {
+      html = html.replace(/<body\s[^>]*>/i, (tag) => `${tag}${PREVIEW_BAR}`);
+    } else {
+      html = PREVIEW_BAR + html;
+    }
+    if (request.method === "HEAD") {
+      return new Response(null, { status: 200, headers });
+    }
+    return new Response(html, { status: 200, headers });
+  }
+  headers.set("cache-control", "public, max-age=0, must-revalidate");
+  if (request.method === "HEAD") {
+    return new Response(null, { status: asset.status, headers });
+  }
+  return new Response(asset.body, { status: asset.status, headers });
+}
+
+const APP_HOST = "app.mamoru.lol";
+
+/** Only the app host, and never the /app path. */
+function safeAppNext(raw: string | null): string | null {
+  if (!raw) return null;
+  let dest: URL;
+  try {
+    dest = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (dest.protocol !== "https:" || dest.hostname !== APP_HOST) return null;
+  if (dest.username || dest.password) return null;
+  const path = dest.pathname.replace(/\/+$/, "") || "/";
+  if (path === "/app" || path.startsWith("/app/")) return null;
+  dest.hash = "";
+  return dest.toString();
+}
+
+function appPageAsset(pathname: string): string | null {
+  const path = pathname.replace(/\/+$/, "") || "/";
+  if (path === "/") return "/app/index.html";
+  if (path === "/onboarding") return "/app/onboarding/index.html";
+  if (path === "/dashboard") return "/app/dashboard/index.html";
+  return null;
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/api/notify") return handleNotify(request, env);
-    if (url.pathname === "/ops" || url.pathname.startsWith("/ops/")) {
+    const host = url.hostname.toLowerCase().replace(/\.$/, "");
+    const path = url.pathname;
+    const lower = path.toLowerCase();
+
+    if (host === "www.mamoru.lol") {
+      const dest = new URL(request.url);
+      dest.protocol = "https:";
+      dest.hostname = "mamoru.lol";
+      return Response.redirect(dest.toString(), 308);
+    }
+
+    // /app is not a public path. The app lives at app.mamoru.lol.
+    if (lower === "/app" || lower.startsWith("/app/")) {
+      const rest = `/${lower.replace(/^\/app\/?/, "")}`.replace(/\/+$/, "") || "/";
+      const dest = new URL(request.url);
+      dest.protocol = "https:";
+      dest.hostname = APP_HOST;
+      dest.pathname = rest;
+      return Response.redirect(dest.toString(), 308);
+    }
+
+    if (host === APP_HOST) {
+      if (lower === "/ops" || lower.startsWith("/ops/")) {
+        const dest = new URL(request.url);
+        dest.protocol = "https:";
+        dest.hostname = "mamoru.lol";
+        return Response.redirect(dest.toString(), 308);
+      }
+      if (!isOpen()) {
+        const oauth = oauthConfig(env);
+        const session = oauth
+          ? await openSession(oauth.sessionSecret, request.headers.get("cookie"))
+          : null;
+        if (!oauth || !session || !isAllowed(session.email)) {
+          const login = new URL("https://mamoru.lol/ops/login");
+          login.searchParams.set("next", `https://${APP_HOST}${path}${url.search}`);
+          return Response.redirect(login.toString(), 302);
+        }
+      }
+      const assetPath = appPageAsset(path);
+      if (assetPath && (request.method === "GET" || request.method === "HEAD")) {
+        const assetUrl = new URL(assetPath, request.url);
+        const asset = await env.ASSETS.fetch(new Request(assetUrl.toString(), { method: "GET" }));
+        if (!asset.ok) return notFound();
+        const headers = new Headers(asset.headers);
+        headers.set("content-type", "text/html; charset=utf-8");
+        headers.delete("content-length");
+        headers.set("cache-control", "no-store");
+        if (!isOpen()) headers.set("x-robots-tag", "noindex, nofollow");
+        if (request.method === "HEAD") return new Response(null, { status: 200, headers });
+        return new Response(asset.body, { status: 200, headers });
+      }
+    }
+
+    if (lower === "/ops" || lower.startsWith("/ops/")) {
+      if (path !== lower) {
+        url.pathname = lower;
+        return Response.redirect(url.toString(), 308);
+      }
       return handleOps(request, env);
+    }
+
+    if (path === "/api/notify") return handleNotify(request, env);
+
+    const doc = homeDocument(path);
+    if (doc === "hidden") return notFound();
+    if (doc === "site" && (request.method === "GET" || request.method === "HEAD")) {
+      return serveSite(request, env, false);
     }
     return env.ASSETS.fetch(request);
   },

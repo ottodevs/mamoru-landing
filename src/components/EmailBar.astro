@@ -1,10 +1,14 @@
 ---
-import { CUSTODY_LINE, FOLLOW_UP_LINES } from "../follow-up";
-/** On submit: POST /api/notify, then swap the bar for the follow-up. */
+/**
+ * Email bar from Penpot 01 · landing.
+ * On submit: open the modal at once ("Saving…"), POST /api/notify,
+ * then set the final line from the API status. The email body copy
+ * (follow-up.ts) never appears on the landing.
+ */
 ---
 <section class="email-bar" aria-labelledby="email-bar-lead">
   <div class="compose" id="mamoru-email-compose">
-    <p id="email-bar-lead" class="lead">Leave your email, we'll save you a spot.</p>
+    <p id="email-bar-lead" class="lead">Drop your email, we'll save you a spot.</p>
     <form class="bar" id="mamoru-email-bar" method="post" action="/api/notify" novalidate>
       <label class="sr-only" for="mamoru-email">Email</label>
       <input
@@ -22,42 +26,117 @@ import { CUSTODY_LINE, FOLLOW_UP_LINES } from "../follow-up";
     </form>
     <p class="status" id="mamoru-email-status" role="status" aria-live="polite"></p>
   </div>
-  <div class="follow-up" id="mamoru-email-followup" hidden>
-    {FOLLOW_UP_LINES.map((line, i) => (
-      <p class:list={["follow-line", i === 0 ? "follow-kicker" : undefined]}>{line}</p>
-    ))}
-    <p class="follow-line follow-quiet">{CUSTODY_LINE}</p>
+
+  <div
+    class="notify-modal"
+    id="mamoru-notify-modal"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="mamoru-notify-title"
+    aria-describedby="mamoru-notify-note"
+    hidden
+  >
+    <div class="notify-backdrop" data-close></div>
+    <div class="notify-card">
+      <p class="notify-title" id="mamoru-notify-title" aria-live="polite">Saving…</p>
+      <p class="notify-note" id="mamoru-notify-note" aria-live="polite"></p>
+      <button class="notify-close" id="mamoru-notify-close" type="button" data-close>Close</button>
+    </div>
   </div>
 </section>
 
 <script>
   const form = document.getElementById("mamoru-email-bar");
   const statusEl = document.getElementById("mamoru-email-status");
-  const compose = document.getElementById("mamoru-email-compose");
-  const follow = document.getElementById("mamoru-email-followup");
+  const modal = document.getElementById("mamoru-notify-modal");
+  const titleEl = document.getElementById("mamoru-notify-title");
+  const noteEl = document.getElementById("mamoru-notify-note");
+  const closeBtn = document.getElementById("mamoru-notify-close");
+
+  const COPY = {
+    pending: { title: "Saving…", note: "" },
+    new: { title: "You're in.", note: "Your spot is saved." },
+    already: { title: "You're already on the list.", note: "" },
+    failed: { title: "Could not save that. Try again.", note: "" },
+    network: { title: "Network error. Try again.", note: "" },
+  } as const;
+  type Outcome = keyof typeof COPY;
+
   if (
     form instanceof HTMLFormElement &&
     statusEl instanceof HTMLElement &&
-    compose instanceof HTMLElement &&
-    follow instanceof HTMLElement
+    modal instanceof HTMLElement &&
+    titleEl instanceof HTMLElement &&
+    noteEl instanceof HTMLElement &&
+    closeBtn instanceof HTMLButtonElement
   ) {
-    const showFollowUp = () => {
-      compose.hidden = true;
-      follow.hidden = false;
+    const emailInput = form.querySelector("#mamoru-email");
+    const submitBtn = form.querySelector(".submit");
+    let lastFocus: Element | null = null;
+    let requestId = 0;
+
+    const setOutcome = (outcome: Outcome, override?: string) => {
+      titleEl.textContent = override || COPY[outcome].title;
+      noteEl.textContent = COPY[outcome].note;
+      noteEl.hidden = !COPY[outcome].note;
+      modal.dataset.outcome = outcome;
     };
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const emailInput = form.querySelector("#mamoru-email");
-      const email =
-        emailInput instanceof HTMLInputElement ? emailInput.value.trim() : "";
-      const honeyInput = form.querySelector("input[name=leave_blank]");
-      const leaveBlank =
-        honeyInput instanceof HTMLInputElement ? honeyInput.value : "";
-      if (!email) {
-        statusEl.textContent = "Enter an email.";
+
+    const openModal = () => {
+      lastFocus = document.activeElement;
+      modal.hidden = false;
+      // Next frame so the transition has a start state.
+      requestAnimationFrame(() => modal.classList.add("is-open"));
+      closeBtn.focus();
+      document.addEventListener("keydown", onKey);
+    };
+
+    const closeModal = () => {
+      modal.classList.remove("is-open");
+      document.removeEventListener("keydown", onKey);
+      const done = () => {
+        modal.hidden = true;
+        if (lastFocus instanceof HTMLElement) lastFocus.focus();
+      };
+      if (matchMedia("(prefers-reduced-motion: reduce)").matches) done();
+      else setTimeout(done, 160);
+    };
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeModal();
         return;
       }
-      statusEl.textContent = "Sending…";
+      // One focusable control: keep Tab inside the dialog.
+      if (event.key === "Tab") {
+        event.preventDefault();
+        closeBtn.focus();
+      }
+    };
+
+    modal.querySelectorAll("[data-close]").forEach((el) => {
+      el.addEventListener("click", closeModal);
+    });
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const email = emailInput instanceof HTMLInputElement ? emailInput.value.trim() : "";
+      const honeyInput = form.querySelector("input[name=leave_blank]");
+      const leaveBlank = honeyInput instanceof HTMLInputElement ? honeyInput.value : "";
+      if (!email) {
+        statusEl.textContent = "Enter an email.";
+        if (emailInput instanceof HTMLInputElement) emailInput.focus();
+        return;
+      }
+      statusEl.textContent = "";
+      const id = ++requestId;
+
+      // Optimistic: the shell opens now, before the network is touched.
+      setOutcome("pending");
+      openModal();
+      if (submitBtn instanceof HTMLButtonElement) submitBtn.disabled = true;
+
       try {
         const res = await fetch("/api/notify", {
           method: "POST",
@@ -69,15 +148,26 @@ import { CUSTODY_LINE, FOLLOW_UP_LINES } from "../follow-up";
         });
         const data = (await res.json().catch(() => ({}))) as {
           ok?: boolean;
+          status?: string;
           error?: string;
         };
+        if (id !== requestId) return;
         if (!res.ok || !data.ok) {
-          statusEl.textContent = data.error || "Could not subscribe. Try again.";
+          // 400/429 carry a short server message; anything else is a save failure.
+          const short = res.status === 400 || res.status === 429 ? data.error : undefined;
+          setOutcome("failed", short);
           return;
         }
-        showFollowUp();
+        if (data.status === "already") {
+          setOutcome("already");
+          return;
+        }
+        setOutcome("new");
+        if (emailInput instanceof HTMLInputElement) emailInput.value = "";
       } catch {
-        statusEl.textContent = "Network error. Try again.";
+        if (id === requestId) setOutcome("network");
+      } finally {
+        if (submitBtn instanceof HTMLButtonElement) submitBtn.disabled = false;
       }
     });
   }
@@ -87,47 +177,39 @@ import { CUSTODY_LINE, FOLLOW_UP_LINES } from "../follow-up";
   .email-bar {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
-    gap: 0.5rem;
-    width: min(100%, 33.25rem);
+    align-items: center;
+    gap: 0.85rem;
+    width: min(100%, 36rem);
   }
   .compose {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
-    gap: clamp(0.75rem, 2.8vh, 1.6rem);
+    align-items: center;
+    gap: 0.85rem;
     width: 100%;
-  }
-  .compose[hidden] {
-    display: none;
   }
   .lead {
     margin: 0;
-    font-size: clamp(0.95rem, 2.2vh, 1.3rem);
+    font-size: clamp(1rem, 1.6vw, 1.15rem);
     font-weight: 400;
-    line-height: 1.3;
     letter-spacing: 0.01em;
   }
   .bar {
     display: flex;
-    gap: 1rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
     width: 100%;
   }
   .input {
     font: inherit;
     font-size: 1rem;
-    height: clamp(2.5rem, 5.33vh, 3rem);
-    padding: 0 0.875rem;
-    border: 1px solid var(--ink);
-    background: var(--rice);
+    padding: 0.7rem 0.85rem;
+    border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent);
+    background: color-mix(in srgb, var(--rice) 70%, white);
     color: var(--ink);
     border-radius: 0;
-    min-width: 0;
-    flex: 0 1 19.75rem;
-  }
-  .input::placeholder {
-    color: var(--stone);
-    opacity: 1;
+    min-width: 14rem;
+    flex: 1 1 14rem;
   }
   .input:focus {
     outline: 1px solid var(--ink);
@@ -135,16 +217,17 @@ import { CUSTODY_LINE, FOLLOW_UP_LINES } from "../follow-up";
   }
   .submit {
     font: inherit;
-    font-size: 1rem;
-    height: clamp(2.5rem, 5.33vh, 3rem);
-    min-width: 8.375rem;
-    padding: 0 1.375rem;
+    font-size: 0.95rem;
+    padding: 0.7rem 1.15rem;
     border: 0;
     border-radius: 0;
     background: var(--ink);
     color: var(--paper);
     cursor: pointer;
-    flex: none;
+  }
+  .submit:disabled {
+    cursor: default;
+    opacity: 0.7;
   }
   .status {
     margin: 0;
@@ -152,30 +235,86 @@ import { CUSTODY_LINE, FOLLOW_UP_LINES } from "../follow-up";
     font-size: 0.8rem;
     color: var(--stone);
   }
-  .follow-up {
-    display: flex;
-    flex-direction: column;
-    gap: 0.45rem;
+
+  /* Modal: one line, one quiet note, one way out. */
+  .notify-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: grid;
+    place-items: center;
+    padding: 1.25rem;
   }
-  .follow-up[hidden] {
+  .notify-modal[hidden] {
     display: none;
   }
-  .follow-line {
+  .notify-backdrop {
+    position: absolute;
+    inset: 0;
+    background: color-mix(in srgb, var(--ink) 28%, transparent);
+    opacity: 0;
+    transition: opacity 160ms ease-out;
+  }
+  .notify-card {
+    position: relative;
+    width: min(100%, 22rem);
+    padding: 1.6rem 1.5rem 1.35rem;
+    background: var(--rice);
+    color: var(--ink);
+    border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
+    text-align: center;
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+    transition:
+      opacity 160ms ease-out,
+      transform 160ms ease-out;
+  }
+  .notify-modal.is-open .notify-backdrop,
+  .notify-modal.is-open .notify-card {
+    opacity: 1;
+    transform: none;
+  }
+  .notify-title {
     margin: 0;
-    font-size: clamp(1.05rem, 1.8vw, 1.25rem);
-    font-weight: 400;
-    line-height: 1.35;
+    font-size: clamp(1.1rem, 1.9vw, 1.3rem);
+    line-height: 1.3;
     letter-spacing: 0.01em;
   }
-  .follow-kicker {
-    margin-bottom: 0.15rem;
-  }
-  .follow-quiet {
+  .notify-note {
+    margin: 0.45rem 0 0;
+    font-size: 0.95rem;
+    line-height: 1.35;
     color: var(--stone);
-    font-size: clamp(0.92rem, 1.5vw, 1.05rem);
-    max-width: 28rem;
-    margin-top: 0.2rem;
   }
+  .notify-note[hidden] {
+    display: none;
+  }
+  .notify-close {
+    font: inherit;
+    font-size: 0.9rem;
+    margin-top: 1.15rem;
+    padding: 0.55rem 1.1rem;
+    border: 1px solid color-mix(in srgb, var(--ink) 30%, transparent);
+    background: transparent;
+    color: var(--ink);
+    border-radius: 0;
+    cursor: pointer;
+  }
+  .notify-close:focus-visible {
+    outline: 1px solid var(--ink);
+    outline-offset: 2px;
+  }
+  .notify-modal[data-outcome="pending"] .notify-title {
+    color: var(--stone);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .notify-backdrop,
+    .notify-card {
+      transition: none;
+      transform: none;
+    }
+  }
+
   .hp {
     position: absolute;
     left: -9999px;

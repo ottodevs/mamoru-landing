@@ -36,5 +36,14 @@ export async function sameSecret(provided: string, expected: string): Promise<bo
     crypto.subtle.digest("SHA-256", enc.encode(provided)),
     crypto.subtle.digest("SHA-256", enc.encode(expected)),
   ]);
-  return crypto.subtle.timingSafeEqual(a, b);
+  const subtle = crypto.subtle as SubtleCrypto & {
+    timingSafeEqual?: (x: ArrayBuffer, y: ArrayBuffer) => boolean;
+  };
+  if (typeof subtle.timingSafeEqual === "function") return subtle.timingSafeEqual(a, b);
+  // Same-length digests; fixed-time fold for runtimes without the Workers helper.
+  const x = new Uint8Array(a);
+  const y = new Uint8Array(b);
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+  return diff === 0;
 }

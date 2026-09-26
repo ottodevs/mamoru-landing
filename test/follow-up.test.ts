@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { CUSTODY_LINE, FOLLOW_UP_LINES, FOLLOW_UP_TEXT, followUpHtml } from "../src/follow-up";
+import { isAllowed } from "../src/google";
 import { emailKey } from "../src/list";
-import { renderList } from "../src/ops";
+import { openSession, renderList, sealSession } from "../src/ops";
 import { esc, normalizeEmail } from "../src/text";
 
 describe("follow-up", () => {
@@ -51,5 +52,27 @@ describe("addresses", () => {
     expect(html).not.toContain("<img>@example.com");
     expect(html).toContain("tok&quot;en");
     expect(html).not.toContain("Enviar las que faltan");
+    expect(html).toContain("<h1>The list</h1>");
+    expect(html).toContain('href="/ops/landing"');
+    expect(html).not.toContain("La lista");
+  });
+});
+
+describe("ops gate", () => {
+  test("allowlist is exact and case-insensitive", () => {
+    expect(isAllowed("ottodevs@gmail.com")).toBe(true);
+    expect(isAllowed("Brais.Millarengo@gmail.com ")).toBe(true);
+    expect(isAllowed("ottodevs+x@gmail.com")).toBe(false);
+    expect(isAllowed("someone@example.com")).toBe(false);
+    expect(isAllowed("")).toBe(false);
+  });
+
+  test("session round-trips and rejects a bad signature", async () => {
+    const token = await sealSession("k1", "ottodevs@gmail.com");
+    const ok = await openSession("k1", `mamoru_list=${token}`);
+    expect(ok?.email).toBe("ottodevs@gmail.com");
+    expect(ok?.csrf).toBeTruthy();
+    expect(await openSession("k2", `mamoru_list=${token}`)).toBeNull();
+    expect(await openSession("k1", `mamoru_list=${token}x`)).toBeNull();
   });
 });
