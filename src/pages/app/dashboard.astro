@@ -4,7 +4,7 @@ import TokenMark from "../../components/TokenMark.astro";
 
 type Token = "ETH" | "WETH" | "USDC" | "WBTC";
 
-const workingEth = "4.20";
+const workingUsdc = "16,800";
 const walletEth = "2.40";
 const totalUsdc = "17,220";
 const currentApr = "5.2%";
@@ -32,7 +32,7 @@ const pools: {
     address: "0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8",
     chain: "Ethereum",
     sleeve: "35% · paired",
-    amount: "1.47 ETH",
+    amount: "5,880 USDC",
   },
   {
     protocol: "Uniswap v3",
@@ -42,7 +42,7 @@ const pools: {
     address: "0x99ac8cA7087fA4A2A1FB6357269965A2014ABc35",
     chain: "Ethereum",
     sleeve: "paired",
-    amount: "0.29 ETH",
+    amount: "1,160 USDC",
   },
   {
     protocol: "Aave v3",
@@ -51,7 +51,7 @@ const pools: {
     address: "0x98C23E9d8f34FEFb1B7BD6a91B7FF122F4e16F5c",
     chain: "Ethereum",
     sleeve: "50% · stables",
-    amount: "2.10 ETH",
+    amount: "8,400 USDC",
   },
   {
     protocol: "Morpho",
@@ -60,7 +60,7 @@ const pools: {
     address: "0x388C818CA8B9251b393131C08a736A67ccB19297",
     chain: "Ethereum",
     sleeve: "15% · mercenary",
-    amount: "0.34 ETH",
+    amount: "1,360 USDC",
   },
 ];
 
@@ -111,38 +111,13 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
         </ul>
       </div>
       <div class="acts">
-        <button type="button" class="act" id="add-open" aria-expanded="false" aria-controls="fund-panel">
+        <button type="button" class="act" id="add-open" aria-haspopup="dialog" aria-controls="add">
           Add capital
         </button>
         <button type="button" class="act" id="xfer-open" aria-haspopup="dialog" aria-controls="xfer">
           Transfer
         </button>
       </div>
-      <form
-        class="card fund"
-        id="fund-panel"
-        action="#"
-        method="post"
-        onsubmit="return false;"
-        hidden
-      >
-        <div class="fund-row">
-          <span class="asset">ETH</span>
-          <label class="amount">
-            <span class="sr">Amount</span>
-            <input id="fund-amount" type="text" name="amount" inputmode="decimal" placeholder="0.00" autocomplete="off" />
-          </label>
-          <button type="submit" class="cta">Fund</button>
-        </div>
-        <div class="fund-meta">
-          <p class="avail">{walletEth} ETH available</p>
-          <div class="pcts" role="group" aria-label="Fill amount">
-            <button type="button" data-pct="100">100%</button>
-            <button type="button" data-pct="50">50%</button>
-            <button type="button" data-pct="25">25%</button>
-          </div>
-        </div>
-      </form>
     </section>
 
     <details class="card fold wide">
@@ -150,7 +125,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
         <span class="fold-main">
           <span class="line">
             <span class="title heavy">Working capital</span>
-            <span class="title heavy work-eth">{workingEth} ETH</span>
+            <span class="title heavy work-eth">{workingUsdc} USDC</span>
           </span>
           <span class="sub">{openPositions} open positions</span>
         </span>
@@ -215,6 +190,33 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
       </ul>
     </details>
 
+    <dialog class="xfer" id="add" aria-labelledby="add-title">
+      <div class="xfer-sheet">
+        <header class="xfer-head">
+          <p class="title heavy" id="add-title">Add capital</p>
+          <button type="button" class="xfer-close" id="add-close">Close</button>
+        </header>
+        <form class="fund" action="#" method="post" onsubmit="return false;">
+          <div class="fund-row">
+            <span class="asset">ETH</span>
+            <label class="amount">
+              <span class="sr">Amount</span>
+              <input id="fund-amount" type="text" name="amount" inputmode="decimal" placeholder="0.00" autocomplete="off" />
+            </label>
+            <button type="submit" class="cta">Fund</button>
+          </div>
+          <div class="fund-meta">
+            <p class="avail">{walletEth} ETH available</p>
+            <div class="pcts" role="group" aria-label="Fill amount">
+              <button type="button" data-pct="100">100%</button>
+              <button type="button" data-pct="50">50%</button>
+              <button type="button" data-pct="25">25%</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </dialog>
+
     <dialog class="xfer" id="xfer" aria-labelledby="xfer-title">
       <div class="xfer-sheet" data-pane="choose">
         <header class="xfer-head">
@@ -222,17 +224,27 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
           <button type="button" class="xfer-close">Close</button>
         </header>
         <p class="xfer-meta">Token</p>
-        <ul class="tok-pick" role="listbox" aria-label="Token">
-          {inUse.map((sym, i) => (
-            <li>
-              <label class="tok">
-                <input type="radio" name="xfer-token" value={sym} checked={i === 0} />
+        <div class="tok-dd">
+          <input type="hidden" id="xfer-token" value={inUse[0]} />
+          <button type="button" class="tok-now" id="tok-now" aria-haspopup="listbox" aria-expanded="false">
+            {inUse.map((sym, i) => (
+              <span class="tok-face" data-sym={sym} hidden={i !== 0}>
                 <TokenMark symbol={sym} size={28} />
                 <span>{sym}</span>
-              </label>
-            </li>
-          ))}
-        </ul>
+              </span>
+            ))}
+          </button>
+          <ul class="tok-list" id="tok-list" hidden>
+            {inUse.map((sym) => (
+              <li>
+                <button type="button" class="tok-opt" data-sym={sym}>
+                  <TokenMark symbol={sym} size={28} />
+                  <span>{sym}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
         <label class="xfer-addr-label">
           <span>Amount</span>
           <input id="xfer-amount" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" />
@@ -252,14 +264,14 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
           <p class="title heavy">Transfer working capital</p>
           <button type="button" class="xfer-close">Close</button>
         </header>
-        <p class="xfer-meta">{workingEth} ETH</p>
+        <p class="xfer-meta">{workingUsdc} USDC</p>
         <p class="xfer-warn" role="status">
           The amount shown may not match the final figure you receive. Some operations are still pending.
         </p>
         <div class="xfer-row">
           <label>
             <span class="sr">Working capital amount</span>
-            <input id="xfer-stop" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="4.20" data-unit="ETH" />
+            <input id="xfer-stop" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="16800" data-unit="USDC" />
           </label>
           <button type="button" class="xfer-max" data-for="xfer-stop">Max</button>
         </div>
@@ -511,36 +523,64 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     font-size: 0.92rem;
     letter-spacing: 0.02em;
   }
-  .tok-pick {
-    list-style: none;
-    margin: 0.35rem 0 0;
-    padding: 0;
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.45rem;
-  }
-  .tok {
+  .tok-dd {
     position: relative;
+    margin-top: 0.35rem;
+  }
+  .tok-now {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    border: 1px solid var(--wash);
+    background: transparent;
+    color: var(--ink);
+    padding: 0.5rem 0.7rem;
+    cursor: pointer;
+    font: inherit;
+  }
+  .tok-now::after {
+    content: "▾";
+    margin-left: auto;
+    color: var(--stone);
+  }
+  .tok-face {
     display: flex;
     align-items: center;
     gap: 0.55rem;
-    padding: 0.45rem 0.6rem;
-    border: 1px solid var(--wash);
-    cursor: pointer;
   }
-  .tok:has(input:checked) {
-    border-color: var(--ink);
-  }
-  .tok input {
-    position: absolute;
-    opacity: 0;
-    pointer-events: none;
-  }
-  .tok span {
+  .tok-face[hidden] { display: none; }
+  .tok-face span,
+  .tok-opt span {
     font-family: var(--font-mono);
     font-size: 0.85rem;
     letter-spacing: 0.06em;
   }
+  .tok-list {
+    position: absolute;
+    z-index: 3;
+    left: 0;
+    right: 0;
+    top: calc(100% + 0.3rem);
+    margin: 0;
+    padding: 0.25rem;
+    list-style: none;
+    border: 1px solid var(--wash);
+    background: var(--paper);
+  }
+  .tok-opt {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    padding: 0.5rem 0.55rem;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+  }
+  .tok-opt:hover { background: color-mix(in srgb, var(--wash) 45%, transparent); }
   .xfer-err {
     margin: 0.4rem 0 0;
     color: #6b1f1f;
@@ -560,12 +600,10 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
   }
   .wide { width: 100%; flex: 0 0 auto; }
   .fund {
-    margin-top: var(--s3);
     display: flex;
     flex-direction: column;
     gap: var(--s1);
   }
-  .fund[hidden] { display: none; }
   .idle {
     display: flex;
     flex-direction: column;
@@ -734,7 +772,6 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     .xfer-row { grid-template-columns: 1fr auto; }
     .apr { width: 100%; }
     .apr li { flex: 1; min-width: 0; }
-    .tok-pick { grid-template-columns: 1fr; }
   }
 </style>
 
@@ -749,13 +786,35 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     });
   });
 
-  const addBtn = document.querySelector<HTMLButtonElement>("#add-open");
-  const fundPanel = document.querySelector<HTMLElement>("#fund-panel");
-  addBtn?.addEventListener("click", () => {
-    const open = fundPanel?.hidden ?? true;
-    if (fundPanel) fundPanel.hidden = !open;
-    addBtn?.setAttribute("aria-expanded", open ? "true" : "false");
-    if (open) input?.focus();
+  const addDlg = document.querySelector<HTMLDialogElement>("#add");
+  document.querySelector<HTMLButtonElement>("#add-open")?.addEventListener("click", () => {
+    addDlg?.showModal();
+    input?.focus();
+  });
+  document.querySelector<HTMLButtonElement>("#add-close")?.addEventListener("click", () => addDlg?.close());
+  addDlg?.addEventListener("click", (event) => {
+    if (event.target === addDlg) addDlg.close();
+  });
+
+  const tokNow = document.querySelector<HTMLButtonElement>("#tok-now");
+  const tokList = document.querySelector<HTMLElement>("#tok-list");
+  const tokVal = document.querySelector<HTMLInputElement>("#xfer-token");
+  const setTok = (sym: string) => {
+    if (tokVal) tokVal.value = sym;
+    tokNow?.querySelectorAll<HTMLElement>(".tok-face").forEach((el) => {
+      el.hidden = el.dataset.sym !== sym;
+    });
+    tokList?.setAttribute("hidden", "");
+    tokNow?.setAttribute("aria-expanded", "false");
+  };
+  tokNow?.addEventListener("click", () => {
+    const open = tokList?.hasAttribute("hidden") ?? true;
+    if (open) tokList?.removeAttribute("hidden");
+    else tokList?.setAttribute("hidden", "");
+    tokNow?.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  document.querySelectorAll<HTMLButtonElement>(".tok-opt").forEach((btn) => {
+    btn.addEventListener("click", () => setTok(btn.dataset.sym ?? "ETH"));
   });
 
   const dialog = document.querySelector<HTMLDialogElement>("#xfer");
