@@ -14,6 +14,33 @@ export const OPEN_COPY = {
     { href: "#questions", label: "FAQs" },
   ],
   cta: "Launch APP",
+  onboard: {
+    storageKey: "mamoru-onboarded",
+    skip: "Skip",
+    next: "Next",
+    finish: "Finish",
+    screens: [
+      {
+        title: "Fund Mamoru",
+        body: [
+          "Create your account and assign only the ETH you want to invest. The agent operates with that isolated capital. Funds at your main wallet are never exposed.",
+        ],
+      },
+      {
+        title: "What happens next?",
+        body: [
+          "The agent automates your deployment following a balanced strategy: 50% in stablecoin pools, 35% in BTC/ETH-stable LP pools, and 15% in high-yield pools. It harvests the yield, converts it to USDC, and sends it to you.",
+        ],
+      },
+      {
+        title: "You keep control",
+        body: [
+          "No forced lockups or third-party dependencies. You can pause the agent, exit the pools, and withdraw your principal and earnings at any time to any wallet.",
+          "Mamoru works for you, every action and transaction is transparently recorded",
+        ],
+      },
+    ],
+  },
   hero: {
     line1: "APY.",
     line2: "DELIVERED.",

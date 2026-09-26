@@ -32,6 +32,11 @@ describe("open instant", () => {
     expect("split" in OPEN_COPY).toBe(false);
     expect("enter" in OPEN_COPY).toBe(false);
     expect("plain" in OPEN_COPY.works).toBe(false);
+    expect(OPEN_COPY.onboard.screens.map((s) => s.title)).toEqual([
+      "Fund Mamoru",
+      "What happens next?",
+      "You keep control",
+    ]);
   });
 });
 

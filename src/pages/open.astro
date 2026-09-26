@@ -14,7 +14,7 @@ const emailHref = `mailto:${copy.footer.email}`;
     <nav class="links" aria-label="On this page">
       {copy.nav.map((item) => <a href={item.href}>{item.label}</a>)}
     </nav>
-    <a class="cta nav-cta" href={APP_HREF}>{copy.cta}</a>
+    <a class="cta nav-cta js-launch" href={APP_HREF}>{copy.cta}</a>
   </header>
 
   <main id="content">
@@ -29,7 +29,7 @@ const emailHref = `mailto:${copy.footer.email}`;
           <span>{part.endsWith(".") ? part : `${part}.`}</span>
         ))}
       </p>
-      <a class="cta" href={APP_HREF}>{copy.cta}</a>
+      <a class="cta js-launch" href={APP_HREF}>{copy.cta}</a>
     </section>
 
     <section class="band" id="works" aria-labelledby="works-title">
@@ -65,7 +65,7 @@ const emailHref = `mailto:${copy.footer.email}`;
       <div class="wrap">
         <h2 id="spend-title">{copy.spend.heading}</h2>
         <p class="body">{copy.spend.body}</p>
-        <a class="cta spend-cta" href={APP_HREF}>{copy.cta}</a>
+        <a class="cta spend-cta js-launch" href={APP_HREF}>{copy.cta}</a>
       </div>
     </section>
 
@@ -109,6 +109,76 @@ const emailHref = `mailto:${copy.footer.email}`;
     <p class="body">{copy.footer.line}</p>
     <a class="mail" href={emailHref}>{copy.footer.email}</a>
   </footer>
+
+  <dialog class="onboard" id="mamoru-onboard" aria-labelledby="onboard-title">
+    <div class="onboard-card">
+      {copy.onboard.screens.map((screen, index) => (
+        <div class="onboard-screen" data-step={index} hidden={index !== 0}>
+          <p class="onboard-step">{String(index + 1).padStart(2, "0")} / 03</p>
+          <h2 class="onboard-title" id={index === 0 ? "onboard-title" : undefined}>
+            {screen.title}
+          </h2>
+          {screen.body.map((para) => (
+            <p class="onboard-body">{para}</p>
+          ))}
+          <div class="onboard-actions">
+            {index < copy.onboard.screens.length - 1 ? (
+              <>
+                <button type="button" class="ob-btn ghost js-onboard-skip">{copy.onboard.skip}</button>
+                <button type="button" class="ob-btn solid js-onboard-next">{copy.onboard.next}</button>
+              </>
+            ) : (
+              <button type="button" class="ob-btn solid js-onboard-finish">{copy.onboard.finish}</button>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  </dialog>
+  <script is:inline define:vars={{ appHref: APP_HREF, storageKey: copy.onboard.storageKey }}>
+    const KEY = storageKey;
+    const APP = appHref;
+    const root = document.getElementById("mamoru-onboard");
+    function seen() {
+      try { return localStorage.getItem(KEY) === "1"; } catch { return false; }
+    }
+    function mark() {
+      try { localStorage.setItem(KEY, "1"); } catch {}
+    }
+    function goApp() {
+      mark();
+      window.location.href = APP;
+    }
+    function show(step) {
+      if (!root) return;
+      root.querySelectorAll(".onboard-screen").forEach((el) => {
+        const n = Number(el.getAttribute("data-step"));
+        el.hidden = n !== step;
+      });
+      root.dataset.step = String(step);
+      if (typeof root.showModal === "function" && !root.open) root.showModal();
+    }
+    document.querySelectorAll(".js-launch").forEach((link) => {
+      link.addEventListener("click", (event) => {
+        if (seen()) return;
+        event.preventDefault();
+        show(0);
+      });
+    });
+    root?.querySelectorAll(".js-onboard-skip, .js-onboard-finish").forEach((btn) => {
+      btn.addEventListener("click", goApp);
+    });
+    root?.querySelectorAll(".js-onboard-next").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const step = Number(root.dataset.step || "0") + 1;
+        show(step);
+      });
+    });
+    root?.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      goApp();
+    });
+  </script>
 </Base>
 
 <style>
@@ -493,6 +563,82 @@ const emailHref = `mailto:${copy.footer.email}`;
     .foot {
       align-items: flex-start;
       flex-direction: column;
+    }
+  }
+
+  .onboard {
+    width: min(50vw, 40rem);
+    max-width: 92vw;
+    max-height: min(86dvh, 40rem);
+    padding: 0;
+    border: 0;
+    background: transparent;
+    overflow: visible;
+  }
+  .onboard::backdrop {
+    background: color-mix(in srgb, var(--ink) 42%, transparent);
+  }
+  .onboard-card {
+    padding: 2rem 1.85rem 1.75rem;
+    border: 1px solid color-mix(in srgb, var(--ink) 22%, var(--wash));
+    background: color-mix(in srgb, var(--ink) 10%, var(--paper));
+    color: var(--ink);
+    box-sizing: border-box;
+  }
+  .onboard-step {
+    margin: 0 0 0.85rem;
+    font-size: 0.75rem;
+    letter-spacing: 0.12em;
+    color: var(--emerald);
+  }
+  .onboard-title {
+    margin: 0;
+    font-size: clamp(1.55rem, 3vw, 2.1rem);
+    font-weight: 400;
+    letter-spacing: 0.01em;
+    line-height: 1.15;
+  }
+  .onboard-body {
+    margin: 0.85rem 0 0;
+    font-size: 1.05rem;
+    line-height: 1.45;
+  }
+  .onboard-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.65rem;
+    margin-top: 1.6rem;
+  }
+  .ob-btn {
+    font: inherit;
+    font-size: 0.95rem;
+    line-height: 1;
+    padding: 0.7rem 1.15rem;
+    border-radius: 0;
+    cursor: pointer;
+  }
+  .ob-btn.solid {
+    border: 0;
+    background: var(--ink);
+    color: var(--paper);
+  }
+  .ob-btn.ghost {
+    border: 1px solid color-mix(in srgb, var(--ink) 30%, transparent);
+    background: transparent;
+    color: var(--ink);
+  }
+  .ob-btn.solid:hover {
+    background: var(--emerald);
+    color: var(--paper);
+  }
+  .ob-btn:focus-visible {
+    outline: 2px solid var(--emerald);
+    outline-offset: 3px;
+  }
+  @media (max-width: 760px) {
+    .onboard {
+      width: min(92vw, 40rem);
     }
   }
 
