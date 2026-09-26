@@ -85,7 +85,7 @@ const events: {
 const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 ---
-<Base title="Mamoru — Dashboard" description="Working assets, idle assets, and savings history.">
+<Base title="Mamoru — Dashboard" description="Working capital, idle assets, and savings history.">
   <main class="page">
     <header class="mast">
       <a class="brand" href="/">
@@ -95,18 +95,22 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     </header>
 
     <section class="balance" aria-labelledby="total-title">
-      <p class="kicker heavy" id="total-title">Total balance</p>
-      <p class="sum">{totalUsdc} <span class="unit">USDC</span></p>
-      <ul class="legs">
-        <li>
-          <span class="leg-label">Current APR</span>
-          <strong>{currentApr}</strong>
-        </li>
-        <li>
-          <span class="leg-label">Month average</span>
-          <strong>{monthAvg}</strong>
-        </li>
-      </ul>
+      <div class="balance-top">
+        <div>
+          <p class="kicker heavy" id="total-title">Total balance</p>
+          <p class="sum">{totalUsdc} <span class="unit">USDC</span></p>
+        </div>
+        <ul class="apr">
+          <li>
+            <span class="apr-label">Current APR</span>
+            <strong>{currentApr}</strong>
+          </li>
+          <li>
+            <span class="apr-label">Monthly average</span>
+            <strong>{monthAvg}</strong>
+          </li>
+        </ul>
+      </div>
       <div class="acts">
         <button type="button" class="act" id="add-open" aria-expanded="false" aria-controls="fund-panel">
           Add capital
@@ -144,11 +148,13 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
     <details class="card fold wide">
       <summary>
-        <span>
-          <span class="title heavy">Working assets</span>
+        <span class="fold-main">
+          <span class="line">
+            <span class="title heavy">Working capital</span>
+            <span class="title heavy work-eth">{workingEth} ETH</span>
+          </span>
           <span class="sub">{openPositions} open positions</span>
         </span>
-        <span class="sum-sm work-eth">{workingEth} ETH</span>
       </summary>
       <div class="fold-body">
         <p class="kicker">Assets in use</p>
@@ -182,8 +188,10 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     </details>
 
     <section class="card idle wide" aria-labelledby="idle-title">
-      <p class="title" id="idle-title">Idle assets</p>
-      <p class="sum-sm">{idleUsdc} USDC</p>
+      <p class="line">
+        <span class="title" id="idle-title">Idle assets</span>
+        <span class="title">{idleUsdc} USDC</span>
+      </p>
       <p class="sub">{idleTokens} tokens idle</p>
     </section>
 
@@ -212,14 +220,18 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
           <p class="title heavy" id="xfer-title">Transfer</p>
           <button type="button" class="xfer-close">Close</button>
         </header>
-        <label class="xfer-addr-label">
-          <span>Token</span>
-          <select id="xfer-token">
-            {inUse.map((sym) => (
-              <option value={sym}>{sym}</option>
-            ))}
-          </select>
-        </label>
+        <p class="xfer-meta">Token</p>
+        <ul class="tok-pick" role="listbox" aria-label="Token">
+          {inUse.map((sym, i) => (
+            <li>
+              <label class="tok">
+                <input type="radio" name="xfer-token" value={sym} checked={i === 0} />
+                <TokenMark symbol={sym} size={28} />
+                <span>{sym}</span>
+              </label>
+            </li>
+          ))}
+        </ul>
         <label class="xfer-addr-label">
           <span>Amount</span>
           <input id="xfer-amount" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" />
@@ -236,7 +248,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
       <div class="xfer-sheet" data-pane="stop" hidden>
         <header class="xfer-head">
-          <p class="title heavy">Transfer working assets</p>
+          <p class="title heavy">Transfer working capital</p>
           <button type="button" class="xfer-close">Close</button>
         </header>
         <p class="xfer-meta">{workingEth} ETH</p>
@@ -245,7 +257,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
         </p>
         <div class="xfer-row">
           <label>
-            <span class="sr">Working assets amount</span>
+            <span class="sr">Working capital amount</span>
             <input id="xfer-stop" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="4.20" data-unit="ETH" />
           </label>
           <button type="button" class="xfer-max" data-for="xfer-stop">Max</button>
@@ -319,7 +331,14 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     font-size: 0.88rem;
   }
   .balance { flex: 0 0 auto; margin-bottom: var(--s2); }
-  .balance > .kicker.heavy {
+  .balance-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1.25rem;
+    flex-wrap: wrap;
+  }
+  .balance .kicker.heavy {
     font-size: 0.86rem;
     font-weight: 700;
     letter-spacing: 0.14em;
@@ -346,16 +365,45 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     font-size: 1.2rem;
     line-height: 1.15;
   }
-  .legs {
+  .apr {
     list-style: none;
-    margin: var(--s3) 0 0;
+    margin: 0;
     padding: 0;
     display: flex;
-    gap: 2.5rem;
+    flex-wrap: wrap;
+    gap: 0.7rem;
+    align-self: center;
   }
-  .legs li { display: flex; flex-direction: column; gap: 0.1rem; align-items: flex-start; }
-  .leg-label { color: var(--stone); font-size: 0.88rem; }
-  .legs strong { font-weight: 400; font-size: 1.15rem; color: var(--emerald); }
+  .apr li {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 8.5rem;
+    padding: 0.7rem 1rem 0.75rem;
+    border: 1px solid var(--emerald);
+    background: color-mix(in srgb, var(--emerald) 10%, var(--paper));
+  }
+  .apr-label {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--emerald);
+  }
+  .apr strong {
+    font-size: 1.85rem;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    color: var(--emerald);
+  }
+  .line {
+    display: flex;
+    align-items: baseline;
+    gap: 0.7rem;
+    margin: 0;
+  }
+  .fold-main { display: flex; flex-direction: column; min-width: 0; }
   .acts {
     display: flex;
     flex-wrap: wrap;
@@ -431,8 +479,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
   }
   .xfer-row label { display: block; min-width: 0; }
   .xfer-row input,
-  .xfer-addr-label input,
-  .xfer-addr-label select {
+  .xfer-addr-label input {
     width: 100%;
     border: 1px solid var(--wash);
     background: transparent;
@@ -458,11 +505,40 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     margin-top: 0.55rem;
     font-size: 0.88rem;
   }
-  .xfer-addr-label input,
-  .xfer-addr-label select {
+  .xfer-addr-label input {
     font-family: var(--font-mono);
     font-size: 0.92rem;
     letter-spacing: 0.02em;
+  }
+  .tok-pick {
+    list-style: none;
+    margin: 0.35rem 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.45rem;
+  }
+  .tok {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid var(--wash);
+    cursor: pointer;
+  }
+  .tok:has(input:checked) {
+    border-color: var(--ink);
+  }
+  .tok input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .tok span {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    letter-spacing: 0.06em;
   }
   .xfer-err {
     margin: 0.4rem 0 0;
@@ -488,6 +564,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     flex-direction: column;
     gap: var(--s1);
   }
+  .fund[hidden] { display: none; }
   .idle {
     display: flex;
     flex-direction: column;
@@ -567,7 +644,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     list-style: none;
     cursor: pointer;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 1rem;
     padding: 0;
@@ -656,6 +733,9 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     .pools li, .ledger li { grid-template-columns: 1fr; gap: 0.25rem; }
     .ledger code { justify-self: start; }
     .xfer-row { grid-template-columns: 1fr auto; }
+    .apr { width: 100%; }
+    .apr li { flex: 1; min-width: 0; }
+    .tok-pick { grid-template-columns: 1fr; }
   }
 </style>
 
