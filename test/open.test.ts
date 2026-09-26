@@ -40,6 +40,12 @@ describe("open instant", () => {
     expect(OPEN_COPY.onboard.screens[0].body[0]).toBe("Send the ETH you want to invest.");
     expect(OPEN_COPY.onboard.mix.map((m) => m.pct)).toEqual([15, 35, 50]);
   });
+
+  test("hero, FAQs and footer", () => {
+    expect(`${OPEN_COPY.hero.line1} ${OPEN_COPY.hero.line2}`).toBe("APY DELIVERED");
+    expect(OPEN_COPY.questions.items.map((i) => i.q)).not.toContain("How do I reach you?");
+    expect(OPEN_COPY.footer.x).toEqual({ handle: "@entermamoru", href: "https://x.com/entermamoru" });
+  });
 });
 
 function siteAssets(): Fetcher {

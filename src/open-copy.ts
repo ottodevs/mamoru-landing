@@ -61,8 +61,8 @@ export const OPEN_COPY = {
     ],
   },
   hero: {
-    line1: "APY.",
-    line2: "DELIVERED.",
+    line1: "APY",
+    line2: "DELIVERED",
     lede: "The principal keeps working. The yield gets set aside.",
   },
   works: {
@@ -81,6 +81,13 @@ export const OPEN_COPY = {
         body: "Yield is automatically harvested from the pools, converted to USDC, and sent straight to the wallet of your choice.",
       },
     ],
+    scene: {
+      wallet: "Your wallet",
+      agent: "Agent account",
+      pools: "Pools",
+      eth: "ETH",
+      usdc: "USDC",
+    },
   },
   spend: {
     heading: "DeFi yield for the real world",
@@ -118,19 +125,12 @@ export const OPEN_COPY = {
           "It stays with us. We do not rent the list, and we do not send anything else.",
         ],
       },
-      {
-        q: "How do I reach you?",
-        a: [],
-        reach: [
-          { label: "hi@mamoru.lol", href: "mailto:hi@mamoru.lol" },
-          { label: "X @entermamoru", href: "https://x.com/entermamoru" },
-        ],
-      },
     ],
   },
   footer: {
     name: "Mamoru",
     line: "Non-custodial. No token.",
     email: "hi@mamoru.lol",
+    x: { handle: "@entermamoru", href: "https://x.com/entermamoru" },
   },
 } as const;
