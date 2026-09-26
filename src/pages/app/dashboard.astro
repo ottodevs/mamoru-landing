@@ -128,10 +128,10 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     </section>
 
     <dialog class="xfer" id="xfer" aria-labelledby="xfer-title">
-      <div class="xfer-sheet">
+      <div class="xfer-sheet" data-pane="choose">
         <header class="xfer-head">
           <p class="title heavy" id="xfer-title">Transfer assets</p>
-          <button type="button" class="xfer-close" id="xfer-close">Close</button>
+          <button type="button" class="xfer-close">Close</button>
         </header>
         <ul class="xfer-opts">
           <li>
@@ -143,7 +143,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
                 <input id="xfer-usdc" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="420" data-unit="USDC" />
               </label>
               <button type="button" class="xfer-max" data-for="xfer-usdc">Max</button>
-              <button type="button" class="cta xfer-go">Transfer</button>
+              <button type="button" class="cta xfer-go" data-for="xfer-usdc">Transfer</button>
             </div>
           </li>
           <li>
@@ -155,7 +155,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
                 <input id="xfer-idle" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="0.80" data-unit="ETH" />
               </label>
               <button type="button" class="xfer-max" data-for="xfer-idle">Max</button>
-              <button type="button" class="cta xfer-go">Transfer</button>
+              <button type="button" class="cta xfer-go" data-for="xfer-idle">Transfer</button>
             </div>
           </li>
           <li>
@@ -170,10 +170,46 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
                 <input id="xfer-work" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="4.20" data-unit="ETH" />
               </label>
               <button type="button" class="xfer-max" data-for="xfer-work">Max</button>
-              <button type="button" class="cta xfer-go">Transfer</button>
+              <button type="button" class="cta xfer-go" data-for="xfer-work">Transfer</button>
             </div>
           </li>
         </ul>
+      </div>
+
+      <div class="xfer-sheet" data-pane="stop" hidden>
+        <header class="xfer-head">
+          <p class="title heavy">Transfer working capital</p>
+          <button type="button" class="xfer-close">Close</button>
+        </header>
+        <p class="xfer-meta">{workingEth} ETH · {workingUsdc} USDC</p>
+        <p class="xfer-warn" role="status">
+          The amount shown may not match the final figure you receive. Some operations are still pending.
+        </p>
+        <div class="xfer-row">
+          <label>
+            <span class="sr">Working capital amount</span>
+            <input id="xfer-stop" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="4.20" data-unit="ETH" />
+          </label>
+          <button type="button" class="xfer-max" data-for="xfer-stop">Max</button>
+          <button type="button" class="cta xfer-go" data-for="xfer-stop">Transfer</button>
+        </div>
+      </div>
+
+      <div class="xfer-sheet" data-pane="wallet" hidden>
+        <header class="xfer-head">
+          <p class="title heavy">Destination wallet</p>
+          <button type="button" class="xfer-close">Close</button>
+        </header>
+        <p class="xfer-meta" id="xfer-wallet-meta"></p>
+        <label class="xfer-addr-label">
+          <span>Wallet of your choice</span>
+          <input id="xfer-addr" type="text" name="wallet" spellcheck="false" autocomplete="off" placeholder="0x…" />
+        </label>
+        <p class="xfer-err" id="xfer-addr-err" hidden>Enter a wallet address to continue.</p>
+        <div class="xfer-actions">
+          <button type="button" class="xfer-back" id="xfer-back">Back</button>
+          <button type="button" class="cta" id="xfer-confirm">Confirm</button>
+        </div>
       </div>
     </dialog>
 
@@ -240,7 +276,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
             </li>
           ))}
         </ul>
-        <button type="button" class="stop">Stop allocation</button>
+        <button type="button" class="stop" id="stop-open" aria-haspopup="dialog" aria-controls="xfer">Stop allocation</button>
       </div>
     </details>
 
@@ -465,6 +501,42 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     padding: 0.2rem 0.55rem;
+    cursor: pointer;
+  }
+  .xfer-addr-label {
+    display: grid;
+    gap: 0.35rem;
+    margin-top: 0.55rem;
+    font-size: 0.88rem;
+  }
+  .xfer-addr-label input {
+    width: 100%;
+    border: 1px solid var(--wash);
+    background: transparent;
+    color: var(--ink);
+    font-family: var(--font-mono);
+    font-size: 0.92rem;
+    letter-spacing: 0.02em;
+    padding: 0.55rem 0.7rem;
+  }
+  .xfer-err {
+    margin: 0.4rem 0 0;
+    color: #6b1f1f;
+    font-size: 0.85rem;
+  }
+  .xfer-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.9rem;
+  }
+  .xfer-back {
+    border: 1px solid var(--wash);
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.88rem;
+    padding: 0.5rem 0.85rem;
     cursor: pointer;
   }
 
@@ -710,12 +782,35 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
   const dialog = document.querySelector<HTMLDialogElement>("#xfer");
   const openBtn = document.querySelector<HTMLButtonElement>("#xfer-open");
-  const closeBtn = document.querySelector<HTMLButtonElement>("#xfer-close");
-  openBtn?.addEventListener("click", () => dialog?.showModal());
-  closeBtn?.addEventListener("click", () => dialog?.close());
+  const stopBtn = document.querySelector<HTMLButtonElement>("#stop-open");
+  const addr = document.querySelector<HTMLInputElement>("#xfer-addr");
+  const addrErr = document.querySelector<HTMLElement>("#xfer-addr-err");
+  const walletMeta = document.querySelector<HTMLElement>("#xfer-wallet-meta");
+  let backPane: "choose" | "stop" = "choose";
+
+  const pane = (name: string) => {
+    dialog?.querySelectorAll<HTMLElement>("[data-pane]").forEach((el) => {
+      el.hidden = el.dataset.pane !== name;
+    });
+  };
+
+  const open = (name: "choose" | "stop") => {
+    backPane = name;
+    if (addr) addr.value = "";
+    addrErr?.setAttribute("hidden", "");
+    pane(name);
+    dialog?.showModal();
+  };
+
+  openBtn?.addEventListener("click", () => open("choose"));
+  stopBtn?.addEventListener("click", () => open("stop"));
+  dialog?.querySelectorAll<HTMLButtonElement>(".xfer-close").forEach((btn) => {
+    btn.addEventListener("click", () => dialog?.close());
+  });
   dialog?.addEventListener("click", (event) => {
     if (event.target === dialog) dialog.close();
   });
+  dialog?.addEventListener("close", () => pane("choose"));
 
   document.querySelectorAll<HTMLButtonElement>(".xfer-max").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -724,5 +819,37 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
       if (!field) return;
       field.value = field.dataset.max ?? "";
     });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>(".xfer-go").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.for;
+      const field = id ? document.querySelector<HTMLInputElement>(`#${id}`) : null;
+      if (!field) return;
+      if (!field.value) field.value = field.dataset.max ?? "";
+      const unit = field.dataset.unit ?? "";
+      if (walletMeta) {
+        walletMeta.textContent = `Send ${field.value} ${unit} to a wallet of your choice.`;
+      }
+      pane("wallet");
+      addr?.focus();
+    });
+  });
+
+  document.querySelector<HTMLButtonElement>("#xfer-back")?.addEventListener("click", () => {
+    if (addr) addr.value = "";
+    addrErr?.setAttribute("hidden", "");
+    pane(backPane);
+  });
+
+  document.querySelector<HTMLButtonElement>("#xfer-confirm")?.addEventListener("click", () => {
+    const value = addr?.value.trim() ?? "";
+    if (!value) {
+      addrErr?.removeAttribute("hidden");
+      addr?.focus();
+      return;
+    }
+    addrErr?.setAttribute("hidden", "");
+    dialog?.close();
   });
 </script>
