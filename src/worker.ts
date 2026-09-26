@@ -663,7 +663,16 @@ async function dispatch(request: Request, env: Env): Promise<Response> {
     const doc = homeDocument(path);
     if (doc === "hidden") return notFound();
     if (doc === "site" && (request.method === "GET" || request.method === "HEAD")) {
-      return serveSite(request, env, false);
+      return markHome(await serveSite(request, env, false), "site");
     }
-    return env.ASSETS.fetch(request);
+    const asset = await env.ASSETS.fetch(request);
+    return doc === "teaser" ? markHome(asset, "teaser", true) : asset;
+}
+
+/** Tells the countdown which page / serves right now, so it reloads on the server's clock. */
+function markHome(response: Response, doc: "site" | "teaser", noStore = false): Response {
+  const headers = new Headers(response.headers);
+  headers.set("x-mamoru-home", doc);
+  if (noStore) headers.set("cache-control", "no-store");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }

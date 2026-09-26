@@ -202,3 +202,29 @@ describe("hosts", () => {
   });
 
 });
+
+describe("home switch at the instant", () => {
+  test("/ is marked teaser before and site after, on the server clock", async () => {
+    const { setSystemTime } = await import("bun:test");
+    const env = opsEnv();
+    try {
+      setSystemTime(new Date(OPEN_AT_MS - 1000));
+      const before = await worker.fetch(new Request("https://mamoru.lol/", { method: "HEAD" }), env);
+      expect(before.headers.get("x-mamoru-home")).toBe("teaser");
+      expect(before.headers.get("cache-control") ?? "").toContain("no-store");
+
+      setSystemTime(new Date(OPEN_AT_MS));
+      const after = await worker.fetch(new Request("https://mamoru.lol/"), env);
+      expect(after.status).toBe(200);
+      expect(after.headers.get("x-mamoru-home")).toBe("site");
+      expect(await after.text()).toContain("<h1>APY.</h1>");
+
+      const gone = await worker.fetch(new Request("https://mamoru.lol/ops/landing"), env);
+      expect(gone.status).toBe(404);
+      const ops = await worker.fetch(new Request("https://mamoru.lol/ops"), env);
+      expect(ops.status).toBe(302);
+    } finally {
+      setSystemTime();
+    }
+  });
+});

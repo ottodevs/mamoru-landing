@@ -33,24 +33,36 @@ const EVENT_URL = "https://ethglobal.com/events/tokyo2026";
       mins: root.querySelector('[data-unit="mins"]'),
       secs: root.querySelector('[data-unit="secs"]'),
     };
+    // Reload only once the server itself serves the site page, so a fast
+    // or slow device clock never strands a visitor on the zeros.
+    let waiting = false;
+    const waitForSite = async () => {
+      if (waiting) return;
+      waiting = true;
+      for (let i = 0; i < 400; i++) {
+        try {
+          const res = await fetch("/", { method: "HEAD", cache: "no-store" });
+          if (res.headers.get("x-mamoru-home") === "site") {
+            window.location.replace("/");
+            return;
+          }
+        } catch {
+          // Offline for a moment. Try again.
+        }
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    };
     const pad = (n: number) => String(Math.max(0, n)).padStart(2, "0");
     const tick = () => {
       const diff = target - Date.now();
+      // A device clock can lag the server; start asking a few minutes early.
+      if (diff <= 5 * 60_000) waitForSite();
       if (diff <= 0) {
         if (nums.days) nums.days.textContent = "00";
         if (nums.hours) nums.hours.textContent = "00";
         if (nums.mins) nums.mins.textContent = "00";
         if (nums.secs) nums.secs.textContent = "00";
-        // One reload. If the server is already open, / is the site page.
-        // If it is not, the key stops a reload loop and the zeros stay.
-        try {
-          if (!sessionStorage.getItem("mamoru-open-reload")) {
-            sessionStorage.setItem("mamoru-open-reload", "1");
-            window.location.replace("/");
-          }
-        } catch {
-          // Storage can be blocked. The zeros are enough.
-        }
+        waitForSite();
         return;
       }
       const s = Math.floor(diff / 1000);
