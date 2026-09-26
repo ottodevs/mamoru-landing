@@ -10,13 +10,13 @@ const MIX = [
   {
     pct: 15,
     name: "Mercenary Capital",
-    note: "",
+    note: "high risk, high reward",
     tone: "mercenary",
   },
   {
     pct: 35,
     name: "BTC / ETH + Stablecoins",
-    note: "derivatives paired with stablecoins",
+    note: "Derivatives paired with stablecoins",
     tone: "paired",
   },
   {

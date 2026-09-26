@@ -41,10 +41,19 @@ const emailHref = `mailto:${copy.footer.email}`;
     <Allocation />
 
     <section class="band" id="spend" aria-labelledby="spend-title">
-      <div class="wrap">
-        <h2 id="spend-title">{copy.spend.heading}</h2>
-        <p class="body">{copy.spend.body}</p>
-        <a class="cta spend-cta js-launch" href={APP_HREF}>{copy.cta}</a>
+      <div class="wrap spend-row">
+        <div class="spend-copy">
+          <h2 id="spend-title">{copy.spend.heading}</h2>
+          <p class="body">{copy.spend.body}</p>
+          <a class="cta spend-cta js-launch" href={APP_HREF}>{copy.cta}</a>
+        </div>
+        <img
+          class="spend-mark"
+          src="/mark-two-stones.png"
+          width="96"
+          height="96"
+          alt="Mamoru"
+        />
       </div>
     </section>
 
@@ -371,11 +380,22 @@ const emailHref = `mailto:${copy.footer.email}`;
   .spend {
     scroll-margin-top: var(--nav-h, 4.5rem);
   }
+  .spend-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: clamp(1.5rem, 4vw, 3rem);
+    align-items: center;
+  }
   .spend .body {
     margin-top: 1rem;
   }
   .spend-cta {
     margin-top: 1.6rem;
+  }
+  .spend-mark {
+    width: clamp(4.5rem, 10vw, 7rem);
+    height: auto;
+    display: block;
   }
 
   .qa-list {
@@ -474,6 +494,10 @@ const emailHref = `mailto:${copy.footer.email}`;
       width: auto;
       gap: 0.85rem;
       flex-wrap: wrap;
+    }
+    .spend-row {
+      grid-template-columns: 1fr;
+      justify-items: start;
     }
     .foot {
       align-items: flex-start;
