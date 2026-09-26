@@ -1,6 +1,5 @@
 /**
  * Words for mamoru.lol/deck. Slides guide, the speaker tells.
- * No yield figures: the chips on the problem slide are the market, not Mamoru.
  */
 
 export const DECK = {
@@ -69,12 +68,11 @@ export const DECK = {
       { label: "HOLD", note: "silence never pays", tone: "hold" },
       { label: "REFUSE", note: "sanctioned payee, no signature", tone: "refuse" },
     ],
-    note: "Settled live on Base Sepolia",
     href: "https://san.mamoru.lol",
     hrefLabel: "san.mamoru.lol",
   },
   demo: {
-    eyebrow: "Live on Base · 25 USDC cap",
+    eyebrow: "Live on Base",
     heading: "Demo",
     href: "https://app.mamoru.lol",
     hrefLabel: "app.mamoru.lol",
