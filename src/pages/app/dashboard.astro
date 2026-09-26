@@ -147,7 +147,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
       </form>
       <aside class="card idle">
         <p class="title">ETH pending to allocate by Mamoru</p>
-        <p class="sum-sm">{idleEth} ETH</p>
+        <p class="sum-sm work-eth">{idleEth} ETH</p>
       </aside>
     </section>
 
@@ -454,6 +454,11 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     text-overflow: ellipsis;
   }
   .pool-amt { font-family: var(--font-mono); font-size: 0.85rem; }
+  .pool-amt.work-eth,
+  .sum-sm.work-eth {
+    color: var(--emerald);
+    font-weight: 500;
+  }
   .stop {
     justify-self: start;
     background: transparent;
