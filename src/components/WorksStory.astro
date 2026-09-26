@@ -20,29 +20,6 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
     <path class="edge e-eth" d="M512 132 H600" />
     <path class="edge e-usdc" d="M800 132 H888" />
 
-    <g class="eth-fly" opacity="0">
-      <set attributeName="opacity" to="1" begin="eth-hop-1.begin" />
-      <set attributeName="opacity" to="0" begin="eth-hop-1.end" />
-      <animateMotion id="eth-hop-1" dur="3.2s" begin="0s;eth-hop-2.end+2s" fill="freeze">
-        <mpath href="#route-connect" />
-      </animateMotion>
-      <polygon class="eth-left" points="0,-12 0,4 -10.5,0" />
-      <polygon class="eth-right" points="0,-12 10.5,0 0,4" />
-      <polygon class="eth-left" points="-10.5,2 0,6 0,12" />
-      <polygon class="eth-right" points="10.5,2 0,12 0,6" />
-    </g>
-    <g class="eth-fly" opacity="0">
-      <set attributeName="opacity" to="1" begin="eth-hop-2.begin" />
-      <set attributeName="opacity" to="0" begin="eth-hop-2.end" />
-      <animateMotion id="eth-hop-2" dur="3.2s" begin="eth-hop-1.end+1s" fill="freeze">
-        <mpath href="#route-fund" />
-      </animateMotion>
-      <polygon class="eth-left" points="0,-12 0,4 -10.5,0" />
-      <polygon class="eth-right" points="0,-12 10.5,0 0,4" />
-      <polygon class="eth-left" points="-10.5,2 0,6 0,12" />
-      <polygon class="eth-right" points="10.5,2 0,12 0,6" />
-    </g>
-
     {flyStarts.map((begin) => (
       <g class="usdc-fly">
         <animateMotion dur="3.4s" begin={begin} repeatCount="indefinite">
@@ -85,14 +62,53 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
       <text x="988" y="72">your choice</text>
     </g>
 
+    <g id="eth-mark" class="eth-fly" visibility="hidden">
+      <polygon class="eth-left" points="0,-14 0,5 -12,0" />
+      <polygon class="eth-right" points="0,-14 12,0 0,5" />
+      <polygon class="eth-left" points="-12,2.5 0,7 0,14" />
+      <polygon class="eth-right" points="12,2.5 0,14 0,7" />
+    </g>
   </svg>
 </section>
 
 <script>
   const scene = document.querySelector<SVGSVGElement>("#works .scene");
-  if (scene && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    scene.pauseAnimations();
+  const mark = document.querySelector<SVGGElement>("#eth-mark");
+  const hop1 = document.querySelector<SVGPathElement>("#route-connect");
+  const hop2 = document.querySelector<SVGPathElement>("#route-fund");
+  const quiet = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  if (scene && quiet) scene.pauseAnimations();
+
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+  function travel(el: SVGGElement, path: SVGPathElement, ms: number) {
+    return new Promise<void>((resolve) => {
+      const len = path.getTotalLength();
+      const t0 = performance.now();
+      el.setAttribute("visibility", "visible");
+      const tick = (now: number) => {
+        const t = Math.min(1, (now - t0) / ms);
+        const p = path.getPointAtLength(len * t);
+        el.setAttribute("transform", `translate(${p.x} ${p.y})`);
+        if (t < 1) requestAnimationFrame(tick);
+        else resolve();
+      };
+      requestAnimationFrame(tick);
+    });
   }
+
+  async function fundLoop(el: SVGGElement, a: SVGPathElement, b: SVGPathElement) {
+    for (;;) {
+      await travel(el, a, 3200);
+      await sleep(1000);
+      await travel(el, b, 3200);
+      el.setAttribute("visibility", "hidden");
+      await sleep(2000);
+    }
+  }
+
+  if (!quiet && mark && hop1 && hop2) fundLoop(mark, hop1, hop2);
 </script>
 
 <style>
