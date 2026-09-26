@@ -7,29 +7,22 @@ const bars = [
   { tone: "paired", y: 116, h: 26 },
   { tone: "stables", y: 142, h: 28 },
 ];
-const flyStarts = ["0s", "-1.2s", "-2.3s"];
 ---
 <section class="works" id="works" aria-labelledby="works-title">
   <h2 id="works-title">{heading}</h2>
   <svg class="scene" viewBox="0 0 1120 240" role="img" aria-label={scene.aria}>
+    <defs>
+      <clipPath id="payout-clip">
+        <rect x="888" y="84" width="200" height="96" />
+      </clipPath>
+    </defs>
     <path id="route-connect" class="route" d="M224 132 H312" />
     <path id="route-fund" class="route" d="M512 132 H600" />
-    <path id="route-usdc" class="route" d="M800 132 H888" />
+    <path id="route-usdc" class="route" d="M800 132 H940" />
 
     <path class="edge e-eth" d="M224 132 H312" />
     <path class="edge e-eth" d="M512 132 H600" />
     <path class="edge e-usdc" d="M800 132 H888" />
-
-    {flyStarts.map((begin) => (
-      <g class="usdc-fly">
-        <animateMotion dur="3.4s" begin={begin} repeatCount="indefinite">
-          <mpath href="#route-usdc" />
-        </animateMotion>
-        <circle class="usdc-disc" r="14" />
-        <circle class="usdc-ring" r="9.5" />
-        <text class="usdc-mark" y="5" fill="#fff">$</text>
-      </g>
-    ))}
 
     <g class="node n-wallet">
       <rect class="box" x="24" y="84" width="200" height="96" />
@@ -62,6 +55,12 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
       <text x="988" y="72">your choice</text>
     </g>
 
+    <g id="usdc-pile" clip-path="url(#payout-clip)"></g>
+    <g id="usdc-fly" class="usdc-fly" opacity="0">
+      <circle class="usdc-disc" r="11" />
+      <circle class="usdc-ring" r="7.5" />
+      <text class="usdc-mark" y="4" fill="#fff">$</text>
+    </g>
     <g id="eth-mark" class="eth-fly" opacity="0">
       <polygon points="0,-11 9,0 0,11 -9,0" />
     </g>
@@ -73,20 +72,43 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
   const mark = document.querySelector<SVGGElement>("#eth-mark");
   const hop1 = document.querySelector<SVGPathElement>("#route-connect");
   const hop2 = document.querySelector<SVGPathElement>("#route-fund");
+  const usdcPath = document.querySelector<SVGPathElement>("#route-usdc");
+  const usdcFly = document.querySelector<SVGGElement>("#usdc-fly");
+  const usdcPile = document.querySelector<SVGGElement>("#usdc-pile");
   const quiet = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   if (scene && quiet) scene.pauseAnimations();
 
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
   const ease = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
-  const fade = (t: number) => {
-    const edge = 0.22;
-    if (t < edge) return t / edge;
-    if (t > 1 - edge) return (1 - t) / edge;
-    return 1;
-  };
+  const easeIn = (t: number) => t * t;
+  const fadeIn = (t: number, edge = 0.18) => (t < edge ? t / edge : 1);
 
-  function travel(el: SVGGElement, path: SVGPathElement, ms: number) {
+  function move(
+    el: SVGGElement,
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+    ms: number,
+    easeFn: (t: number) => number,
+    opacityAt: (t: number) => number,
+  ) {
+    return new Promise<void>((resolve) => {
+      const t0 = performance.now();
+      const tick = (now: number) => {
+        const raw = Math.min(1, (now - t0) / ms);
+        const t = easeFn(raw);
+        const x = from.x + (to.x - from.x) * t;
+        const y = from.y + (to.y - from.y) * t;
+        el.setAttribute("transform", `translate(${x} ${y})`);
+        el.setAttribute("opacity", String(opacityAt(raw)));
+        if (raw < 1) requestAnimationFrame(tick);
+        else resolve();
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+
+  function travel(el: SVGGElement, path: SVGPathElement, ms: number, fadeOut = true) {
     return new Promise<void>((resolve) => {
       const len = path.getTotalLength();
       const t0 = performance.now();
@@ -95,10 +117,17 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
         const t = ease(raw);
         const p = path.getPointAtLength(len * t);
         el.setAttribute("transform", `translate(${p.x} ${p.y})`);
-        el.setAttribute("opacity", String(fade(raw)));
+        const o = fadeOut
+          ? raw < 0.22
+            ? raw / 0.22
+            : raw > 0.78
+              ? (1 - raw) / 0.22
+              : 1
+          : fadeIn(raw);
+        el.setAttribute("opacity", String(o));
         if (raw < 1) requestAnimationFrame(tick);
         else {
-          el.setAttribute("opacity", "0");
+          if (fadeOut) el.setAttribute("opacity", "0");
           resolve();
         }
       };
@@ -115,7 +144,55 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
     }
   }
 
+  const pileSlots = [
+    { x: 948, y: 168 },
+    { x: 968, y: 168 },
+    { x: 988, y: 168 },
+    { x: 1008, y: 168 },
+    { x: 1028, y: 168 },
+    { x: 958, y: 154 },
+    { x: 978, y: 154 },
+    { x: 998, y: 154 },
+    { x: 1018, y: 154 },
+  ];
+
+  function addPileCoin(at: { x: number; y: number }) {
+    if (!usdcPile || !usdcFly) return;
+    const g = usdcFly.cloneNode(true) as SVGGElement;
+    g.removeAttribute("id");
+    g.setAttribute("class", "usdc-fly usdc-landed");
+    g.setAttribute("transform", `translate(${at.x} ${at.y}) scale(0.72)`);
+    g.setAttribute("opacity", "0");
+    usdcPile.appendChild(g);
+    requestAnimationFrame(() => g.setAttribute("opacity", "1"));
+  }
+
+  async function harvestLoop(fly: SVGGElement, path: SVGPathElement) {
+    let n = 0;
+    for (;;) {
+      if (n >= pileSlots.length) {
+        usdcPile?.querySelectorAll(".usdc-landed").forEach((node) => {
+          (node as SVGGElement).setAttribute("opacity", "0");
+        });
+        await sleep(700);
+        usdcPile?.replaceChildren();
+        n = 0;
+      }
+      const slot = pileSlots[n];
+      const start = path.getPointAtLength(0);
+      const lip = path.getPointAtLength(path.getTotalLength());
+      fly.setAttribute("opacity", "0");
+      await move(fly, start, lip, 5200, ease, fadeIn);
+      await move(fly, lip, slot, 900, easeIn, () => 1);
+      fly.setAttribute("opacity", "0");
+      addPileCoin(slot);
+      n += 1;
+      await sleep(700);
+    }
+  }
+
   if (!quiet && mark && hop1 && hop2) fundLoop(mark, hop1, hop2);
+  if (!quiet && usdcFly && usdcPath && usdcPile) harvestLoop(usdcFly, usdcPath);
 </script>
 
 <style>
@@ -174,6 +251,9 @@ const flyStarts = ["0s", "-1.2s", "-2.3s"];
     font-family: var(--font-serif);
     font-size: 13px;
     text-anchor: middle;
+  }
+  .usdc-landed {
+    transition: opacity 0.65s ease;
   }
 
   .box {
