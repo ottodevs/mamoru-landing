@@ -81,6 +81,10 @@ export const OPEN_COPY = {
         body: "Deposit the ETH you want to put to work. The agent operates programmatically with that capital, leaving your main wallet untouched.",
       },
       {
+        title: "Allocate",
+        body: "Mamoru splits the capital into three sleeves on Uniswap: stablecoins, bluechips, and a small mercenary sleeve.",
+      },
+      {
         title: "Harvest",
         body: "Yield is harvested and reinvested. It stays at work until you transfer.",
       },
@@ -92,7 +96,14 @@ export const OPEN_COPY = {
       payout: "Stablecoin pool",
       eth: "ETH",
       usdc: "USDC",
-      aria: "ETH funds the Mamoru Delegated Account, then Funds Allocation. USDC harvests into the stablecoin pool.",
+      key: "Session key: Uniswap only",
+      sleeves: ["Stables", "Bluechips", "Mercenary"],
+      swap: "Quote, swap, LP",
+      fees: "+ fees",
+      reinvest: "Reinvested",
+      withdraw: "Withdraw any time. Stablecoins pay first.",
+      rebalance: "Rebalanced",
+      aria: "ETH funds the Mamoru Delegated Account. Mamoru splits it into stablecoin, bluechip and mercenary sleeves on Uniswap. Fees land in the stablecoin pool and are reinvested. You can withdraw any time: stablecoins pay first, then the sleeves rebalance.",
     },
   },
   spend: {

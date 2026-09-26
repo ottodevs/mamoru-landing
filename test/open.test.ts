@@ -33,7 +33,7 @@ describe("open instant", () => {
     expect(OPEN_COPY.hero.lede).toBe(
       "The principal keeps working. Yield is reinvested until you transfer.",
     );
-    expect(OPEN_COPY.works.moves.map((m) => m.title)).toEqual(["Connect", "Fund", "Harvest"]);
+    expect(OPEN_COPY.works.moves.map((m) => m.title)).toEqual(["Connect", "Fund", "Allocate", "Harvest"]);
     expect(OPEN_COPY.spend.heading).toBe("DeFi yield for the real world");
     expect(OPEN_COPY.questions.heading).toBe("FAQs");
     expect("split" in OPEN_COPY).toBe(false);
