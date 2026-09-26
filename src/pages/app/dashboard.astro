@@ -5,12 +5,12 @@ import TokenMark from "../../components/TokenMark.astro";
 type Token = "ETH" | "WETH" | "USDC" | "WBTC";
 
 const workingEth = "4.20";
-const idleEth = "0.80";
 const walletEth = "2.40";
-const workingUsdc = "16,800";
-const claimableUsdc = "420";
 const totalUsdc = "17,220";
-const harvestedUsdc = "3,180";
+const currentApr = "5.2%";
+const monthAvg = "4.8%";
+const idleUsdc = "0";
+const idleTokens = 0;
 
 const inUse: Token[] = ["ETH", "WETH", "WBTC", "USDC"];
 
@@ -64,43 +64,28 @@ const pools: {
   },
 ];
 
-const months = [
-  { label: "Apr", value: 420 },
-  { label: "May", value: 680 },
-  { label: "Jun", value: 910 },
-  { label: "Jul", value: 1_480 },
-  { label: "Aug", value: 2_370 },
-  { label: "Sep", value: 3_180 },
-];
-const maxY = 3200;
-const chartW = 320;
-const chartH = 132;
-const left = 12;
-const right = 12;
-const top = 10;
-const bottom = 28;
-const innerW = chartW - left - right;
-const innerH = chartH - top - bottom;
-const chartPoints = months.map((m, i) => {
-  const x = left + (i * innerW) / (months.length - 1);
-  const y = top + innerH - (m.value / maxY) * innerH;
-  return { x, y, label: m.label };
-});
-const line = chartPoints.map((p) => `${p.x},${p.y}`).join(" ");
-const area = `${left},${top + innerH} ${line} ${left + innerW},${top + innerH}`;
+const openPositions = pools.length;
 
-const harvests = [
-  { when: "26 Sep 2026", amount: "420 USDC", tx: "0x7c2a91e0b19d44c803f1a6b09e14c2" },
-  { when: "19 Sep 2026", amount: "380 USDC", tx: "0xb19d03aa7c2a91e044c8de80a6b0" },
-  { when: "12 Sep 2026", amount: "410 USDC", tx: "0x03f191abde8021aac02f7c2a91e0" },
-  { when: "5 Sep 2026", amount: "390 USDC", tx: "0xde80b19d44c8a6b07c2a91e0c02f" },
-  { when: "29 Aug 2026", amount: "1,580 USDC", tx: "0x91abc02f7c2a91e0b19d44c803f1" },
+const events: {
+  when: string;
+  kind: "Fund" | "Swap" | "Bridge" | "Transfer" | "Harvest";
+  detail: string;
+  tx: string;
+}[] = [
+  { when: "26 Sep 2026", kind: "Harvest", detail: "420 USDC to wallet of choice", tx: "0x7c2a91e0b19d44c803f1a6b09e14c2" },
+  { when: "26 Sep 2026", kind: "Transfer", detail: "200 USDC → 0x4f91…c2a8", tx: "0xa61c03f191abde8021aac02f7c2a" },
+  { when: "24 Sep 2026", kind: "Swap", detail: "0.40 ETH → 1,580 USDC", tx: "0xb19d03aa7c2a91e044c8de80a6b0" },
+  { when: "22 Sep 2026", kind: "Bridge", detail: "1.10 ETH Arbitrum → Ethereum", tx: "0x03f191abde8021aac02f7c2a91e0" },
+  { when: "19 Sep 2026", kind: "Harvest", detail: "380 USDC to wallet of choice", tx: "0xde80b19d44c8a6b07c2a91e0c02f" },
+  { when: "12 Sep 2026", kind: "Fund", detail: "+1.50 ETH", tx: "0x91abc02f7c2a91e0b19d44c803f1" },
+  { when: "5 Sep 2026", kind: "Swap", detail: "0.12 WBTC → 0.80 ETH", tx: "0x44c803f1a6b09e14c27c2a91e0b1" },
+  { when: "29 Aug 2026", kind: "Fund", detail: "+2.70 ETH", tx: "0xc02f7c2a91e0b19d44c803f1a6b0" },
 ];
 
 const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 ---
-<Base title="Mamoru — Dashboard" description="Working capital, idle ETH, and harvested USDC.">
+<Base title="Mamoru — Dashboard" description="Working assets, idle assets, and savings history.">
   <main class="page">
     <header class="mast">
       <a class="brand" href="/">
@@ -114,108 +99,38 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
       <p class="sum">{totalUsdc} <span class="unit">USDC</span></p>
       <ul class="legs">
         <li>
-          <span class="leg-label">Working capital</span>
-          <strong>{workingUsdc} USDC</strong>
+          <span class="leg-label">Current APR</span>
+          <strong>{currentApr}</strong>
         </li>
         <li>
-          <span class="leg-label">Claimable rewards</span>
-          <strong>{claimableUsdc} USDC</strong>
+          <span class="leg-label">Month average</span>
+          <strong>{monthAvg}</strong>
         </li>
       </ul>
-      <button type="button" class="claim" id="xfer-open" aria-haspopup="dialog" aria-controls="xfer">
-        Transfer Assets
-      </button>
+      <div class="acts">
+        <button type="button" class="act" id="add-open" aria-expanded="false" aria-controls="fund-panel">
+          Add capital
+        </button>
+        <button type="button" class="act" id="xfer-open" aria-haspopup="dialog" aria-controls="xfer">
+          Transfer
+        </button>
+      </div>
     </section>
 
-    <dialog class="xfer" id="xfer" aria-labelledby="xfer-title">
-      <div class="xfer-sheet" data-pane="choose">
-        <header class="xfer-head">
-          <p class="title heavy" id="xfer-title">Transfer assets</p>
-          <button type="button" class="xfer-close">Close</button>
-        </header>
-        <ul class="xfer-opts">
-          <li>
-            <p class="xfer-name">Transfer USDC</p>
-            <p class="xfer-meta">Max {claimableUsdc} USDC from claimable rewards</p>
-            <div class="xfer-row">
-              <label>
-                <span class="sr">USDC amount</span>
-                <input id="xfer-usdc" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="420" data-unit="USDC" />
-              </label>
-              <button type="button" class="xfer-max" data-for="xfer-usdc">Max</button>
-              <button type="button" class="cta xfer-go" data-for="xfer-usdc">Transfer</button>
-            </div>
-          </li>
-          <li>
-            <p class="xfer-name">Transfer pending ETH</p>
-            <p class="xfer-meta">ETH pending to allocate by Mamoru · {idleEth} ETH</p>
-            <div class="xfer-row">
-              <label>
-                <span class="sr">Pending ETH amount</span>
-                <input id="xfer-idle" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="0.80" data-unit="ETH" />
-              </label>
-              <button type="button" class="xfer-max" data-for="xfer-idle">Max</button>
-              <button type="button" class="cta xfer-go" data-for="xfer-idle">Transfer</button>
-            </div>
-          </li>
-          <li>
-            <p class="xfer-name">Transfer working capital</p>
-            <p class="xfer-meta">{workingEth} ETH · {workingUsdc} USDC</p>
-            <p class="xfer-warn" role="status">
-              The amount shown may not match the final figure you receive. Some operations are still pending.
-            </p>
-            <div class="xfer-row">
-              <label>
-                <span class="sr">Working capital amount</span>
-                <input id="xfer-work" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="4.20" data-unit="ETH" />
-              </label>
-              <button type="button" class="xfer-max" data-for="xfer-work">Max</button>
-              <button type="button" class="cta xfer-go" data-for="xfer-work">Transfer</button>
-            </div>
-          </li>
-        </ul>
-      </div>
-
-      <div class="xfer-sheet" data-pane="stop" hidden>
-        <header class="xfer-head">
-          <p class="title heavy">Transfer working capital</p>
-          <button type="button" class="xfer-close">Close</button>
-        </header>
-        <p class="xfer-meta">{workingEth} ETH · {workingUsdc} USDC</p>
-        <p class="xfer-warn" role="status">
-          The amount shown may not match the final figure you receive. Some operations are still pending.
-        </p>
-        <div class="xfer-row">
-          <label>
-            <span class="sr">Working capital amount</span>
-            <input id="xfer-stop" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="4.20" data-unit="ETH" />
-          </label>
-          <button type="button" class="xfer-max" data-for="xfer-stop">Max</button>
-          <button type="button" class="cta xfer-go" data-for="xfer-stop">Transfer</button>
-        </div>
-      </div>
-
-      <div class="xfer-sheet" data-pane="wallet" hidden>
-        <header class="xfer-head">
-          <p class="title heavy">Destination wallet</p>
-          <button type="button" class="xfer-close">Close</button>
-        </header>
-        <p class="xfer-meta" id="xfer-wallet-meta"></p>
-        <label class="xfer-addr-label">
-          <span>Wallet of your choice</span>
-          <input id="xfer-addr" type="text" name="wallet" spellcheck="false" autocomplete="off" placeholder="0x…" />
-        </label>
-        <p class="xfer-err" id="xfer-addr-err" hidden>Enter a wallet address to continue.</p>
-        <div class="xfer-actions">
-          <button type="button" class="xfer-back" id="xfer-back">Back</button>
-          <button type="button" class="cta" id="xfer-confirm">Confirm</button>
-        </div>
-      </div>
-    </dialog>
-
-    <section class="row" aria-label="Fund and idle">
-      <form class="card fund" action="#" method="post" onsubmit="return false;" aria-labelledby="fund-title">
-        <p class="title heavy" id="fund-title">Fund Mamoru</p>
+    <section class="row" aria-label="Idle assets and fund">
+      <aside class="card idle">
+        <p class="title">Idle assets</p>
+        <p class="sum-sm">{idleUsdc} USDC</p>
+        <p class="sub">{idleTokens} tokens idle</p>
+      </aside>
+      <form
+        class="card fund"
+        id="fund-panel"
+        action="#"
+        method="post"
+        onsubmit="return false;"
+        hidden
+      >
         <div class="fund-row">
           <span class="asset">ETH</span>
           <label class="amount">
@@ -233,21 +148,15 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
           </div>
         </div>
       </form>
-      <aside class="card idle">
-        <p class="title">ETH pending to allocate by Mamoru</p>
-        <p class="sum-sm idle-amt">
-          <span class="think" aria-hidden="true"></span>
-          {idleEth} ETH
-        </p>
-      </aside>
     </section>
 
     <details class="card fold wide">
       <summary>
         <span>
-          <span class="title heavy">Working capital</span>
-          <span class="sum-sm work-eth">{workingEth} ETH</span>
+          <span class="title heavy">Working assets</span>
+          <span class="sub">{openPositions} open positions</span>
         </span>
+        <span class="sum-sm work-eth">{workingEth} ETH</span>
       </summary>
       <div class="fold-body">
         <p class="kicker">Assets in use</p>
@@ -283,32 +192,76 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     <details class="card fold wide">
       <summary>
         <span>
-          <span class="title">Total harvested</span>
-          <span class="sum-sm">{harvestedUsdc} USDC</span>
+          <span class="title">Savings history</span>
+          <span class="sub">{events.length} events</span>
         </span>
       </summary>
-      <div class="harvest">
-        <ul class="ledger">
-          {harvests.map((h) => (
-            <li>
-              <time>{h.when}</time>
-              <span>{h.amount}</span>
-              <code>{shortTx(h.tx)}</code>
-            </li>
-          ))}
-        </ul>
-        <svg class="chart" viewBox={`0 0 ${chartW} ${chartH}`} role="img" aria-label="USDC harvested by month">
-          <polyline class="chart-area" points={area} />
-          <polyline class="chart-line" points={line} />
-          {chartPoints.map((p) => (
-            <g>
-              <circle class="chart-dot" cx={p.x} cy={p.y} r="2.4" />
-              <text class="axis month" x={p.x} y={chartH - 8}>{p.label}</text>
-            </g>
-          ))}
-        </svg>
-      </div>
+      <ul class="ledger">
+        {events.map((e) => (
+          <li>
+            <time>{e.when}</time>
+            <span class="kind">{e.kind}</span>
+            <span>{e.detail}</span>
+            <code>{shortTx(e.tx)}</code>
+          </li>
+        ))}
+      </ul>
     </details>
+
+    <dialog class="xfer" id="xfer" aria-labelledby="xfer-title">
+      <div class="xfer-sheet" data-pane="choose">
+        <header class="xfer-head">
+          <p class="title heavy" id="xfer-title">Transfer</p>
+          <button type="button" class="xfer-close">Close</button>
+        </header>
+        <label class="xfer-addr-label">
+          <span>Token</span>
+          <select id="xfer-token">
+            {inUse.map((sym) => (
+              <option value={sym}>{sym}</option>
+            ))}
+          </select>
+        </label>
+        <label class="xfer-addr-label">
+          <span>Amount</span>
+          <input id="xfer-amount" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" />
+        </label>
+        <label class="xfer-addr-label">
+          <span>Wallet address</span>
+          <input id="xfer-addr" type="text" name="wallet" spellcheck="false" autocomplete="off" placeholder="0x…" />
+        </label>
+        <p class="xfer-err" id="xfer-addr-err" hidden>Choose a token and enter a wallet address.</p>
+        <div class="xfer-actions">
+          <button type="button" class="cta" id="xfer-confirm">Transfer</button>
+        </div>
+      </div>
+
+      <div class="xfer-sheet" data-pane="stop" hidden>
+        <header class="xfer-head">
+          <p class="title heavy">Transfer working capital</p>
+          <button type="button" class="xfer-close">Close</button>
+        </header>
+        <p class="xfer-meta">{workingEth} ETH</p>
+        <p class="xfer-warn" role="status">
+          The amount shown may not match the final figure you receive. Some operations are still pending.
+        </p>
+        <div class="xfer-row">
+          <label>
+            <span class="sr">Working capital amount</span>
+            <input id="xfer-stop" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" data-max="4.20" data-unit="ETH" />
+          </label>
+          <button type="button" class="xfer-max" data-for="xfer-stop">Max</button>
+        </div>
+        <label class="xfer-addr-label">
+          <span>Wallet address</span>
+          <input id="stop-addr" type="text" spellcheck="false" autocomplete="off" placeholder="0x…" />
+        </label>
+        <p class="xfer-err" id="stop-addr-err" hidden>Enter a wallet address to continue.</p>
+        <div class="xfer-actions">
+          <button type="button" class="cta" id="stop-confirm">Transfer</button>
+        </div>
+      </div>
+    </dialog>
 
   </main>
 </Base>
@@ -361,6 +314,12 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     letter-spacing: 0.01em;
   }
   .heavy { font-weight: 700; }
+  .sub {
+    display: block;
+    margin: 0.12rem 0 0;
+    color: var(--stone);
+    font-size: 0.88rem;
+  }
   .balance { flex: 0 0 auto; margin-bottom: var(--s4); }
   .balance > .kicker.heavy {
     font-size: 0.86rem;
@@ -398,19 +357,27 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
   }
   .legs li { display: flex; flex-direction: column; gap: 0.1rem; align-items: flex-start; }
   .leg-label { color: var(--stone); font-size: 0.88rem; }
-  .legs strong { font-weight: 400; font-size: 1.15rem; }
-  .claim {
-    margin-top: var(--s2);
-    padding: 0;
+  .legs strong { font-weight: 400; font-size: 1.15rem; color: var(--emerald); }
+  .acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.7rem;
+    margin-top: var(--s3);
+  }
+  .act {
+    background: var(--emerald);
+    color: var(--paper);
     border: 0;
-    background: none;
-    color: var(--emerald);
-    font: inherit;
-    font-size: 0.95rem;
-    letter-spacing: 0.02em;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.65rem 1.2rem;
     cursor: pointer;
   }
-  .claim:hover { text-decoration: underline; }
+  .act[aria-expanded="true"] {
+    outline: 1px solid var(--ink);
+  }
 
   .xfer {
     width: min(36rem, calc(100% - 2rem));
@@ -443,24 +410,6 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     cursor: pointer;
   }
   .xfer-close:hover { color: var(--ink); }
-  .xfer-opts {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    gap: 0.9rem;
-  }
-  .xfer-opts li {
-    border-top: 1px solid var(--wash);
-    padding-top: 0.85rem;
-    display: grid;
-    gap: 0.35rem;
-  }
-  .xfer-name {
-    margin: 0;
-    font-size: 1.05rem;
-    font-weight: 700;
-  }
   .xfer-meta {
     margin: 0;
     color: var(--stone);
@@ -477,13 +426,15 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
   }
   .xfer-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 0.4rem;
     align-items: stretch;
-    margin-top: 0.25rem;
+    margin-top: 0.55rem;
   }
   .xfer-row label { display: block; min-width: 0; }
-  .xfer-row input {
+  .xfer-row input,
+  .xfer-addr-label input,
+  .xfer-addr-label select {
     width: 100%;
     border: 1px solid var(--wash);
     background: transparent;
@@ -509,15 +460,11 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     margin-top: 0.55rem;
     font-size: 0.88rem;
   }
-  .xfer-addr-label input {
-    width: 100%;
-    border: 1px solid var(--wash);
-    background: transparent;
-    color: var(--ink);
+  .xfer-addr-label input,
+  .xfer-addr-label select {
     font-family: var(--font-mono);
     font-size: 0.92rem;
     letter-spacing: 0.02em;
-    padding: 0.55rem 0.7rem;
   }
   .xfer-err {
     margin: 0.4rem 0 0;
@@ -529,15 +476,6 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     justify-content: flex-end;
     gap: 0.5rem;
     margin-top: 0.9rem;
-  }
-  .xfer-back {
-    border: 1px solid var(--wash);
-    background: transparent;
-    color: var(--ink);
-    font: inherit;
-    font-size: 0.88rem;
-    padding: 0.5rem 0.85rem;
-    cursor: pointer;
   }
 
   .row {
@@ -624,25 +562,10 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     cursor: pointer;
   }
   .work-eth { color: var(--emerald); }
-  .idle-amt {
-    color: var(--ink);
-    display: inline-flex;
-    align-items: center;
-    gap: 0.45rem;
-  }
-  .think {
-    width: 0.7rem;
-    height: 0.7rem;
-    border: 1.5px solid var(--stone);
-    border-top-color: var(--ink);
-    border-radius: 999px;
-    animation: think 0.9s linear infinite;
-  }
-  @keyframes think {
-    to { transform: rotate(360deg); }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .think { animation: none; border-top-color: var(--stone); }
+  .pool-amt.work-eth,
+  .sum-sm.work-eth {
+    color: var(--emerald);
+    font-weight: 500;
   }
 
   .fold { padding: var(--s2) 0; }
@@ -658,8 +581,7 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
   .fold summary::-webkit-details-marker { display: none; }
   .fold summary::after { content: "▾"; color: var(--stone); }
   .fold[open] summary::after { content: "▴"; }
-  .fold-body, .harvest { padding: var(--s2) 0 0; }
-  .fold-body { display: grid; gap: var(--s2); }
+  .fold-body { padding: var(--s2) 0 0; display: grid; gap: var(--s2); }
 
   .strip {
     list-style: none;
@@ -699,11 +621,6 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     text-overflow: ellipsis;
   }
   .pool-amt { font-family: var(--font-mono); font-size: 0.85rem; }
-  .pool-amt.work-eth,
-  .sum-sm.work-eth {
-    color: var(--emerald);
-    font-weight: 500;
-  }
   .stop {
     justify-self: start;
     background: transparent;
@@ -712,46 +629,27 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     padding: 0.6rem 0.95rem;
   }
 
-  .harvest {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 1rem;
-    align-items: start;
-  }
-  .chart { width: 100%; height: auto; }
-  .axis.month {
-    fill: var(--stone);
-    font-size: 9px;
-    font-family: var(--font-mono);
-    text-anchor: middle;
-  }
-  .chart-area {
-    fill: color-mix(in srgb, var(--emerald) 18%, transparent);
-    stroke: none;
-  }
-  .chart-line {
-    fill: none;
-    stroke: var(--emerald);
-    stroke-width: 1.6;
-    stroke-linejoin: round;
-    stroke-linecap: round;
-  }
-  .chart-dot { fill: var(--emerald); }
-
   .ledger {
     list-style: none;
-    margin: 0;
+    margin: var(--s2) 0 0;
     padding: 0;
     display: grid;
     gap: 0.3rem;
   }
   .ledger li {
     display: grid;
-    grid-template-columns: 7.5rem auto 1fr;
+    grid-template-columns: 7.5rem 5.5rem minmax(0, 1fr) auto;
     gap: 0.6rem;
     border-top: 1px solid var(--wash);
     padding-top: 0.35rem;
     align-items: baseline;
+  }
+  .kind {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--emerald);
   }
   .ledger code {
     font-family: var(--font-mono);
@@ -761,11 +659,10 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
   }
 
   @media (max-width: 760px) {
-    .row, .harvest { grid-template-columns: 1fr; }
+    .row { grid-template-columns: 1fr; }
     .pools li, .ledger li { grid-template-columns: 1fr; gap: 0.25rem; }
     .ledger code { justify-self: start; }
-    .xfer-row { grid-template-columns: 1fr 1fr; }
-    .xfer-row label { grid-column: 1 / -1; }
+    .xfer-row { grid-template-columns: 1fr auto; }
   }
 </style>
 
@@ -780,13 +677,22 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     });
   });
 
+  const addBtn = document.querySelector<HTMLButtonElement>("#add-open");
+  const fundPanel = document.querySelector<HTMLElement>("#fund-panel");
+  addBtn?.addEventListener("click", () => {
+    const open = fundPanel?.hidden ?? true;
+    if (fundPanel) fundPanel.hidden = !open;
+    addBtn?.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) input?.focus();
+  });
+
   const dialog = document.querySelector<HTMLDialogElement>("#xfer");
   const openBtn = document.querySelector<HTMLButtonElement>("#xfer-open");
   const stopBtn = document.querySelector<HTMLButtonElement>("#stop-open");
   const addr = document.querySelector<HTMLInputElement>("#xfer-addr");
   const addrErr = document.querySelector<HTMLElement>("#xfer-addr-err");
-  const walletMeta = document.querySelector<HTMLElement>("#xfer-wallet-meta");
-  let backPane: "choose" | "stop" = "choose";
+  const stopAddr = document.querySelector<HTMLInputElement>("#stop-addr");
+  const stopErr = document.querySelector<HTMLElement>("#stop-addr-err");
 
   const pane = (name: string) => {
     dialog?.querySelectorAll<HTMLElement>("[data-pane]").forEach((el) => {
@@ -795,9 +701,10 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
   };
 
   const open = (name: "choose" | "stop") => {
-    backPane = name;
     if (addr) addr.value = "";
+    if (stopAddr) stopAddr.value = "";
     addrErr?.setAttribute("hidden", "");
+    stopErr?.setAttribute("hidden", "");
     pane(name);
     dialog?.showModal();
   };
@@ -821,27 +728,6 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>(".xfer-go").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const id = btn.dataset.for;
-      const field = id ? document.querySelector<HTMLInputElement>(`#${id}`) : null;
-      if (!field) return;
-      if (!field.value) field.value = field.dataset.max ?? "";
-      const unit = field.dataset.unit ?? "";
-      if (walletMeta) {
-        walletMeta.textContent = `Send ${field.value} ${unit} to a wallet of your choice.`;
-      }
-      pane("wallet");
-      addr?.focus();
-    });
-  });
-
-  document.querySelector<HTMLButtonElement>("#xfer-back")?.addEventListener("click", () => {
-    if (addr) addr.value = "";
-    addrErr?.setAttribute("hidden", "");
-    pane(backPane);
-  });
-
   document.querySelector<HTMLButtonElement>("#xfer-confirm")?.addEventListener("click", () => {
     const value = addr?.value.trim() ?? "";
     if (!value) {
@@ -850,6 +736,19 @@ const shortTx = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
       return;
     }
     addrErr?.setAttribute("hidden", "");
+    dialog?.close();
+  });
+
+  document.querySelector<HTMLButtonElement>("#stop-confirm")?.addEventListener("click", () => {
+    const field = document.querySelector<HTMLInputElement>("#xfer-stop");
+    if (field && !field.value) field.value = field.dataset.max ?? "";
+    const value = stopAddr?.value.trim() ?? "";
+    if (!value) {
+      stopErr?.removeAttribute("hidden");
+      stopAddr?.focus();
+      return;
+    }
+    stopErr?.setAttribute("hidden", "");
     dialog?.close();
   });
 </script>
