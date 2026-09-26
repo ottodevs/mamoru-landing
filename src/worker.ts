@@ -309,6 +309,38 @@ function oauthConfig(env: Env): Oauth | null {
   };
 }
 
+async function beginGoogle(
+  oauth: Oauth,
+  secure: boolean,
+  host: string,
+  redirectUri: string,
+  next: string,
+): Promise<Response> {
+  const state = randomToken();
+  const nonce = randomToken();
+  const verifier = randomToken(48);
+  const sealed = await sealOauthState(oauth.sessionSecret, {
+    state,
+    nonce,
+    verifier,
+    next,
+  });
+  const headers = new Headers({
+    location: authorizeUrl({
+      clientId: oauth.clientId,
+      redirectUri,
+      state,
+      nonce,
+      codeChallenge: await pkceChallenge(verifier),
+    }),
+    "cache-control": "no-store",
+    "x-robots-tag": "noindex, nofollow",
+    "referrer-policy": "no-referrer",
+  });
+  headers.append("set-cookie", oauthCookie(sealed, secure, host));
+  return new Response(null, { status: 302, headers });
+}
+
 async function handleOps(request: Request, env: Env): Promise<Response> {
   const oauth = oauthConfig(env);
   // Not configured: fail closed. The list is unreachable, the landing is all anyone sees.
@@ -326,39 +358,28 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
   const session = await openSession(oauth.sessionSecret, cookieHeader);
   const flash = readFlash(cookieHeader);
 
-  // Start: send to Google. Only reachable by those who know the URL.
-  if (url.pathname === "/ops/login" && request.method === "GET") {
-    const next = safeAppNext(url.searchParams.get("next"));
-    if (session && next) return Response.redirect(next, 302);
-    if (session) return redirectOps(request, "", []);
-    const state = randomToken();
-    const nonce = randomToken();
-    const verifier = randomToken(48);
-    const sealed = await sealOauthState(oauth.sessionSecret, {
-      state,
-      nonce,
-      verifier,
-      next: safeAppNext(url.searchParams.get("next")) ?? "",
-    });
-    const headers = new Headers({
-      location: authorizeUrl({
-        clientId: oauth.clientId,
-        redirectUri,
-        state,
-        nonce,
-        codeChallenge: await pkceChallenge(verifier),
-      }),
-      "cache-control": "no-store",
-      "x-robots-tag": "noindex, nofollow",
-      "referrer-policy": "no-referrer",
-    });
-    headers.append("set-cookie", oauthCookie(sealed, secure));
-    return new Response(null, { status: 302, headers });
+  // /ops itself starts Google when there is no session. There is no /ops/login.
+  if (!session && url.pathname === "/ops" && request.method === "GET") {
+    return beginGoogle(oauth, secure, url.hostname, redirectUri, "https://mamoru.lol/ops");
+  }
+  if (
+    !session &&
+    (url.pathname === "/ops/landing" || url.pathname === "/ops/landing/") &&
+    request.method === "GET"
+  ) {
+    if (isOpen()) return notFound();
+    return beginGoogle(
+      oauth,
+      secure,
+      url.hostname,
+      redirectUri,
+      "https://mamoru.lol/ops/landing",
+    );
   }
 
   // Return from Google. Any doubt sends to the root with no session.
   if (url.pathname === "/ops/callback" && request.method === "GET") {
-    const clear = [clearOauthCookie(secure)];
+    const clear = [clearOauthCookie(secure, url.hostname)];
     const stored = await openOauthState(oauth.sessionSecret, cookieHeader);
     const code = url.searchParams.get("code") ?? "";
     const state = url.searchParams.get("state") ?? "";
@@ -375,7 +396,7 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
     const identity = await verifyIdToken(idToken, oauth.clientId, stored.nonce);
     if (!identity || !isAllowed(identity.email)) return toRoot(request, clear);
     const token = await sealSession(oauth.sessionSecret, identity.email);
-    const next = safeAppNext(stored.next ?? null);
+    const next = allowedReturn(stored.next);
     const sessionSet = sessionCookie(token, secure, url.hostname);
     if (next) {
       const headers = new Headers({
@@ -390,17 +411,18 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
     return redirectOps(request, "", [...clear, sessionSet]);
   }
 
-  if (!session) return toRoot(request);
+  if (!session) return notFound();
 
   // A stale session whose address was later removed from the allowlist ends here.
   if (!isAllowed(session.email)) {
-    return toRoot(request, [clearSessionCookie(secure, url.hostname)]);
+    return notFound();
   }
 
   if (
     (url.pathname === "/ops/landing" || url.pathname === "/ops/landing/") &&
     request.method === "GET"
   ) {
+    if (isOpen()) return notFound();
     return serveSite(request, env, true);
   }
 
@@ -534,21 +556,18 @@ async function serveSite(request: Request, env: Env, preview: boolean): Promise<
 
 const APP_HOST = "app.mamoru.lol";
 
-/** Only the app host, and never the /app path. */
-function safeAppNext(raw: string | null): string | null {
-  if (!raw) return null;
-  let dest: URL;
-  try {
-    dest = new URL(raw);
-  } catch {
-    return null;
-  }
-  if (dest.protocol !== "https:" || dest.hostname !== APP_HOST) return null;
-  if (dest.username || dest.password) return null;
-  const path = dest.pathname.replace(/\/+$/, "") || "/";
-  if (path === "/app" || path.startsWith("/app/")) return null;
-  dest.hash = "";
-  return dest.toString();
+const RETURN_TO = new Set([
+  "https://mamoru.lol/ops",
+  "https://mamoru.lol/ops/landing",
+  "https://app.mamoru.lol/",
+  "https://app.mamoru.lol/onboarding",
+  "https://app.mamoru.lol/dashboard",
+]);
+
+function allowedReturn(raw: string | null | undefined): string | null {
+  if (!raw || !RETURN_TO.has(raw)) return null;
+  if (raw === "https://mamoru.lol/ops/landing" && isOpen()) return null;
+  return raw;
 }
 
 function appPageAsset(pathname: string): string | null {
@@ -573,32 +592,29 @@ export default {
       return Response.redirect(dest.toString(), 308);
     }
 
-    // /app is not a public path. The app lives at app.mamoru.lol.
-    if (lower === "/app" || lower.startsWith("/app/")) {
-      const rest = `/${lower.replace(/^\/app\/?/, "")}`.replace(/\/+$/, "") || "/";
-      const dest = new URL(request.url);
-      dest.protocol = "https:";
-      dest.hostname = APP_HOST;
-      dest.pathname = rest;
-      return Response.redirect(dest.toString(), 308);
-    }
+    // /app does not exist. Not on the apex, not on the app host.
+    if (lower === "/app" || lower.startsWith("/app/")) return notFound();
 
     if (host === APP_HOST) {
-      if (lower === "/ops" || lower.startsWith("/ops/")) {
-        const dest = new URL(request.url);
-        dest.protocol = "https:";
-        dest.hostname = "mamoru.lol";
-        return Response.redirect(dest.toString(), 308);
-      }
+      const page = appPageAsset(path);
       if (!isOpen()) {
         const oauth = oauthConfig(env);
         const session = oauth
           ? await openSession(oauth.sessionSecret, request.headers.get("cookie"))
           : null;
-        if (!oauth || !session || !isAllowed(session.email)) {
-          const login = new URL("https://mamoru.lol/ops/login");
-          login.searchParams.set("next", `https://${APP_HOST}${path}${url.search}`);
-          return Response.redirect(login.toString(), 302);
+        if (!session || !isAllowed(session.email)) {
+          if (!oauth || !page) return notFound();
+          const next =
+            page === "/app/index.html"
+              ? "https://app.mamoru.lol/"
+              : `https://app.mamoru.lol${path.replace(/\/+$/, "")}`;
+          return beginGoogle(
+            oauth,
+            secureRequest(request),
+            host,
+            "https://mamoru.lol/ops/callback",
+            next,
+          );
         }
       }
       const assetPath = appPageAsset(path);
@@ -616,11 +632,7 @@ export default {
       }
     }
 
-    if (lower === "/ops" || lower.startsWith("/ops/")) {
-      if (path !== lower) {
-        url.pathname = lower;
-        return Response.redirect(url.toString(), 308);
-      }
+    if (path === "/ops" || path.startsWith("/ops/")) {
       return handleOps(request, env);
     }
 

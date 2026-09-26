@@ -163,12 +163,12 @@ export function clearSessionCookie(secure: boolean, host = ""): string {
   return cookie(COOKIE, "", secure, 0, "/", sessionDomain(host));
 }
 
-export function oauthCookie(token: string, secure: boolean): string {
-  return cookie(OAUTH, token, secure, OAUTH_MAX_AGE);
+export function oauthCookie(token: string, secure: boolean, host = ""): string {
+  return cookie(OAUTH, token, secure, OAUTH_MAX_AGE, "/ops", sessionDomain(host));
 }
 
-export function clearOauthCookie(secure: boolean): string {
-  return cookie(OAUTH, "", secure, 0);
+export function clearOauthCookie(secure: boolean, host = ""): string {
+  return cookie(OAUTH, "", secure, 0, "/ops", sessionDomain(host));
 }
 
 export function flashCookie(flash: Flash, secure: boolean): string {

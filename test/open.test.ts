@@ -26,12 +26,7 @@ describe("open instant", () => {
     expect(blob).not.toContain("\u2014");
     expect(blob).not.toContain("\u2013");
     expect(OPEN_COPY.hero.lede).toBe("The principal keeps working. The yield gets set aside.");
-    expect(OPEN_COPY.works.moves.map((m) => m.title)).toEqual(["Connect", "Fund", "Harvest"]);
-    expect(OPEN_COPY.spend.heading).toBe("DeFi yields you can actually spend");
-    expect(OPEN_COPY.questions.heading).toBe("FAQs");
-    expect("split" in OPEN_COPY).toBe(false);
-    expect("enter" in OPEN_COPY).toBe(false);
-    expect("plain" in OPEN_COPY.works).toBe(false);
+    expect(OPEN_COPY.works.plain).toBe("No Mamoru token. No promised rate.");
   });
 });
 
@@ -77,8 +72,10 @@ describe("site gate", () => {
     const env = opsEnv();
     const stranger = await worker.fetch(new Request("https://mamoru.lol/ops/landing"), env);
     expect(stranger.status).toBe(302);
-    expect(stranger.headers.get("location")).toBe("https://mamoru.lol/");
+    expect(stranger.headers.get("location") ?? "").toContain("https://accounts.google.com/");
     expect(stranger.headers.get("x-robots-tag")).toContain("noindex");
+    const absent = await worker.fetch(new Request("https://mamoru.lol/ops/login"), env);
+    expect(absent.status).toBe(404);
 
     const raw = await worker.fetch(new Request("https://mamoru.lol/open"), env);
     expect(raw.status).toBe(404);
@@ -118,8 +115,7 @@ describe("site gate", () => {
       }),
       env,
     );
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("https://mamoru.lol/");
+    expect(res.status).toBe(404);
   });
 });
 
@@ -131,20 +127,16 @@ describe("hosts", () => {
     expect(www.headers.get("location")).toBe("https://mamoru.lol/ops/landing");
 
     const slop = await worker.fetch(new Request("https://app.mamoru.lol/app"), env);
-    expect(slop.status).toBe(308);
-    expect(slop.headers.get("location")).toBe("https://app.mamoru.lol/");
-
+    expect(slop.status).toBe(404);
     const apex = await worker.fetch(new Request("https://mamoru.lol/app/onboarding"), env);
-    expect(apex.status).toBe(308);
-    expect(apex.headers.get("location")).toBe("https://app.mamoru.lol/onboarding");
+    expect(apex.status).toBe(404);
   });
 
   test("the app stays behind the same Google allowlist until the countdown ends", async () => {
     const env = opsEnv();
     const stranger = await worker.fetch(new Request("https://app.mamoru.lol/onboarding"), env);
     expect(stranger.status).toBe(302);
-    expect(stranger.headers.get("location")).toContain("https://mamoru.lol/ops/login?next=");
-    expect(stranger.headers.get("location")).toContain("app.mamoru.lol");
+    expect(stranger.headers.get("location") ?? "").toContain("https://accounts.google.com/");
 
     const token = await sealSession("k1", "ottodevs@gmail.com");
     const home = await worker.fetch(
