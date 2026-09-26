@@ -3,7 +3,6 @@ import Base from "../layouts/Base.astro";
 import { APP_HREF, OPEN_COPY as copy } from "../open-copy";
 
 const emailHref = `mailto:${copy.footer.email}`;
-const leave = !APP_HREF.startsWith("#");
 ---
 <Base title={copy.title} description={copy.description} canonical="https://mamoru.lol/">
   <a class="skip" href="#content">Skip to content</a>
@@ -33,34 +32,26 @@ const leave = !APP_HREF.startsWith("#");
       <a class="cta" href={APP_HREF}>{copy.cta}</a>
     </section>
 
-    <section class="band" id="split" aria-labelledby="split-title">
-      <div class="wrap">
-        <h2 id="split-title">{copy.split.heading}</h2>
-        <div class="pair">
-          <div>
-            <p class="name">{copy.split.principal.name}</p>
-            <p class="body">{copy.split.principal.body}</p>
-          </div>
-          <div>
-            <p class="name">{copy.split.yield.name}</p>
-            <p class="body">{copy.split.yield.body}</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
     <section class="band" id="works" aria-labelledby="works-title">
-      <div class="prose">
+      <div class="wrap">
         <h2 id="works-title">{copy.works.heading}</h2>
-        <ol class="moves">
-          {copy.works.moves.map((move) => (
-            <li>
-              <p class="name">{move.title}</p>
+        <ol class="cards">
+          {copy.works.moves.map((move, index) => (
+            <li class="card">
+              <p class="step">{String(index + 1).padStart(2, "0")}</p>
+              <h3 class="name">{move.title}</h3>
               <p class="body">{move.body}</p>
             </li>
           ))}
         </ol>
-        <p class="plain">{copy.works.plain}</p>
+      </div>
+    </section>
+
+    <section class="band" id="spend" aria-labelledby="spend-title">
+      <div class="prose">
+        <h2 id="spend-title">{copy.spend.heading}</h2>
+        <p class="body">{copy.spend.body}</p>
+        <a class="cta spend-cta" href={APP_HREF}>{copy.cta}</a>
       </div>
     </section>
 
@@ -71,23 +62,27 @@ const leave = !APP_HREF.startsWith("#");
           {copy.questions.items.map((item) => (
             <details class="qa">
               <summary>{item.q}</summary>
-              {item.q === "How do I reach you?" ? (
-                <p class="body"><a class="mail" href={emailHref}>{item.a}</a></p>
-              ) : (
-                <p class="body">{item.a}</p>
-              )}
+              {item.a.map((para) => (
+                <p class="body">{para}</p>
+              ))}
+              {"reach" in item && item.reach ? (
+                <p class="body reach">
+                  {item.reach.map((link) => (
+                    <a
+                      class="mail"
+                      href={link.href}
+                      {...(link.href.startsWith("http")
+                        ? { target: "_blank", rel: "noopener noreferrer" }
+                        : {})}
+                    >
+                      {link.label}
+                    </a>
+                  ))}
+                </p>
+              ) : null}
             </details>
           ))}
         </div>
-      </div>
-    </section>
-
-    <section class="band enter" id="enter" aria-labelledby="enter-title">
-      <div class="prose">
-        <h2 id="enter-title">{copy.enter.heading}</h2>
-        <p class="body">{copy.enter.body}</p>
-        {leave ? <a class="cta" href={APP_HREF}>{copy.cta}</a> : null}
-        <p class="body"><a class="mail" href={emailHref}>{copy.footer.email}</a></p>
       </div>
     </section>
   </main>
@@ -283,34 +278,45 @@ const leave = !APP_HREF.startsWith("#");
     line-height: 1.45;
     max-width: 36rem;
   }
-  .plain {
-    margin: 2rem 0 0;
-    font-size: 1.125rem;
-    line-height: 1.45;
-  }
-
-  .pair {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0;
-    margin-top: clamp(1.8rem, 4vw, 2.8rem);
-  }
-  .pair > div {
-    padding-right: clamp(1.25rem, 4vw, 3rem);
-  }
-  .pair > div + div {
-    padding-right: 0;
-    padding-left: clamp(1.25rem, 4vw, 3rem);
-    border-left: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
-  }
-
-  .moves {
+  .cards {
     list-style: none;
-    margin: clamp(1.6rem, 3vw, 2.2rem) 0 0;
+    margin: clamp(1.8rem, 4vw, 2.8rem) 0 0;
     padding: 0;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
   }
-  .moves li + li {
-    margin-top: 1.6rem;
+  .card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 12.5rem;
+    padding: 1.5rem 1.5rem 1.75rem;
+    border: 1px solid var(--wash);
+    background: color-mix(in srgb, var(--paper) 82%, transparent);
+    box-sizing: border-box;
+  }
+  .step {
+    margin: 0;
+    font-size: 0.75rem;
+    letter-spacing: 0.12em;
+    color: var(--emerald);
+  }
+  .card .name {
+    margin: 0;
+    font-weight: 400;
+  }
+  .card .body {
+    margin: 0;
+  }
+  .spend-cta {
+    margin-top: 1.4rem;
+  }
+  .reach {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
   }
 
   .qa-list {
@@ -331,14 +337,6 @@ const leave = !APP_HREF.startsWith("#");
   .qa .body {
     margin-top: 0.7rem;
     padding-bottom: 0.35rem;
-  }
-
-  .enter .cta {
-    margin-top: 1.4rem;
-  }
-  .enter .mail {
-    display: inline-block;
-    margin-top: 1.1rem;
   }
 
   .mail {
@@ -374,6 +372,13 @@ const leave = !APP_HREF.startsWith("#");
     margin: 0;
   }
 
+  @media (min-width: 761px) {
+    .cards {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1.5rem;
+    }
+  }
+
   @media (max-width: 760px) {
     .nav {
       display: grid;
@@ -401,18 +406,8 @@ const leave = !APP_HREF.startsWith("#");
       gap: 0.85rem;
       flex-wrap: wrap;
     }
-    .pair {
-      grid-template-columns: 1fr;
-    }
-    .pair > div {
-      padding-right: 0;
-    }
-    .pair > div + div {
-      margin-top: 1.6rem;
-      padding-top: 1.6rem;
-      padding-left: 0;
-      border-left: 0;
-      border-top: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
+    .card {
+      min-height: 0;
     }
     .foot {
       align-items: flex-start;

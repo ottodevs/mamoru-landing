@@ -10,81 +10,77 @@ export const OPEN_COPY = {
   title: "Mamoru",
   description: "The principal keeps working. The yield gets set aside.",
   nav: [
-    { href: "#split", label: "The split" },
     { href: "#works", label: "How it works" },
-    { href: "#questions", label: "Questions" },
+    { href: "#questions", label: "FAQs" },
   ],
-  cta: "Open app",
+  cta: "Launch APP",
   hero: {
     line1: "APY.",
     line2: "DELIVERED.",
     lede: "The principal keeps working. The yield gets set aside.",
   },
-  split: {
-    heading: "Two places.",
-    principal: {
-      name: "The principal",
-      body: "It stays in your account and keeps working.",
-    },
-    yield: {
-      name: "The yield",
-      body: "Only what has been realized is set aside.",
-    },
-  },
   works: {
     heading: "How it works",
     moves: [
       {
-        title: "Recover access first.",
-        body: "You can get back in before anything is deposited.",
+        title: "Connect",
+        body: "Connect your wallet in one click or log in with your email. Mamoru sets up a dedicated sub-account for your agent.",
       },
       {
-        title: "The account is yours.",
-        body: "Capital sits in a smart account you control. Mamoru does not hold it.",
+        title: "Fund",
+        body: "Deposit the ETH you want to put to work. The agent operates programmatically with that capital, leaving your main wallet untouched.",
       },
       {
-        title: "Uniswap is the venue.",
-        body: "Quotes, swaps, and liquidity positions. Nothing else.",
-      },
-      {
-        title: "Yield is what gets saved.",
-        body: "When it is realized, that part is set aside. The principal stays at work.",
+        title: "Harvest",
+        body: "Yield is automatically harvested from the pools, converted to USDC, and sent straight to the wallet of your choice.",
       },
     ],
-    plain: "No Mamoru token. No promised rate.",
+  },
+  spend: {
+    heading: "DeFi yields you can actually spend",
+    body: "No more endless autocompounding that leaves you with no real value. Mamoru captures raw DeFi yield, converts it to stablecoins, and sends it to your pocket while your principal works.",
   },
   questions: {
-    heading: "Questions",
+    heading: "FAQs",
     items: [
       {
         q: "Who holds the money?",
-        a: "You do. It sits in a smart account under your control. Mamoru does not take custody.",
-      },
-      {
-        q: "What gets set aside?",
-        a: "Only realized yield. The principal is not moved into savings.",
+        a: ["You do. It sits in a smart account under your control. Mamoru does not take custody."],
       },
       {
         q: "Where does a position live?",
-        a: "On Uniswap. Mamoru quotes, opens, and adjusts there.",
+        a: ["On Uniswap. Mamoru quotes, opens, and adjusts positions there transparently."],
+      },
+      {
+        q: "What gets set aside?",
+        a: ["Only realized yield. Your principal stays dedicated to generating returns."],
+      },
+      {
+        q: "Can I withdraw my funds at any time?",
+        a: [
+          "Yes. There are no lockup periods. You can pause the agent anytime or exit the pools and withdraw your principal or stablecoin earnings whenever you want.",
+        ],
       },
       {
         q: "Is there a token?",
-        a: "No.",
+        a: ["No."],
       },
       {
-        q: "What happens to an email I already left?",
-        a: "It stays with us. We do not rent the list, and we do not send anything else.",
+        q: "What happens to the email I used to log in?",
+        a: [
+          "It stays strictly with us for account access. We never rent or sell lists, and we hate spam as much as you do.",
+          "It stays with us. We do not rent the list, and we do not send anything else.",
+        ],
       },
       {
         q: "How do I reach you?",
-        a: "hi@mamoru.lol",
+        a: [],
+        reach: [
+          { label: "hi@mamoru.lol", href: "mailto:hi@mamoru.lol" },
+          { label: "X @entermamoru", href: "https://x.com/entermamoru" },
+        ],
       },
     ],
-  },
-  enter: {
-    heading: "Your account",
-    body: "Recover access before you deposit. The principal works in your account.",
   },
   footer: {
     name: "Mamoru",

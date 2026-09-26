@@ -26,7 +26,12 @@ describe("open instant", () => {
     expect(blob).not.toContain("\u2014");
     expect(blob).not.toContain("\u2013");
     expect(OPEN_COPY.hero.lede).toBe("The principal keeps working. The yield gets set aside.");
-    expect(OPEN_COPY.works.plain).toBe("No Mamoru token. No promised rate.");
+    expect(OPEN_COPY.works.moves.map((m) => m.title)).toEqual(["Connect", "Fund", "Harvest"]);
+    expect(OPEN_COPY.spend.heading).toBe("DeFi yields you can actually spend");
+    expect(OPEN_COPY.questions.heading).toBe("FAQs");
+    expect("split" in OPEN_COPY).toBe(false);
+    expect("enter" in OPEN_COPY).toBe(false);
+    expect("plain" in OPEN_COPY.works).toBe(false);
   });
 });
 
