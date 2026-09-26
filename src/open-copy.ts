@@ -29,7 +29,7 @@ const MIX = [
 
 export const OPEN_COPY = {
   title: "Mamoru",
-  description: "The principal keeps working. The yield gets set aside.",
+  description: "The principal keeps working. Yield is reinvested until you transfer.",
   nav: [
     { href: "#works", label: "How it works" },
     { href: "#questions", label: "FAQs" },
@@ -50,7 +50,7 @@ export const OPEN_COPY = {
       {
         title: "What's next?",
         body: [
-          "Capital will follow 50%-35%-15% rule and rewards will be nurture stablecoin Pool.",
+          "Yield is reinvested. You can transfer part or all of it whenever you want.",
         ],
         mix: false,
       },
@@ -67,7 +67,7 @@ export const OPEN_COPY = {
   hero: {
     line1: "APY",
     line2: "DELIVERED",
-    lede: "The principal keeps working. The yield gets set aside.",
+    lede: "The principal keeps working. Yield is reinvested until you transfer.",
   },
   works: {
     heading: "How it works",
@@ -82,7 +82,7 @@ export const OPEN_COPY = {
       },
       {
         title: "Harvest",
-        body: "Yield is automatically harvested from the pools, converted to USDC, and sent straight to the wallet of your choice.",
+        body: "Yield is harvested and reinvested. It stays at work until you transfer.",
       },
     ],
     scene: {
@@ -97,7 +97,7 @@ export const OPEN_COPY = {
   },
   spend: {
     heading: "DeFi yield for the real world",
-    body: "No more yield that just keeps stacking onchain. Mamoru turns your DeFi yield into stablecoins you can actually use while your principal keeps working.",
+    body: "Yield comes back as stablecoins and is reinvested. Transfer it to your account whenever you want.",
   },
   allocation: {
     eyebrow: "Portfolio allocation",
@@ -117,13 +117,15 @@ export const OPEN_COPY = {
         a: ["On Uniswap. Mamoru quotes, opens, and adjusts positions there transparently."],
       },
       {
-        q: "What gets set aside?",
-        a: ["Only realized yield. Your principal stays dedicated to generating returns."],
+        q: "When do funds leave?",
+        a: [
+          "When you transfer. Part or all of the funds leave the allocations and go to your account. Until then, yield is reinvested.",
+        ],
       },
       {
         q: "Can I withdraw my funds at any time?",
         a: [
-          "Yes. There are no lockup periods. You can pause the agent anytime or exit the pools and withdraw your principal or stablecoin earnings whenever you want.",
+          "Yes. There is no lockup. Transfer part or all of it to your account whenever you want.",
         ],
       },
       {

@@ -30,7 +30,9 @@ describe("open instant", () => {
     const blob = JSON.stringify(OPEN_COPY);
     expect(blob).not.toContain("\u2014");
     expect(blob).not.toContain("\u2013");
-    expect(OPEN_COPY.hero.lede).toBe("The principal keeps working. The yield gets set aside.");
+    expect(OPEN_COPY.hero.lede).toBe(
+      "The principal keeps working. Yield is reinvested until you transfer.",
+    );
     expect(OPEN_COPY.works.moves.map((m) => m.title)).toEqual(["Connect", "Fund", "Harvest"]);
     expect(OPEN_COPY.spend.heading).toBe("DeFi yield for the real world");
     expect(OPEN_COPY.questions.heading).toBe("FAQs");
@@ -44,7 +46,7 @@ describe("open instant", () => {
     ]);
     expect(OPEN_COPY.onboard.screens[0].body[0]).toBe("Send the ETH you want to invest.");
     expect(OPEN_COPY.onboard.screens[1].body[0]).toBe(
-      "Capital will follow 50%-35%-15% rule and rewards will be nurture stablecoin Pool.",
+      "Yield is reinvested. You can transfer part or all of it whenever you want.",
     );
     expect(OPEN_COPY.onboard.screens[2].body).toEqual([
       "No forced lockups or third-party dependencies.",
