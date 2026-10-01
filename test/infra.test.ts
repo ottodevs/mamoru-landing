@@ -14,9 +14,11 @@ import {
   sqrtPriceX96ToPrice,
   valuePosition,
 } from "../src/uniswap-math";
-import { USDC_ADDRESS, WETH_ADDRESS } from "../src/chain-addresses";
+import { CBBTC_ADDRESS as CBBTC, USDC_ADDRESS, WETH_ADDRESS } from "../src/chain-addresses";
 import { OPS_SECTIONS, renderNav, sealSession } from "../src/ops";
-import { renderInfra } from "../src/ops-infra";
+import { noticeFor, renderInfra } from "../src/ops-infra";
+import { chooseReading, type InfraReading, isComplete, loadInfraReading } from "../src/infra-cache";
+import { captureDaily, PARTIAL_MARK, rowFromSnapshot, snapshotHasChain, upsertSql } from "../src/metrics-store";
 import type { D1Db, D1PreparedStatement, AccountRow } from "../src/d1-infra";
 import type { BaseClient } from "../src/chain-client";
 import {
@@ -218,7 +220,12 @@ function fakeClient(opts: {
   balances?: Record<string, bigint>;
   canned?: Canned[];
   seenCalls?: { address: string; functionName: string; args?: readonly unknown[] }[];
+  /** Calls to these function names fail the first time they are asked, then answer. */
+  failOnce?: string[];
+  /** Calls to these function names for this address argument always fail. */
+  alwaysFail?: { functionName: string; arg0: string }[];
 }): BaseClient {
+  const failedOnce = new Set<string>();
   const table = new Map((opts.canned ?? []).map((c) => [callKey(c.address, c.functionName, c.args), c.result]));
   return {
     async getGasPrice() {
@@ -232,6 +239,13 @@ function fakeClient(opts: {
       return contracts.map((c) => {
         opts.seenCalls?.push(c);
         const key = callKey(c.address, c.functionName, c.args);
+        if (opts.alwaysFail?.some((f) => f.functionName === c.functionName && c.args?.[0] === f.arg0)) {
+          return { status: "failure", error: new Error("rate limited") };
+        }
+        if (opts.failOnce?.includes(c.functionName) && !failedOnce.has(key)) {
+          failedOnce.add(key);
+          return { status: "failure", error: new Error("rate limited") };
+        }
         if (!table.has(key)) return { status: "failure", error: new Error(`no canned result: ${key}`) };
         return { status: "success", result: table.get(key) };
       });
@@ -361,68 +375,284 @@ describe("infra-snapshot.ts", () => {
   });
 });
 
-describe("ops-infra.ts render", () => {
-  test("renderInfra shows the relayer, status, cost table, and the script nonce", () => {
-    const snapshot: InfraSnapshot = {
-      asOf: "2026-10-01T12:00:00.000Z",
-      ethUsd: 2500,
-      btcUsd: 60000,
-      relayer: {
-        address: RELAYER,
-        basescanUrl: "https://basescan.org/address/" + RELAYER,
-        ethBalance: 0.0001,
-        usd: 0.25,
-        status: "empty",
+function partialFixture(opts: { failOnce?: string[]; alwaysFail?: { functionName: string; arg0: string }[] }) {
+  const sqrtPriceX96 = sqrtPriceX96For(2500, 18, 6);
+  const client = fakeClient({
+    gasPriceWei: 10_000_000n,
+    balances: { [RELAYER.toLowerCase()]: 5_000_000_000_000_000n },
+    ...opts,
+    canned: [
+      { address: FACTORY, functionName: "getPool", args: [USDC_ADDRESS, WETH_ADDRESS, 500], result: WETH_POOL },
+      { address: FACTORY, functionName: "getPool", args: [USDC_ADDRESS, CBBTC, 500], result: "0x0000000000000000000000000000000000000000" },
+      { address: WETH_POOL, functionName: "slot0", result: [sqrtPriceX96, 0] },
+      { address: MULTICALL3, functionName: "getEthBalance", args: [ACC_IDLE], result: 500_000_000_000_000n },
+      { address: USDC_ADDRESS, functionName: "balanceOf", args: [ACC_IDLE], result: 47_000_000n },
+      { address: NPM, functionName: "balanceOf", args: [ACC_IDLE], result: 0n },
+      { address: MULTICALL3, functionName: "getEthBalance", args: [ACC_LP], result: 500_000_000_000_000n },
+      { address: USDC_ADDRESS, functionName: "balanceOf", args: [ACC_LP], result: 1_000_000n },
+      { address: NPM, functionName: "balanceOf", args: [ACC_LP], result: 1n },
+      { address: NPM, functionName: "tokenOfOwnerByIndex", args: [ACC_LP, 0n], result: 10n },
+      {
+        address: NPM,
+        functionName: "positions",
+        args: [10n],
+        result: [0n, "0x0", WETH_ADDRESS, USDC_ADDRESS, 500, -1000, 1000, 5_000_000_000n, 0n, 0n, 0n, 0n],
       },
-      cost: {
-        gasPriceGwei: 0.01,
-        deployEth: 0.000004,
-        deployUsd: 0.01,
-        activationEth: 0.000139,
-        activationUsd: 0.35,
-        reserveEth: 0.0005,
-        reserveUsd: 1.25,
-        totalEth: 0.000643,
-        totalUsd: 1.6,
-        accountsFunded: 0,
-      },
-      accounts: {
-        totalUsers: 39,
-        totalAccounts: 39,
-        last7d: 2,
-        rows: [],
-        tvlUsd: 50,
-        idleUsdcUsd: 46.9,
-        lpUsd: 3.1,
-        gasReservesEth: 0.01,
-      },
-    };
-    const html = renderInfra({ snapshot, csrf: "csrf-token", nonce: "nonce-abc" });
-    expect(html).toContain("Infra &amp; costs");
-    expect(html).toContain("EMPTY");
-    expect(html).toContain(RELAYER.slice(0, 6));
-    expect(html).toContain('<script nonce="nonce-abc">');
-    expect(html).toContain("<strong>Infra</strong>");
-    expect(html).toContain("39 users");
+      { address: FACTORY, functionName: "getPool", args: [WETH_ADDRESS, USDC_ADDRESS, 500], result: WETH_POOL },
+    ],
+  });
+  const accounts: AccountRow[] = [
+    { account_key: "key-idle-0001", user_id: "u1", address: ACC_IDLE, created_at: "2026-09-20T00:00:00Z" },
+    { account_key: "key-lp-00003", user_id: "u3", address: ACC_LP, created_at: "2026-09-22T00:00:00Z" },
+  ];
+  return { client, db: fakeD1({ total_users: 2, total_accounts: 2, last7d: 2 }, accounts) };
+}
+
+describe("partial reads", () => {
+  test("a clean read is complete: no partial flag, nothing marked unread", async () => {
+    const { client, db } = partialFixture({});
+    const snapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client);
+    expect(snapshot.partial).toBeUndefined();
+    expect(snapshot.accounts?.unreadAccounts).toBeUndefined();
+    expect(snapshot.accounts?.rows.some((r) => r.unread)).toBe(false);
+    expect(snapshot.accounts?.idleUsdcUsd).toBeCloseTo(48, 9);
+    expect(isComplete(snapshot)).toBe(true);
   });
 
-  test("renderInfra shows an error note instead of crashing when RPC is down", () => {
-    const snapshot: InfraSnapshot = {
-      asOf: "2026-10-01T12:00:00.000Z",
-      rpcError: "Base RPC is unreachable right now.",
-      ethUsd: null,
-      btcUsd: null,
-      relayer: null,
-      cost: null,
-      accounts: null,
+  test("calls that fail once are retried and the snapshot comes back complete", async () => {
+    const { client, db } = partialFixture({ failOnce: ["balanceOf", "getEthBalance", "positions", "slot0", "getPool"] });
+    const snapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client);
+    expect(snapshot.partial).toBeUndefined();
+    expect(snapshot.ethUsd).toBeCloseTo(2500, 4);
+    expect(snapshot.accounts?.idleUsdcUsd).toBeCloseTo(48, 9);
+    expect(snapshot.accounts?.rows.find((r) => r.address === ACC_LP)?.positions).toBe(1);
+  });
+
+  test("a balance that keeps failing marks the account unread and the snapshot partial; it is never a silent zero", async () => {
+    const { client, db } = partialFixture({ alwaysFail: [{ functionName: "balanceOf", arg0: ACC_IDLE }] });
+    const snapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client);
+    expect(snapshot.partial).toEqual({ unreadAccounts: 1, parts: expect.arrayContaining(["balances", "positions"]) });
+    expect(snapshot.accounts?.unreadAccounts).toBe(1);
+    const idle = snapshot.accounts?.rows.find((r) => r.address === ACC_IDLE);
+    expect(idle?.unread).toBe(true);
+    expect(snapshot.accounts?.rows.find((r) => r.address === ACC_LP)?.unread).toBeUndefined();
+    expect(isComplete(snapshot)).toBe(false);
+    // The Overview's daily capture treats the day as partial: counts only, value fields untouched.
+    expect(snapshotHasChain(snapshot)).toBe(false);
+    const row = rowFromSnapshot(snapshot, "2026-10-02", 0);
+    expect(row.captured_at).toBe(PARTIAL_MARK);
+    expect(row.tvl_usd).toBe(0);
+    expect(upsertSql(row)).not.toContain("tvl_usd = excluded.tvl_usd");
+  });
+
+  test("a position that cannot be read marks its account, and a missing ETH price marks prices", async () => {
+    const lost = partialFixture({ alwaysFail: [{ functionName: "positions", arg0: 10n as unknown as string }] });
+    const snapshot = await computeInfraSnapshot({ MAMORU_DB: lost.db }, lost.client);
+    expect(snapshot.partial?.unreadAccounts).toBe(1);
+    expect(snapshot.partial?.parts).toContain("positions");
+    expect(snapshot.accounts?.rows.find((r) => r.address === ACC_LP)?.unread).toBe(true);
+
+    const blind = partialFixture({ alwaysFail: [{ functionName: "getPool", arg0: USDC_ADDRESS }] });
+    const unpriced = await computeInfraSnapshot({ MAMORU_DB: blind.db }, blind.client);
+    expect(unpriced.ethUsd).toBeNull();
+    expect(unpriced.partial?.parts).toContain("prices");
+    expect(unpriced.relayer?.usd).toBeNull();
+  });
+});
+
+describe("infra-cache.ts last good reading", () => {
+  const good = (asOf: string): InfraSnapshot => ({ asOf, ethUsd: 2500, btcUsd: null, relayer: null, cost: null, accounts: null });
+  const down = (asOf: string): InfraSnapshot => ({ ...good(asOf), rpcError: "Base RPC is unreachable right now.", ethUsd: null });
+  const partial = (asOf: string): InfraSnapshot => ({ ...good(asOf), partial: { unreadAccounts: 3, parts: ["balances"] } });
+
+  function memoryKv() {
+    const store = new Map<string, string>();
+    const ttl = new Map<string, number | undefined>();
+    return {
+      store,
+      ttl,
+      kv: {
+        get: async (key: string) => store.get(key) ?? null,
+        put: async (key: string, value: string, opts?: { expirationTtl?: number }) => {
+          store.set(key, value);
+          ttl.set(key, opts?.expirationTtl);
+        },
+        delete: async (key: string) => void store.delete(key),
+        list: async () => ({ keys: [], list_complete: true }),
+      },
     };
-    const html = renderInfra({ snapshot, csrf: "csrf-token", nonce: "nonce-abc" });
-    expect(html).toContain("Base RPC is unreachable right now.");
-    // The relayer address is public (it's a server-side constant, shown on BaseScan too),
-    // and the top-up widget must still work even when our own RPC read failed.
+  }
+
+  test("chooseReading: complete wins, else the last good one, else what there is", () => {
+    expect(chooseReading(good("t2"), good("t1"))).toMatchObject({ snapshot: { asOf: "t2" } });
+    expect(chooseReading(good("t2"), good("t1")).stale).toBeUndefined();
+    expect(chooseReading(down("t2"), good("t1"))).toMatchObject({ snapshot: { asOf: "t1" }, stale: { failedAt: "t2", reason: "unreachable" }, computed: { asOf: "t2" } });
+    expect(chooseReading(partial("t2"), good("t1")).stale).toEqual({ failedAt: "t2", reason: "partial" });
+    const never = chooseReading(down("t2"), null);
+    expect(never.snapshot.rpcError).toBeTruthy();
+    expect(never.stale).toBeUndefined();
+  });
+
+  test("a failed or partial read never replaces the last complete one", async () => {
+    const { kv, store, ttl } = memoryKv();
+    const first = await loadInfraReading({ kv }, true, async () => good("t1"));
+    expect(first.stale).toBeUndefined();
+    expect(JSON.parse(store.get("ops:infra:v1:good")!).asOf).toBe("t1");
+    expect(ttl.get("ops:infra:v1:good")).toBeGreaterThan(60 * 60 * 24);
+
+    const second = await loadInfraReading({ kv }, true, async () => partial("t2"));
+    expect(second.snapshot.asOf).toBe("t1");
+    expect(second.stale).toEqual({ failedAt: "t2", reason: "partial" });
+    expect(second.computed?.asOf).toBe("t2");
+    expect(JSON.parse(store.get("ops:infra:v1:good")!).asOf).toBe("t1");
+
+    // A cache hit keeps saying it is the fallback, without recomputing.
+    const third = await loadInfraReading({ kv }, false, async () => {
+      throw new Error("must not recompute");
+    });
+    expect(third.snapshot.asOf).toBe("t1");
+    expect(third.stale?.reason).toBe("partial");
+
+    const fourth = await loadInfraReading({ kv }, true, async () => down("t3"));
+    expect(fourth.snapshot.asOf).toBe("t1");
+    expect(fourth.stale?.reason).toBe("unreachable");
+
+    const fifth = await loadInfraReading({ kv }, true, async () => good("t4"));
+    expect(fifth.snapshot.asOf).toBe("t4");
+    expect(fifth.stale).toBeUndefined();
+    expect(JSON.parse(store.get("ops:infra:v1:good")!).asOf).toBe("t4");
+  });
+
+  test("with no good reading ever, the failed one is shown as it is", async () => {
+    const { kv, store } = memoryKv();
+    const reading = await loadInfraReading({ kv }, true, async () => down("t1"));
+    expect(reading.snapshot.rpcError).toBeTruthy();
+    expect(reading.stale).toBeUndefined();
+    expect(store.has("ops:infra:v1:good")).toBe(false);
+  });
+
+  test("the daily capture records what was read now, not the fallback shown on the page", async () => {
+    const outcome = await captureDaily(
+      { db: fakeD1({ total_users: 1, total_accounts: 1, last7d: 1 }, []) },
+      { now: new Date("2026-10-02T10:00:00Z"), load: async () => chooseReading(down("t2"), good("t1")) },
+    );
+    expect(outcome.snapshot?.asOf).toBe("t2");
+  });
+});
+
+const HEALTHY: InfraSnapshot = {
+  asOf: "2026-10-01T12:00:00.000Z",
+  ethUsd: 2500,
+  btcUsd: 60000,
+  relayer: { address: RELAYER, basescanUrl: "https://basescan.org/address/" + RELAYER, ethBalance: 0.0251, usd: 62.75, status: "ok" },
+  cost: {
+    gasPriceGwei: 0.01,
+    deployEth: 0.000004,
+    deployUsd: 0.01,
+    activationEth: 0.000139,
+    activationUsd: 0.35,
+    reserveEth: 0.0005,
+    reserveUsd: 1.25,
+    totalEth: 0.000643,
+    totalUsd: 1.6,
+    totalWei: "643000000000000",
+    accountsFunded: 39,
+  },
+  accounts: {
+    totalUsers: 39,
+    totalAccounts: 39,
+    last7d: 2,
+    rows: [
+      { accountKey: "k1", address: ACC_IDLE, basescanUrl: "#", ethBalance: 0.0005, usdcIdle: 46.9, lpUsd: 0, positions: 0, inRange: 0 },
+      { accountKey: "k2", address: ACC_LP, basescanUrl: "#", ethBalance: 0.0005, usdcIdle: 0, lpUsd: 3.1, positions: 2, inRange: 2 },
+      { accountKey: "k3", address: ACC_ZERO, basescanUrl: "#", ethBalance: 0, usdcIdle: 0, lpUsd: 0, positions: 0, inRange: 0 },
+    ],
+    tvlUsd: 50,
+    idleUsdcUsd: 46.9,
+    lpUsd: 3.1,
+    gasReservesEth: 0.001,
+  },
+};
+const NEVER: InfraSnapshot = {
+  asOf: "2026-10-01T12:00:00.000Z",
+  rpcError: "Base RPC is unreachable right now.",
+  ethUsd: null,
+  btcUsd: null,
+  relayer: null,
+  cost: null,
+  accounts: null,
+};
+
+describe("ops-infra.ts render", () => {
+  const render = (reading: InfraReading) => renderInfra({ reading, csrf: "csrf-token", nonce: "nonce-abc", who: "ot@example.com" });
+
+  test("healthy: the relayer leads, status in words, cost ledger, accounts, and no leftovers", () => {
+    const html = render({ snapshot: HEALTHY });
+    expect(html).toContain("Infra and costs");
+    expect(html).toContain("Relayer balance");
+    expect(html).toContain(">0.0251<");
+    expect(html).toContain("Healthy");
+    expect(html).toContain("More accounts at today");
+    expect(html).toContain("The reserve is not burned.");
+    expect(html).toContain("<strong>Infra</strong>");
+    expect(html).toContain("39 users");
+    expect(html).toContain("1 more account has never been funded.");
+    expect(html).not.toContain('class="notice"');
+    expect(html).not.toContain("Coming next");
+    expect(html).not.toContain(">The list<");
+    expect(html.match(/<script nonce="nonce-abc">/g)?.length).toBe(3);
+    expect(html.match(/<script/g)?.length).toBe(3);
+    expect(noticeFor({ snapshot: HEALTHY })).toBeNull();
+  });
+
+  test("relayer empty: says so in words and funds zero accounts", () => {
+    const empty = { ...HEALTHY, relayer: { ...HEALTHY.relayer!, ethBalance: 0.000102, usd: 0.27, status: "empty" as const }, cost: { ...HEALTHY.cost!, accountsFunded: 0 } };
+    const html = render({ snapshot: empty });
+    expect(html).toContain('<b class="status-empty">Empty</b>');
+    expect(html).toContain(">0.000102<");
+    expect(html).toMatch(/Can fund<\/dt><dd class="fig-n"><span data-n="0"/);
+  });
+
+  test("last good fallback: says which reading is shown and offers Retry", () => {
+    const html = render({ snapshot: HEALTHY, stale: { failedAt: "2026-10-01T13:00:00.000Z", reason: "unreachable" } });
+    expect(html).toContain("Showing the last complete reading from 2026-10-01 12:00 UTC; a fresh read failed just now.");
+    expect(html).toContain(">Retry</button>");
+    expect(html).toContain(">0.0251<");
+    expect(render({ snapshot: HEALTHY, stale: { failedAt: "x", reason: "partial" } })).toContain("a fresh read came back incomplete just now");
+  });
+
+  test("partial with nothing to fall back on: counts the unread accounts and marks them", () => {
+    const rows = HEALTHY.accounts!.rows.map((r, i) => (i === 0 ? { ...r, unread: true } : r));
+    const partial: InfraSnapshot = {
+      ...HEALTHY,
+      partial: { unreadAccounts: 1, parts: ["balances"] },
+      accounts: { ...HEALTHY.accounts!, rows, unreadAccounts: 1 },
+    };
+    const html = render({ snapshot: partial });
+    expect(html).toContain("Some balances could not be read: 1 of 3 accounts.");
+    expect(html).toContain("not fully read");
+    expect(html).toContain("At least $50.00 held");
+    expect(html).toContain("none were counted as zero");
+  });
+
+  test("never read: the bare unreachable state, and the top-up widget still works", () => {
+    const html = render({ snapshot: NEVER });
+    expect(html).toContain("Base could not be read, and there is no earlier reading to show.");
+    expect(html).toContain("Not read yet");
+    expect(html).toContain("Not available until Base can be read.");
+    // The relayer address is a public server-side constant; sending to it must not depend on our own RPC read.
     expect(html).toContain(RELAYER);
-    expect(html).not.toContain("undefined");
-    expect(html).not.toContain("[object Object]");
+    expect(html).toContain('"costWei":null');
+    const markup = html.split('<main class="wide">')[1].split("<script")[0];
+    expect(markup).not.toContain("undefined");
+    expect(markup).not.toContain("[object Object]");
+  });
+
+  test("the page never carries an RPC URL", () => {
+    const html = render({ snapshot: HEALTHY });
+    expect(html).not.toMatch(/alchemy|publicnode|drpc/i);
+    // The only RPC URL is the public one used for the wallet's "add Base" prompt.
+    expect(html.match(/https:\/\/[a-z.]*base\.org/g)).toEqual(["https://mainnet.base.org"]);
   });
 });
 

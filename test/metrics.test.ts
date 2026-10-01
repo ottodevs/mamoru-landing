@@ -307,7 +307,7 @@ describe("metrics-store.ts", () => {
       tables: { users: SIGNUPS.users, accounts: SIGNUPS.accounts },
       first: (sql) => (sql.includes("FROM metrics_daily") ? { n: 0 } : sql.includes("account_activity") ? { n: 2 } : null),
     });
-    const outcome = await captureDaily({ db }, { now: NOW, settleYesterday: true, load: async () => snap() });
+    const outcome = await captureDaily({ db }, { now: NOW, settleYesterday: true, load: async () => ({ snapshot: snap() }) });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.backfilled).toBe(5);
@@ -324,7 +324,7 @@ describe("metrics-store.ts", () => {
 
   test("captureDaily: a table with rows is not backfilled again", async () => {
     const { db, calls } = fakeDb({ first: (sql) => (sql.includes("FROM metrics_daily") ? { n: 12 } : { n: 0 }) });
-    const outcome = await captureDaily({ db }, { now: NOW, load: async () => snap() });
+    const outcome = await captureDaily({ db }, { now: NOW, load: async () => ({ snapshot: snap() }) });
     expect(outcome.ok && outcome.backfilled).toBe(0);
     expect(calls.filter((c) => c.kind === "run")).toHaveLength(1);
   });
@@ -332,9 +332,9 @@ describe("metrics-store.ts", () => {
   test("captureDaily reports instead of throwing: no D1, unreadable counts, missing table", async () => {
     expect(await captureDaily({}, { now: NOW })).toMatchObject({ ok: false, reason: "no-db" });
     const { db } = fakeDb({ missing: ["metrics_daily"] });
-    expect(await captureDaily({ db }, { now: NOW, load: async () => snap() })).toMatchObject({ ok: false, reason: "write-failed" });
+    expect(await captureDaily({ db }, { now: NOW, load: async () => ({ snapshot: snap() }) })).toMatchObject({ ok: false, reason: "write-failed" });
     const blind = snap({ accounts: { totalUsers: 0, totalAccounts: 0, last7d: 0, rows: [], tvlUsd: 0, idleUsdcUsd: 0, lpUsd: 0, gasReservesEth: 0, error: "Could not read the accounts database." } });
-    expect(await captureDaily({ db }, { now: NOW, load: async () => blind })).toMatchObject({ ok: false, reason: "no-counts" });
+    expect(await captureDaily({ db }, { now: NOW, load: async () => ({ snapshot: blind }) })).toMatchObject({ ok: false, reason: "no-counts" });
   });
 });
 
