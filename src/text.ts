@@ -30,6 +30,21 @@ export async function sha256Hex(value: string): Promise<string> {
     .join("");
 }
 
+/** HMAC-SHA256 of `data` under `secret`, as base64url. Used for small, storage-free, derivable tokens. */
+export async function hmacB64Url(secret: string, data: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data)));
+  let bin = "";
+  for (const byte of sig) bin += String.fromCharCode(byte);
+  return btoa(bin).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
 export async function sameSecret(provided: string, expected: string): Promise<boolean> {
   const enc = new TextEncoder();
   const [a, b] = await Promise.all([
