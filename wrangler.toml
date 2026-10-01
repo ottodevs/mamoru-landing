@@ -67,7 +67,11 @@ routes = []
 services = []
 kv_namespaces = []
 
-# No cron on staging: it has no D1 binding.
+# No cron on staging: it has no D1 binding. Keep it that way: experiments'
+# exp_events writes (src/exp-store.ts) are gated on env.MAMORU_DB being
+# present, so leaving it unbound here is what makes staging's event writes
+# a guaranteed no-op — there is no binding by which it could reach prod's
+# `mamoru` database, let alone write to it.
 [env.staging.triggers]
 crons = []
 

@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { D1Db, D1PreparedStatement } from "../src/d1-infra";
+import { buildExperimentReport } from "../src/exp-report";
+import type { ExperimentDef } from "../src/experiments";
 import { sealSession } from "../src/ops";
+import { experimentsSection } from "../src/ops-experiments";
 import worker, { type Env } from "../src/worker";
 
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
@@ -117,6 +120,13 @@ describe("/ops/experiments", () => {
     expect(html).toContain('href="/?exp=hero_cta:b"');
   });
 
+  test("the goal column shows a human label, the raw event id as a title attribute, and the split as a percentage", async () => {
+    const { env, cookie } = await sessionEnv({ MAMORU_DB: fixtureDb() });
+    const html = await (await worker.fetch(get("/ops/experiments", { cookie }), env)).text();
+    expect(html).toContain('title="open_app_click">Opened the app</th>');
+    expect(html).toContain(">50%<"); // split, per variant row — not the old raw weight "1"
+  });
+
   test("fragment and document carry the same section body", async () => {
     const { env, cookie } = await sessionEnv({ MAMORU_DB: fixtureDb() });
     const doc = await (await worker.fetch(get("/ops/experiments", { cookie }), env)).text();
@@ -142,5 +152,37 @@ describe("/ops/experiments", () => {
       else stack.push(tag);
     }
     expect(stack).toEqual([]);
+  });
+});
+
+describe("display: an experiment past its endedAt reads as stopped, not running", () => {
+  const PAST: ExperimentDef = {
+    id: "fx_expired",
+    description: "fixture",
+    status: "running",
+    path: "/fixture",
+    variants: [
+      { id: "control", weight: 1 },
+      { id: "b", weight: 1 },
+    ],
+    goals: ["open_app_click"],
+    endedAt: "2026-01-01",
+  };
+  const FUTURE: ExperimentDef = { ...PAST, id: "fx_not_yet_expired", endedAt: "2099-01-01" };
+  const now = new Date("2026-06-01T00:00:00Z");
+
+  test("shows 'Stopped' with the end date, not 'Running'", () => {
+    const report = buildExperimentReport(PAST, null);
+    const view = experimentsSection([report], now);
+    expect(view.html).toContain("Stopped");
+    expect(view.html).toContain("ended 2026-01-01");
+    expect(view.html).not.toMatch(/>Running</);
+  });
+
+  test("an experiment whose endedAt has not passed still shows 'Running'", () => {
+    const report = buildExperimentReport(FUTURE, null);
+    const view = experimentsSection([report], now);
+    expect(view.html).toContain("Running");
+    expect(view.html).not.toContain("ended");
   });
 });

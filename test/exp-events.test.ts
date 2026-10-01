@@ -285,6 +285,61 @@ describe("handleExpEvent", () => {
       expect(rows).toHaveLength(1);
     });
   });
+
+  test("a draft experiment: no work is done, even for a client claiming its deterministic control assignment", async () => {
+    const draft: ExperimentDef = { ...FIXTURE, id: "fx_draft_evt", status: "draft" };
+    await withExperiment(draft, async () => {
+      const { db, rows } = fakeDb();
+      const visitorId = newVisitorId();
+      const res = await handleExpEvent(
+        post({ experiment: draft.id, variant: "control", event: "open_app_click", nonce: "" }, { cookie: `${VISITOR_COOKIE}=${visitorId}` }),
+        { MAMORU_DB: db },
+      );
+      expect([204, 404]).toContain(res.status);
+      expect(rows).toHaveLength(0);
+    });
+  });
+
+  test("a stopped experiment: no work is done", async () => {
+    const stopped: ExperimentDef = { ...FIXTURE, id: "fx_stopped_evt", status: "stopped" };
+    await withExperiment(stopped, async () => {
+      const { db, rows } = fakeDb();
+      const visitorId = newVisitorId();
+      await handleExpEvent(
+        post({ experiment: stopped.id, variant: "control", event: "open_app_click", nonce: "" }, { cookie: `${VISITOR_COOKIE}=${visitorId}` }),
+        { MAMORU_DB: db },
+      );
+      expect(rows).toHaveLength(0);
+    });
+  });
+
+  test("a running experiment past its endedAt: no work is done (behaves as stopped)", async () => {
+    const expired: ExperimentDef = { ...FIXTURE, id: "fx_expired_evt", status: "running", endedAt: "2020-01-01" };
+    await withExperiment(expired, async () => {
+      const { db, rows } = fakeDb();
+      const visitorId = newVisitorId();
+      await handleExpEvent(
+        post({ experiment: expired.id, variant: "control", event: "open_app_click", nonce: "" }, { cookie: `${VISITOR_COOKIE}=${visitorId}` }),
+        { MAMORU_DB: db },
+      );
+      expect(rows).toHaveLength(0);
+    });
+  });
+
+  test("never sets a cookie itself, on any outcome", async () => {
+    await withExperiment(FIXTURE, async () => {
+      const visitorId = newVisitorId();
+      const variant = assignVariant(FIXTURE, visitorId);
+      const { db } = fakeDb();
+      const ok = await handleExpEvent(
+        post({ experiment: FIXTURE.id, variant, event: "open_app_click", nonce: "" }, { cookie: `${VISITOR_COOKIE}=${visitorId}` }),
+        { MAMORU_DB: db },
+      );
+      expect(ok.headers.get("set-cookie")).toBeNull();
+      const rejected = await handleExpEvent(post({ experiment: "ghost" }), { MAMORU_DB: db });
+      expect(rejected.headers.get("set-cookie")).toBeNull();
+    });
+  });
 });
 
 describe("recordWaitlistSubmit", () => {

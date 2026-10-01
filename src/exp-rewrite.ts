@@ -5,6 +5,14 @@
  * with HTMLRewriter, so the build output itself never changes per variant —
  * only the response does. No flicker: the swap happens before any byte
  * reaches the browser.
+ *
+ * Byte-identical guarantee: when nothing registered on `path` is effectively
+ * running (draft, stopped, or past its `endedAt`) and no QA override applies,
+ * `applyExperiments` returns the exact Response it was given — no rewriter
+ * pass, no cookie, no Vary, no cache-control change, no script. A visitor who
+ * never meets a running experiment never gets an identifier: nothing here
+ * sets a cookie, computes a nonce, or touches a header unless there is a real
+ * reason to.
  */
 
 import type { D1Db } from "./d1-infra";
@@ -14,11 +22,13 @@ import {
   type ExperimentDef,
   type ExperimentVariant,
   experimentsForPath,
+  isRunning,
   variantById,
   variesPerVisitor,
 } from "./experiments";
 import { expNonce } from "./exp-events";
 import { recordExpEvent } from "./exp-store";
+import { randomToken } from "./google";
 import { eligibleForExperiments, newVisitorId, readVisitorId, visitorCookie } from "./exp-visitor";
 import { utcDay } from "./metrics-math";
 
@@ -33,6 +43,8 @@ export interface ExpContext {
   ctx?: Background;
   /** OPS_SESSION_SECRET, reused to derive the beacon nonce. Optional: without it the nonce check in exp-events.ts is skipped. */
   secret?: string;
+  /** Overridable for tests. Defaults to the real clock. */
+  now?: Date;
 }
 
 interface QaOverride {
@@ -66,13 +78,14 @@ function clickScript(assignments: readonly Assignment[], nonce: string): string 
   for (const a of assignments) variantOf[a.def.id] = a.variant.id;
   const payload = JSON.stringify(variantOf);
   const n = JSON.stringify(nonce);
-  return `<script>(function(){var A=${payload};var N=${n};document.addEventListener("click",function(ev){var t=ev.target&&ev.target.closest?ev.target.closest("[data-exp][data-exp-goal]"):null;if(!t)return;var exp=t.getAttribute("data-exp");var v=A[exp];if(!v)return;var body=JSON.stringify({experiment:exp,variant:v,event:t.getAttribute("data-exp-goal"),nonce:N});try{if(navigator.sendBeacon){navigator.sendBeacon("/api/exp/event",new Blob([body],{type:"text/plain"}));}else if(window.fetch){fetch("/api/exp/event",{method:"POST",body:body,headers:{"content-type":"text/plain"},keepalive:true});}}catch(e){}},true);})();</script>`;
+  return `(function(){var A=${payload};var N=${n};document.addEventListener("click",function(ev){var t=ev.target&&ev.target.closest?ev.target.closest("[data-exp][data-exp-goal]"):null;if(!t)return;var exp=t.getAttribute("data-exp");var v=A[exp];if(!v)return;var body=JSON.stringify({experiment:exp,variant:v,event:t.getAttribute("data-exp-goal"),nonce:N});try{if(navigator.sendBeacon){navigator.sendBeacon("/api/exp/event",new Blob([body],{type:"text/plain"}));}else if(window.fetch){fetch("/api/exp/event",{method:"POST",body:body,headers:{"content-type":"text/plain"},keepalive:true});}}catch(e){}},true);})();`;
 }
 
 /**
  * Resolves, rewrites, and (for a real visit) logs exposure for every
- * experiment registered on `path`. A no-op — original response untouched —
- * when nothing is registered there or the response is not HTML.
+ * experiment registered on `path`. Returns the original `response` untouched
+ * whenever nothing registered there is effectively running and no valid QA
+ * override applies — see the byte-identical guarantee above.
  */
 export async function applyExperiments(
   response: Response,
@@ -84,29 +97,42 @@ export async function applyExperiments(
   if (!defs.length) return response;
   if (!(response.headers.get("content-type") || "").includes("text/html")) return response;
 
+  const now = opts.now ?? new Date();
   const url = new URL(request.url);
   const qa = opts.qaAllowed ? parseQaOverride(url) : null;
+  const qaDef = qa ? defs.find((d) => d.id === qa.experimentId) : undefined;
+  const qaVariant = qaDef && qa ? variantById(qaDef, qa.variantId) : undefined;
+  const qaActive = Boolean(qaDef && qaVariant);
+
+  const hasPinnedWinner = (def: ExperimentDef) => Boolean(def.winner && variantById(def, def.winner));
+  // "Active" = still running, or has a winner pinned (a winner is a terminal decision: it keeps showing
+  // even after the experiment later stops or its endedAt passes — only a truly dead experiment, draft or
+  // stopped/expired with no winner ever called, gets the byte-identical pass-through below).
+  const anyActive = defs.some((d) => isRunning(d, now) || hasPinnedWinner(d));
+  if (!anyActive && !qaActive) return response;
+
   const eligible = eligibleForExperiments(request);
   const existingId = readVisitorId(request);
-  // A QA preview is a one-off look, not a counted visit: no id is read, minted, or stored for it.
-  const visitorId = qa ? null : eligible ? (existingId ?? newVisitorId()) : null;
+  // A cookie is only ever worth minting when some running experiment actually differs by visitor.
+  const needsVisitor = !qaActive && defs.some((d) => variesPerVisitor(d, now));
+  const visitorId = needsVisitor && eligible ? (existingId ?? newVisitorId()) : eligible ? existingId : null;
 
   const assignments: Assignment[] = [];
   for (const def of defs) {
-    if (qa && qa.experimentId === def.id) {
-      const v = variantById(def, qa.variantId);
-      if (v) {
-        assignments.push({ def, variant: v, forced: true });
-        continue;
-      }
+    if (qaActive && qaDef!.id === def.id) {
+      assignments.push({ def, variant: qaVariant!, forced: true });
+      continue;
     }
-    const assignedId = visitorId ? assignVariant(def, visitorId) : controlVariantId(def);
+    if (!isRunning(def, now) && !hasPinnedWinner(def)) continue; // truly dead: this hook is left exactly as authored.
+    // Ineligible (GPC/DNT/bot) always reads as control. Otherwise assignVariant() itself resolves a pinned
+    // winner regardless of visitorId — a winner needs no identifier, so visitorId may legitimately be null here.
+    const assignedId = eligible ? assignVariant(def, visitorId ?? "", now) : controlVariantId(def);
     const v = variantById(def, assignedId) ?? def.variants[0];
     if (v) assignments.push({ def, variant: v, forced: false });
   }
   if (!assignments.length) return response;
 
-  const day = utcDay(new Date());
+  const day = utcDay(now);
   const nonce = visitorId ? await expNonce(opts.secret, visitorId, day) : "";
 
   let rewriter = new HTMLRewriter();
@@ -118,35 +144,36 @@ export async function applyExperiments(
       },
     });
   }
-  if (visitorId) {
-    const script = clickScript(assignments, nonce);
-    rewriter = rewriter.on("body", {
-      element(el: { append(content: string, opts: { html: boolean }): void }) {
-        el.append(script, { html: true });
-      },
-    });
-  }
+  // A CSP nonce on the script tag itself: public pages carry no Content-Security-Policy today (nothing
+  // to loosen), so this is a forward-compatible attribute, not an active defense yet.
+  const scriptNonce = randomToken(16);
+  const script = `<script nonce="${scriptNonce}">${clickScript(assignments, nonce)}</script>`;
+  rewriter = rewriter.on("body", {
+    element(el: { append(content: string, opts: { html: boolean }): void }) {
+      el.append(script, { html: true });
+    },
+  });
 
   const rewritten = rewriter.transform(response);
   const headers = new Headers(rewritten.headers);
 
-  // Only a running experiment with live weight across more than one variant can differ by visitor;
-  // draft, stopped, and winner-pinned states are identical for everyone and stay as cacheable as before.
-  if (!qa && assignments.some((a) => variesPerVisitor(a.def))) {
+  // Only a running, un-pinned experiment can differ by visitor; a pinned winner (or one still draft/stopped
+  // elsewhere on the same path) is identical for everyone and stays as cacheable as before.
+  if (qaActive || assignments.some((a) => !a.forced && variesPerVisitor(a.def, now))) {
     headers.set("cache-control", "private, no-store");
     headers.append("vary", "Cookie");
   }
 
-  if (visitorId && !existingId) {
+  if (needsVisitor && visitorId && !existingId) {
     const cookie = visitorCookie(visitorId, url.protocol === "https:");
     if (cookie) headers.append("set-cookie", cookie);
   }
 
-  // Exposure: once per visitor per experiment per day, only for a real visit to a currently running experiment.
+  // Exposure: once per visitor per experiment per day, only for a real (non-forced) visit to a running experiment.
   if (visitorId && opts.db && opts.ctx) {
-    const at = new Date().toISOString();
+    const at = now.toISOString();
     for (const a of assignments) {
-      if (a.def.status !== "running") continue;
+      if (a.forced || !isRunning(a.def, now)) continue;
       opts.ctx.waitUntil(
         recordExpEvent(opts.db, { experiment: a.def.id, variant: a.variant.id, visitor: visitorId, event: "exposure", day, at }),
       );

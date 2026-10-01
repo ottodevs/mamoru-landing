@@ -15,7 +15,7 @@
  */
 
 import type { D1Db } from "./d1-infra";
-import { assignVariant, EXPERIMENTS, experimentById } from "./experiments";
+import { assignVariant, EXPERIMENTS, experimentById, isRunning } from "./experiments";
 import { recordExpEvent } from "./exp-store";
 import { eligibleForExperiments, readVisitorId } from "./exp-visitor";
 import type { WaitlistKv } from "./list";
@@ -91,6 +91,8 @@ export async function handleExpEvent(request: Request, env: ExpEventEnv, ctx?: B
   const def = experimentById(experiment);
   if (!def || !def.goals.includes(event)) return noContent();
   if (!def.variants.some((v) => v.id === variant)) return noContent();
+  // Not running (draft, stopped, or past endedAt): no work, regardless of what the client claims.
+  if (!isRunning(def)) return noContent();
   // The reported variant must be what this visitor is actually assigned: no spoofing another bucket's result.
   if (assignVariant(def, visitorId) !== variant) return noContent();
 
@@ -130,7 +132,7 @@ export function recordWaitlistSubmit(request: Request, env: ExpEventEnv, ctx?: B
   const day = utcDay(new Date());
   const at = new Date().toISOString();
   for (const def of EXPERIMENTS) {
-    if (def.status !== "running" || !def.goals.includes("waitlist_submit")) continue;
+    if (!isRunning(def) || !def.goals.includes("waitlist_submit")) continue;
     const variant = assignVariant(def, visitorId);
     const write = recordExpEvent(env.MAMORU_DB, {
       experiment: def.id,

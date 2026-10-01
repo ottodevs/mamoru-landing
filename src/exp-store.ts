@@ -1,6 +1,6 @@
 /**
  * D1 access for experiment events. `exp_events` is additive to the `mamoru`
- * database (owned by ottodevs/mamoru — see migrations/0003_experiments.sql in
+ * database (owned by ottodevs/mamoru — see migrations/0004_experiments.sql in
  * this repo for the file to land at migrations/d1/ there) and may not exist
  * yet on every environment: every read returns null and every write is a
  * silent no-op when the table is missing, exactly like account_activity in

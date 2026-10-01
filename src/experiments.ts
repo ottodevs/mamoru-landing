@@ -29,6 +29,7 @@ export interface ExperimentDef {
   goals: readonly string[];
   /** ISO day (YYYY-MM-DD) recorded when status first became "running". Informational only. */
   startedAt?: string;
+  /** ISO day (YYYY-MM-DD). Enforced: past this day (UTC, end of day), the experiment behaves as stopped even if `status` still says "running". */
   endedAt?: string;
   /** Pins everyone to one variant id regardless of assignment, once a winner is called. */
   winner?: string;
@@ -68,6 +69,24 @@ export function variantById(def: ExperimentDef, id: string): ExperimentVariant |
   return def.variants.find((v) => v.id === id);
 }
 
+/**
+ * `def.status` as written in the registry, unless `endedAt` has passed — then
+ * "running" reads as "stopped" regardless of what the field still says, so a
+ * forgotten end date never leaves an experiment live.
+ */
+export function experimentStatus(def: ExperimentDef, now: Date = new Date()): ExperimentStatus {
+  if (def.status === "running" && def.endedAt) {
+    const endMs = Date.parse(`${def.endedAt}T23:59:59.999Z`);
+    if (Number.isFinite(endMs) && now.getTime() > endMs) return "stopped";
+  }
+  return def.status;
+}
+
+/** Whether this experiment is actually serving variants right now (status "running", end date not yet passed). */
+export function isRunning(def: ExperimentDef, now: Date = new Date()): boolean {
+  return experimentStatus(def, now) === "running";
+}
+
 /** FNV-1a, 32-bit. Deterministic across runtimes; not cryptographic, just stable and well distributed. */
 function hash32(input: string): number {
   let h = 0x811c9dc5;
@@ -87,12 +106,13 @@ function unitFraction(input: string): number {
  * Which variant this visitor sees for this experiment. Stable across visits
  * for the same (visitorId, experimentId) pair, and honors each variant's weight.
  *
- * A winner pins everyone. A stopped experiment, or one still in draft, serves
- * control to everyone — nothing changes for visitors until status is "running".
+ * A winner pins everyone. A stopped experiment, one still in draft, or one
+ * whose `endedAt` has passed, serves control to everyone — nothing changes
+ * for visitors until status is "running" and the window is open.
  */
-export function assignVariant(def: ExperimentDef, visitorId: string): string {
+export function assignVariant(def: ExperimentDef, visitorId: string, now: Date = new Date()): string {
   if (def.winner && variantById(def, def.winner)) return def.winner;
-  if (def.status !== "running") return controlVariantId(def);
+  if (!isRunning(def, now)) return controlVariantId(def);
   const total = def.variants.reduce((sum, v) => sum + Math.max(0, v.weight), 0);
   if (total <= 0) return controlVariantId(def);
   const target = unitFraction(`${visitorId}:${def.id}`) * total;
@@ -104,10 +124,10 @@ export function assignVariant(def: ExperimentDef, visitorId: string): string {
   return def.variants[def.variants.length - 1]?.id ?? controlVariantId(def);
 }
 
-/** Whether this experiment can show different HTML to different visitors right now. Gates caching. */
-export function variesPerVisitor(def: ExperimentDef): boolean {
-  if (def.status !== "running") return false;
+/** Whether this experiment can show different HTML to different visitors right now. Gates caching and the visitor cookie. */
+export function variesPerVisitor(def: ExperimentDef, now: Date = new Date()): boolean {
   if (def.winner) return false;
+  if (!isRunning(def, now)) return false;
   const active = def.variants.filter((v) => v.weight > 0);
   return active.length > 1;
 }

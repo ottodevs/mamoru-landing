@@ -4,8 +4,10 @@ import {
   controlVariantId,
   EXPERIMENTS,
   experimentById,
+  experimentStatus,
   experimentsForPath,
   type ExperimentDef,
+  isRunning,
   variantById,
   variesPerVisitor,
 } from "../src/experiments";
@@ -148,6 +150,51 @@ describe("variesPerVisitor", () => {
     expect(variesPerVisitor(def({ status: "stopped" }))).toBe(false);
     expect(variesPerVisitor(def({ winner: "b" }))).toBe(false);
     expect(variesPerVisitor(def({ variants: [{ id: "control", weight: 1 }, { id: "b", weight: 0 }] }))).toBe(false);
+  });
+});
+
+describe("endedAt: an expired experiment behaves as stopped even if status still says running", () => {
+  const now = new Date("2026-06-15T12:00:00Z");
+
+  test("experimentStatus/isRunning read 'stopped' once endedAt has passed", () => {
+    const expired = def({ endedAt: "2026-06-01" });
+    expect(experimentStatus(expired, now)).toBe("stopped");
+    expect(isRunning(expired, now)).toBe(false);
+  });
+
+  test("not yet expired still reads as running", () => {
+    const notYet = def({ endedAt: "2026-06-30" });
+    expect(experimentStatus(notYet, now)).toBe("running");
+    expect(isRunning(notYet, now)).toBe(true);
+  });
+
+  test("expired on the end day itself (before 23:59:59 UTC) is still running; the day after is not", () => {
+    const d = def({ endedAt: "2026-06-15" });
+    expect(isRunning(d, new Date("2026-06-15T23:00:00Z"))).toBe(true);
+    expect(isRunning(d, new Date("2026-06-16T00:00:01Z"))).toBe(false);
+  });
+
+  test("assignVariant serves control to every visitor once expired", () => {
+    const expired = def({ endedAt: "2026-06-01" });
+    for (let i = 0; i < 100; i++) expect(assignVariant(expired, `v${i}`, now)).toBe("control");
+  });
+
+  test("assignVariant still serves the winner once expired, if one was pinned", () => {
+    const expired = def({ endedAt: "2026-06-01", winner: "b" });
+    for (let i = 0; i < 50; i++) expect(assignVariant(expired, `v${i}`, now)).toBe("b");
+  });
+
+  test("variesPerVisitor is false once expired, even with multiple weighted variants", () => {
+    expect(variesPerVisitor(def({ endedAt: "2026-06-01" }), now)).toBe(false);
+  });
+
+  test("status 'draft' or 'stopped' with an endedAt in the future is unaffected (endedAt only matters for 'running')", () => {
+    expect(experimentStatus(def({ status: "draft", endedAt: "2099-01-01" }), now)).toBe("draft");
+    expect(experimentStatus(def({ status: "stopped", endedAt: "2099-01-01" }), now)).toBe("stopped");
+  });
+
+  test("no endedAt at all: running stays running indefinitely", () => {
+    expect(experimentStatus(def(), now)).toBe("running");
   });
 });
 

@@ -2,6 +2,7 @@
 
 import type { ExperimentReport, GoalVerdict, VariantReport } from "./exp-report";
 import type { Interval } from "./exp-analysis";
+import { experimentStatus } from "./experiments";
 import { pageHead, renderDocument, type SectionView } from "./ops";
 import { esc } from "./text";
 
@@ -16,10 +17,22 @@ function signedPct(value: number, digits = 1): string {
 
 const STATUS_LABEL: Record<string, string> = { draft: "Draft", running: "Running", stopped: "Stopped" };
 
-function splitLabel(variants: VariantReport[]): string {
+/** Human label for a goal event, shown in the table header. The raw event id stays available as a title attribute. */
+const GOAL_LABEL: Record<string, string> = {
+  waitlist_submit: "Waitlist signup",
+  open_app_click: "Opened the app",
+  deck_click: "Opened the deck",
+};
+
+function goalLabel(goal: string): string {
+  return GOAL_LABEL[goal] ?? goal;
+}
+
+/** Each variant's declared share of traffic, as a percentage of the total weight. */
+function splitPercents(variants: readonly VariantReport[]): number[] {
   const total = variants.reduce((sum, v) => sum + Math.max(0, v.weight), 0);
-  if (total <= 0) return variants.map(() => "0%").join(" / ");
-  return variants.map((v) => `${Math.round((Math.max(0, v.weight) / total) * 100)}%`).join(" / ");
+  if (total <= 0) return variants.map(() => 0);
+  return variants.map((v) => Math.round((Math.max(0, v.weight) / total) * 100));
 }
 
 /** A thin ink range mark for a lift interval, centered on zero. No fill, no box: a line and two ticks. */
@@ -38,13 +51,13 @@ function rangeMark(interval: Interval | null, verdictKind: string): string {
   </div>`;
 }
 
-function variantRow(v: VariantReport, goals: readonly string[], isControl: boolean, href: string): string {
+function variantRow(v: VariantReport, splitPct: number, goals: readonly string[], isControl: boolean, href: string): string {
   const cells = goals
     .map((g) => `<td>${v.conversions[g] ?? 0}</td><td>${v.exposures > 0 ? pct(v.rate[g] ?? 0) : "—"}</td>`)
     .join("");
   return `<tr>
     <td>${esc(v.label)}${isControl ? ' <span class="dim">(control)</span>' : ""}</td>
-    <td>${v.weight}</td>
+    <td>${splitPct}%</td>
     <td>${v.exposures}</td>
     ${cells}
     <td class="act"><a href="${esc(href)}" data-ops-full target="_blank" rel="noopener">Preview</a></td>
@@ -67,13 +80,17 @@ function goalBlock(goal: string, verdicts: GoalVerdict[]): string {
   return rows;
 }
 
-function experimentBlock(report: ExperimentReport, delayMs: number): string {
+function experimentBlock(report: ExperimentReport, delayMs: number, now: Date): string {
   const def = report.def;
-  const status = STATUS_LABEL[def.status] ?? def.status;
+  // def.status as declared, unless endedAt has passed — then it reads (and behaves) as stopped.
+  const effective = experimentStatus(def, now);
+  const expired = def.status === "running" && effective === "stopped";
+  const status = STATUS_LABEL[effective] ?? effective;
+  const endedNote = expired && def.endedAt ? ` (ended ${esc(def.endedAt)})` : "";
   const winner = def.winner ? ` · winner pinned: ${esc(def.winner)}` : "";
   if (!report.connected) {
     return `<section class="sec full" style="--s:${delayMs}ms">
-      <div class="sec-head"><h2>${esc(def.id)}</h2><span class="soft">${esc(status)}${winner}</span></div>
+      <div class="sec-head"><h2>${esc(def.id)}</h2><span class="soft">${esc(status)}${endedNote}${winner}</span></div>
       <p class="soft" style="margin-top:.6rem">${esc(def.description)}</p>
       <p class="empty">Event data is not connected on this deployment, so there is nothing to show yet.</p>
     </section>`;
@@ -85,12 +102,19 @@ function experimentBlock(report: ExperimentReport, delayMs: number): string {
     byGoal.set(v.goal, list);
   }
   const head = def.goals
-    .map((g) => `<th colspan="2">${esc(g)}</th>`)
+    .map((g) => `<th colspan="2" title="${esc(g)}">${esc(goalLabel(g))}</th>`)
     .join("");
   const subHead = def.goals.map(() => `<th>N</th><th>Rate</th>`).join("");
+  const splits = splitPercents(report.variants);
   const rows = report.variants
     .map((v, i) =>
-      variantRow(v, def.goals, i === 0, `${def.path}${def.path.includes("?") ? "&" : "?"}exp=${encodeURIComponent(def.id)}:${encodeURIComponent(v.id)}`),
+      variantRow(
+        v,
+        splits[i] ?? 0,
+        def.goals,
+        i === 0,
+        `${def.path}${def.path.includes("?") ? "&" : "?"}exp=${encodeURIComponent(def.id)}:${encodeURIComponent(v.id)}`,
+      ),
     )
     .join("");
   const goalsHtml = def.goals.map((g) => goalBlock(g, byGoal.get(g) ?? [])).join("");
@@ -98,7 +122,7 @@ function experimentBlock(report: ExperimentReport, delayMs: number): string {
     ? `<p class="notice bad" role="status" style="border-top:1px solid var(--ink);padding-top:.6rem;margin-top:1rem">The observed split does not match the declared weights (chi-square ${report.srm.chiSquare.toFixed(2)}, p ${report.srm.pValue < 0.001 ? "&lt; 0.001" : report.srm.pValue.toFixed(3)}). Something upstream of assignment is probably broken.</p>`
     : "";
   return `<section class="sec full" style="--s:${delayMs}ms">
-    <div class="sec-head"><h2>${esc(def.id)}</h2><span class="soft">${esc(status)}${winner}</span></div>
+    <div class="sec-head"><h2>${esc(def.id)}</h2><span class="soft">${esc(status)}${endedNote}${winner}</span></div>
     <p class="soft" style="margin-top:.6rem">${esc(def.description)}</p>
     <div class="exp-ledger-wrap">
       <table class="ledger exp-ledger">
@@ -109,16 +133,15 @@ function experimentBlock(report: ExperimentReport, delayMs: number): string {
         <tbody>${rows}</tbody>
       </table>
     </div>
-    <p class="ledger-note">Split declared ${esc(splitLabel(report.variants))}.</p>
     ${goalsHtml}
     ${srmNote}
   </section>`;
 }
 
 /** The experiments overview as a section body. */
-export function experimentsSection(reports: readonly ExperimentReport[]): SectionView {
+export function experimentsSection(reports: readonly ExperimentReport[], now: Date = new Date()): SectionView {
   const head = pageHead({ title: "Experiments" });
-  const blocks = reports.map((r, i) => experimentBlock(r, i * 60)).join("");
+  const blocks = reports.map((r, i) => experimentBlock(r, i * 60, now)).join("");
   const empty = reports.length
     ? ""
     : `<p class="empty">Nothing is registered yet. Experiments are declared in src/experiments.ts.</p>`;
@@ -134,6 +157,6 @@ export function experimentsSection(reports: readonly ExperimentReport[]): Sectio
   };
 }
 
-export function renderExperiments(opts: { reports: ExperimentReport[]; csrf: string; nonce: string; who?: string }): string {
-  return renderDocument(experimentsSection(opts.reports), { csrf: opts.csrf, who: opts.who, nonce: opts.nonce });
+export function renderExperiments(opts: { reports: ExperimentReport[]; csrf: string; nonce: string; who?: string; now?: Date }): string {
+  return renderDocument(experimentsSection(opts.reports, opts.now), { csrf: opts.csrf, who: opts.who, nonce: opts.nonce });
 }
