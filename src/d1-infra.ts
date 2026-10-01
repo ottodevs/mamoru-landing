@@ -1,7 +1,8 @@
 /**
  * Read-only D1 queries against the `mamoru` database (accounts, users).
  * Schema owned by ottodevs/mamoru (migrations/d1/0001_sprint.sql). This
- * Worker never writes to it.
+ * Worker's only writes are additive: metrics_daily (src/metrics-store.ts)
+ * and exp_events (src/exp-store.ts).
  */
 
 export interface D1Result<T> {

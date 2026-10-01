@@ -31,7 +31,7 @@ const emailHref = `mailto:${copy.footer.email}`;
           <span>{part.endsWith(".") ? part : `${part}.`}</span>
         ))}
       </p>
-      <a class="cta js-launch" href={APP_HREF}>{copy.cta}</a>
+      <a class="cta js-launch" href={APP_HREF} data-exp="hero_cta" data-exp-goal="open_app_click">{copy.cta}</a>
     </section>
 
     <section class="band flow" aria-label="How it works">

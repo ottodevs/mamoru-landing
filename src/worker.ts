@@ -9,7 +9,8 @@
  *   LOOPS_API_KEY         secret. Loops Free API — welcome note send.
  *   LOOPS_TRANSACTIONAL_ID vars. Published Loops transactional template id.
  *   MAMORU_DB             D1. Read-only for accounts, users and account_activity;
- *                         written only in metrics_daily (one row per UTC day).
+ *                         written in metrics_daily (one row per UTC day) and
+ *                         in exp_events (see src/exp-store.ts), both additive.
  *   BASE_RPC_URL          secret, optional. Tried before the public Base RPCs.
  *
  * /ops is Google sign-in only, allowlisted by exact email (src/google.ts).
@@ -20,6 +21,9 @@
  * SectionView: a full document normally, a JSON fragment (body only) when the
  * console's router asks with `x-ops-fragment: 1`. The gate is the same for both.
  * /ops/infra is that same gate, showing relayer, cost, and accounts + TVL.
+ * /ops/experiments is that same gate, read-only: the A/B ledger declared in
+ * src/experiments.ts. Variants are served at serveSite() via src/exp-rewrite.ts;
+ * POST /api/exp/event is the client goal beacon (src/exp-events.ts).
  * The cron (hourly, plus 00:05 UTC) upserts today's metrics_daily row.
  * /open is the built file for that page. Browsers never fetch it by path.
  */
@@ -69,6 +73,10 @@ import { loadOverview } from "./metrics-overview";
 import { overviewSection } from "./ops-metrics";
 import type { D1Db } from "./d1-infra";
 import { homeDocument, isOpen } from "./open-at";
+import { applyExperiments } from "./exp-rewrite";
+import { handleExpEvent, recordWaitlistSubmit } from "./exp-events";
+import { loadExperimentReports } from "./exp-report";
+import { experimentsSection } from "./ops-experiments";
 import {
   isPreviewPath,
   previewReturnUrl,
@@ -242,7 +250,7 @@ function htmlPage(title: string, lines: readonly string[], status = 200): Respon
   );
 }
 
-async function handleNotify(request: Request, env: Env): Promise<Response> {
+async function handleNotify(request: Request, env: Env, ctx?: Background): Promise<Response> {
   if (request.method !== "POST") {
     return json({ ok: false, error: "Method not allowed" }, 405);
   }
@@ -282,6 +290,8 @@ async function handleNotify(request: Request, env: Env): Promise<Response> {
       ? htmlPage("Mamoru", [NOTIFY_COPY.failed], 503)
       : json({ ok: false, error: NOTIFY_COPY.failed }, 503);
   }
+  // Server-side only: a genuinely new signup, never client-reported, so this goal cannot be spoofed.
+  if (status === "new") recordWaitlistSubmit(request, env, ctx);
   return wantsHtml
     ? htmlPage("Mamoru", [NOTIFY_COPY[status]])
     : json({ ok: true, status });
@@ -349,7 +359,7 @@ function withNotice(view: SectionView, text: string, tone: "plain" | "bad" = "pl
 }
 
 /** Sections a stranger is sent to Google from, and returned to after signing in. */
-const SECTION_PATHS = new Set(["/ops", "/ops/mails", "/ops/infra"]);
+const SECTION_PATHS = new Set(["/ops", "/ops/mails", "/ops/infra", "/ops/experiments"]);
 
 /** Anyone who is not signed in and allowlisted sees the landing. Nothing else. */
 function toRoot(request: Request, cookies: string[] = []): Response {
@@ -519,7 +529,7 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     request.method === "GET"
   ) {
     if (isOpen()) return notFound();
-    return serveSite(request, env, true);
+    return serveSite(request, env, true, ctx);
   }
 
   if (mock && (request.method === "GET" || request.method === "HEAD")) {
@@ -564,6 +574,7 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
   };
   const infraView = async (fresh: boolean): Promise<SectionView> =>
     infraSection(await loadInfraReading(sources, fresh, undefined, behind), session.csrf);
+  const experimentsView = async (): Promise<SectionView> => experimentsSection(await loadExperimentReports(env.MAMORU_DB));
   const mailsView = async (notice: Flash): Promise<SectionView> => {
     if (!env.WAITLIST) {
       return mailsSection({ entries: [], truncated: false, csrf: session.csrf, flash: notice, mailReady: false, connected: false });
@@ -605,6 +616,10 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
 
   if (sectionPath === "/ops/infra" && request.method === "GET") {
     return flashed(await infraView(url.searchParams.get("fresh") === "1"));
+  }
+
+  if (sectionPath === "/ops/experiments" && request.method === "GET") {
+    return flashed(await experimentsView());
   }
 
   if (url.pathname === "/ops/metrics/snapshot" && request.method === "POST") {
@@ -719,21 +734,53 @@ async function serveMark(request: Request, env: Env): Promise<Response> {
   return new Response(asset.body, { status: 200, headers });
 }
 
-/** The post-countdown page. Preview adds a private bar and noindex. */
-async function serveSite(request: Request, env: Env, preview: boolean): Promise<Response> {
+/**
+ * True only for a verified, allowlisted /ops session — the same check
+ * handleOps() itself requires before it ever reaches a section. Since `/`
+ * is the real public homepage once OPEN_AT has passed, this is what lets a
+ * signed-in operator force the QA override there; a stranger never has one.
+ */
+async function hasOpsSession(request: Request, env: Env): Promise<boolean> {
+  const oauth = oauthConfig(env);
+  if (!oauth) return false;
+  const session = await openSession(oauth.sessionSecret, request.headers.get("cookie"));
+  return Boolean(session && isAllowed(session.email));
+}
+
+/**
+ * The post-countdown page. Preview adds a private bar and noindex.
+ * Before either, experiment variants are applied at the edge (see
+ * src/exp-rewrite.ts). The QA override (`?exp=<id>:<variant>`) is allowed in
+ * preview (always behind the /ops Google gate), on the staging channel's own
+ * public "/" (staging exists precisely to look at something before it is
+ * real), and — since this same function serves the real public "/" once
+ * OPEN_AT has passed — for a request carrying a verified, allowlisted /ops
+ * session even there. A stranger gets none of that: assignment, not override.
+ */
+async function serveSite(request: Request, env: Env, preview: boolean, ctx?: Background): Promise<Response> {
   const assetUrl = new URL("/open/index.html", request.url);
   const asset = await env.ASSETS.fetch(new Request(assetUrl.toString(), { method: "GET" }));
   if (!asset.ok) return notFound();
-  const headers = new Headers(asset.headers);
-  headers.set("content-type", "text/html; charset=utf-8");
-  headers.set("x-content-type-options", "nosniff");
-  headers.set("referrer-policy", "strict-origin-when-cross-origin");
-  headers.delete("content-length");
+  const baseHeaders = new Headers(asset.headers);
+  baseHeaders.set("content-type", "text/html; charset=utf-8");
+  baseHeaders.set("x-content-type-options", "nosniff");
+  baseHeaders.set("referrer-policy", "strict-origin-when-cross-origin");
+  baseHeaders.delete("content-length");
+
+  const qaAllowed = preview || env.DEPLOY_CHANNEL === "staging" || (await hasOpsSession(request, env));
+  const expResponse = await applyExperiments(
+    new Response(asset.body, { status: asset.status, headers: baseHeaders }),
+    request,
+    "/",
+    { qaAllowed, db: env.MAMORU_DB, ctx, secret: env.OPS_SESSION_SECRET },
+  );
+  const headers = new Headers(expResponse.headers);
+
   if (preview) {
     headers.set("cache-control", "no-store");
     headers.set("x-robots-tag", "noindex, nofollow");
     headers.delete("content-encoding");
-    let html = await asset.text();
+    let html = await expResponse.text();
     const style = `<style>${PREVIEW_STYLE}</style>`;
     html = html.includes("</head>")
       ? html.replace("</head>", `${style}</head>`)
@@ -750,11 +797,14 @@ async function serveSite(request: Request, env: Env, preview: boolean): Promise<
     }
     return new Response(html, { status: 200, headers });
   }
-  headers.set("cache-control", "public, max-age=0, must-revalidate");
-  if (request.method === "HEAD") {
-    return new Response(null, { status: asset.status, headers });
+  // applyExperiments only adds Vary when a running experiment can differ by visitor; otherwise this stays publicly cacheable.
+  if (!headers.has("vary")) {
+    headers.set("cache-control", "public, max-age=0, must-revalidate");
   }
-  return new Response(asset.body, { status: asset.status, headers });
+  if (request.method === "HEAD") {
+    return new Response(null, { status: expResponse.status, headers });
+  }
+  return new Response(expResponse.body, { status: expResponse.status, headers });
 }
 
 const APP_HOST = "app.mamoru.lol";
@@ -763,6 +813,7 @@ const RETURN_TO = new Set([
   "https://mamoru.lol/ops",
   "https://mamoru.lol/ops/mails",
   "https://mamoru.lol/ops/infra",
+  "https://mamoru.lol/ops/experiments",
   "https://mamoru.lol/ops/landing",
   "https://mamoru.lol/ops/app",
   "https://mamoru.lol/ops/app/onboarding",
@@ -848,12 +899,14 @@ async function dispatch(request: Request, env: Env, ctx?: Background): Promise<R
       return handleOps(request, env, ctx);
     }
 
-    if (path === "/api/notify") return handleNotify(request, env);
+    if (path === "/api/notify") return handleNotify(request, env, ctx);
+
+    if (path === "/api/exp/event") return handleExpEvent(request, env, ctx);
 
     const doc = homeDocument(path);
     if (doc === "hidden") return notFound();
     if (doc === "site" && (request.method === "GET" || request.method === "HEAD")) {
-      return markHome(await serveSite(request, env, false), "site");
+      return markHome(await serveSite(request, env, false, ctx), "site");
     }
     const asset = await env.ASSETS.fetch(request);
     return doc === "teaser" ? markHome(asset, "teaser", true) : asset;
