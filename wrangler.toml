@@ -67,6 +67,10 @@ routes = []
 services = []
 kv_namespaces = []
 
+# No cron on staging: it has no D1 binding.
+[env.staging.triggers]
+crons = []
+
 [env.staging.assets]
 directory = "./dist"
 binding = "ASSETS"
