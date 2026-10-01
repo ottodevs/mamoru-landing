@@ -13,6 +13,10 @@ routes = [
   { pattern = "www.mamoru.lol", custom_domain = true },
 ]
 
+# Daily metrics: 00:05 UTC opens the day's row, the hourly run keeps it current.
+[triggers]
+crons = ["5 0 * * *", "0 * * * *"]
+
 [assets]
 directory = "./dist"
 binding = "ASSETS"
@@ -37,7 +41,7 @@ STAGING_BASE_URL = "https://mamoru-lol-staging.ottodevs.workers.dev"
 binding = "WAITLIST"
 id = "69293a22f249404e9e0a1bca6878252e"
 
-# Read-only from this Worker. Owned by ottodevs/mamoru (accounts, users).
+# Owned by ottodevs/mamoru. Read-only here, except metrics_daily (one row per UTC day, written by the cron).
 [[d1_databases]]
 binding = "MAMORU_DB"
 database_name = "mamoru"

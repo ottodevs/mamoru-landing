@@ -8,14 +8,17 @@
  *   OPS_SESSION_SECRET    secret. Signs the /ops session and OAuth state cookies.
  *   LOOPS_API_KEY         secret. Loops Free API — welcome note send.
  *   LOOPS_TRANSACTIONAL_ID vars. Published Loops transactional template id.
- *   MAMORU_DB             D1, read-only. Accounts + users, for /ops/infra.
+ *   MAMORU_DB             D1. Read-only for accounts, users and account_activity;
+ *                         written only in metrics_daily (one row per UTC day).
  *   BASE_RPC_URL          secret, optional. Tried before the public Base RPCs.
  *
  * /ops is Google sign-in only, allowlisted by exact email (src/google.ts).
  * Anything without a valid allowlisted session is sent to the root.
  * /ops/landing is that same gate, showing the page that replaces / at OPEN_AT.
  * /ops/app is that same gate, showing the UI mockup. It does not open at OPEN_AT.
+ * /ops is the metrics overview; /ops/mails is the list.
  * /ops/infra is that same gate, showing relayer, cost, and accounts + TVL.
+ * The cron (hourly, plus 00:05 UTC) upserts today's metrics_daily row.
  * /open is the built file for that page. Browsers never fetch it by path.
  */
 
@@ -53,6 +56,9 @@ import {
 } from "./ops";
 import { renderInfra } from "./ops-infra";
 import { loadInfraSnapshot } from "./infra-cache";
+import { captureDaily } from "./metrics-store";
+import { loadOverview } from "./metrics-overview";
+import { renderOverview } from "./ops-metrics";
 import type { D1Db } from "./d1-infra";
 import { homeDocument, isOpen } from "./open-at";
 import {
@@ -288,9 +294,9 @@ function opsResponse(
   return new Response(html, { status, headers });
 }
 
-function redirectOps(request: Request, flash: Flash, cookies: string[]): Response {
+function redirectOps(request: Request, flash: Flash, cookies: string[], to = "/ops/mails"): Response {
   const headers = opsHeaders();
-  headers.set("location", "/ops");
+  headers.set("location", to);
   const secure = secureRequest(request);
   headers.append("set-cookie", flashCookie(flash, secure));
   for (const cookie of cookies) headers.append("set-cookie", cookie);
@@ -431,7 +437,7 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
       for (const item of [...clear, sessionSet]) headers.append("set-cookie", item);
       return new Response(null, { status: 303, headers });
     }
-    return redirectOps(request, "", [...clear, sessionSet]);
+    return redirectOps(request, "", [...clear, sessionSet], "/ops");
   }
 
   if (!session) return notFound();
@@ -493,6 +499,32 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
     );
   }
 
+  const metricsSources = { rpcUrl: env.BASE_RPC_URL, db: env.MAMORU_DB, kv: env.WAITLIST };
+
+  if (url.pathname === "/ops/metrics/snapshot" && request.method === "POST") {
+    const form = await request.formData();
+    if (!(await sameSecret(String(form.get("csrf") ?? ""), session.csrf))) {
+      return redirectOps(request, "bad", []);
+    }
+    // Without D1 there is no row to write; the Infra cache is still refreshed.
+    const outcome = await captureDaily(metricsSources);
+    if (!outcome.snapshot) await loadInfraSnapshot(metricsSources, true);
+    const headers = new Headers({ location: "/ops", "cache-control": "no-store" });
+    return new Response(null, { status: 303, headers });
+  }
+
+  if (url.pathname === "/ops" && request.method === "GET") {
+    const snapshot = await loadInfraSnapshot(metricsSources, false);
+    const overview = await loadOverview(env.MAMORU_DB, snapshot);
+    const nonce = randomToken(16);
+    return opsResponse(
+      renderOverview({ overview, csrf: session.csrf, nonce, who: session.email }),
+      [],
+      200,
+      nonce,
+    );
+  }
+
   if (!env.WAITLIST) {
     return opsResponse("<p>The list is not connected.</p>", [], 503);
   }
@@ -538,7 +570,7 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
     return redirectOps(request, failed ? "failed" : sent ? "sent" : "waiting", []);
   }
 
-  if (url.pathname === "/ops" && request.method === "GET") {
+  if (url.pathname === "/ops/mails" && request.method === "GET") {
     const { entries, truncated } = await listEntries(env.WAITLIST);
     return opsResponse(
       renderList({
@@ -697,6 +729,16 @@ export default {
     const blocked = await selfGate(request, env);
     if (blocked) return blocked;
     return withStagingMeta(finish(await dispatch(request, env)), env);
+  },
+
+  /** Cron: upserts today's metrics_daily row. The 00:05 UTC run also settles yesterday's DAU. */
+  async scheduled(event: { cron: string }, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<void> {
+    const sources = { rpcUrl: env.BASE_RPC_URL, db: env.MAMORU_DB, kv: env.WAITLIST };
+    ctx.waitUntil(
+      captureDaily(sources, { settleYesterday: event.cron === "5 0 * * *" }).then((outcome) => {
+        if (!outcome.ok && outcome.reason !== "no-db") console.error("metrics_capture_failed", outcome.reason);
+      }),
+    );
   },
 };
 
