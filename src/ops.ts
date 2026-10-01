@@ -187,7 +187,8 @@ export type OpsSection = { id: string; label: string; href: string };
 
 /** Extensible on purpose: new /ops sections are one more entry, not a rewrite. */
 export const OPS_SECTIONS: readonly OpsSection[] = [
-  { id: "mails", label: "Mails", href: "/ops" },
+  { id: "overview", label: "Overview", href: "/ops" },
+  { id: "mails", label: "Mails", href: "/ops/mails" },
   { id: "infra", label: "Infra", href: "/ops/infra" },
 ];
 
@@ -200,7 +201,8 @@ export function renderNav(active: string): string {
   return `<nav class="ops-nav">${links}</nav>`;
 }
 
-function shell(title: string, body: string, nav = ""): string {
+/** `wide` drops the reading-column width; `head` is extra markup for <head> (styles, a nonce'd script). */
+function shell(title: string, body: string, nav = "", opts: { wide?: boolean; head?: string } = {}): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -281,9 +283,10 @@ function shell(title: string, body: string, nav = ""): string {
     .status-low { color: #8a6d1d; }
     .status-empty { color: #a33b2e; }
   </style>
+  ${opts.head ?? ""}
 </head>
 <body>
-  <main>
+  <main${opts.wide ? ' class="wide"' : ""}>
     <img class="mark" src="/mark-two-stones.png" width="56" height="56" alt="Mamoru" />
     ${nav}
     ${body}

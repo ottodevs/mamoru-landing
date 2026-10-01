@@ -285,7 +285,7 @@ export function renderInfra(opts: {
     ${topUpSection(nonce)}
     ${accountsSection(snapshot)}
     ${roadmapSection()}
-    <p><a href="/ops">The list</a></p>`,
+    <p><a href="/ops/mails">The list</a></p>`,
     renderNav("infra"),
   );
 }
