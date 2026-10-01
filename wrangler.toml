@@ -33,3 +33,9 @@ LOOPS_TRANSACTIONAL_ID = "cmuhwutct03ex0j0g4gniv28r"
 binding = "WAITLIST"
 id = "69293a22f249404e9e0a1bca6878252e"
 
+# Read-only from this Worker. Owned by ottodevs/mamoru (accounts, users).
+[[d1_databases]]
+binding = "MAMORU_DB"
+database_name = "mamoru"
+database_id = "682b2a66-d9d4-49e5-ac78-596d002d02ca"
+
