@@ -1,0 +1,7 @@
+[Unit]
+Description=Deploy ottodevs/mamoru-landing staging to Cloudflare (env staging)
+
+[Service]
+Type=oneshot
+Environment=PATH=/etc/profiles/per-user/otto/bin:/run/current-system/sw/bin
+ExecStart=/home/otto/.config/mamoru-lol/github-deploy-staging.sh
