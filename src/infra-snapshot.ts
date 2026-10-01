@@ -79,6 +79,8 @@ export interface CostView {
   reserveUsd: number | null;
   totalEth: number;
   totalUsd: number | null;
+  /** Exact total in wei, as a decimal string: the top-up widget does integer math with it. */
+  totalWei?: string;
   accountsFunded: number;
 }
 
@@ -91,6 +93,16 @@ export interface AccountView {
   lpUsd: number;
   positions: number;
   inRange: number;
+  /** True when a read this account's value depends on failed. Its numbers are then a floor, not a total. */
+  unread?: boolean;
+}
+
+export type UnreadPart = "prices" | "balances" | "positions" | "pools";
+
+/** Set when some reads failed after one retry. Totals built from this snapshot are incomplete. */
+export interface PartialRead {
+  unreadAccounts: number;
+  parts: UnreadPart[];
 }
 
 export interface AccountsView {
@@ -103,11 +115,15 @@ export interface AccountsView {
   lpUsd: number;
   gasReservesEth: number;
   error?: string;
+  /** Accounts whose value could not be fully read. */
+  unreadAccounts?: number;
+  unreadParts?: UnreadPart[];
 }
 
 export interface InfraSnapshot {
   asOf: string;
   rpcError?: string;
+  partial?: PartialRead;
   ethUsd: number | null;
   btcUsd: number | null;
   relayer: RelayerView | null;
@@ -245,12 +261,28 @@ type RawPosition = readonly [
 const poolKey = (token0: string, token1: string, fee: number) =>
   `${token0.toLowerCase()}:${token1.toLowerCase()}:${fee}`;
 
+interface Valued {
+  rows: AccountView[];
+  unreadAccounts: number;
+  parts: Set<UnreadPart>;
+}
+
+/**
+ * Balances and LP value per account. A read that fails (after multi()'s one retry)
+ * marks its account `unread` and names the part that failed; nothing is counted as zero.
+ */
 async function valueAccounts(
   client: BaseClient,
   accounts: AccountRow[],
   prices: Prices | null,
-): Promise<AccountView[]> {
-  if (accounts.length === 0) return [];
+): Promise<Valued> {
+  const parts = new Set<UnreadPart>();
+  if (accounts.length === 0) return { rows: [], unreadAccounts: 0, parts };
+  const unread = new Set<number>();
+  const miss = (accountIndex: number, part: UnreadPart) => {
+    unread.add(accountIndex);
+    parts.add(part);
+  };
 
   const round1Calls: ContractCall[] = [];
   for (const acc of accounts) {
@@ -258,12 +290,19 @@ async function valueAccounts(
   }
   const round1 = await multi(client, round1Calls);
 
-  const basics = accounts.map((_, i) => ({
-    ethWei: (round1[i * 3] as bigint | undefined) ?? 0n,
-    usdcRaw: (round1[i * 3 + 1] as bigint | undefined) ?? 0n,
-    // Accounts with no LP NFTs and zero balances stop here: rounds 2-4 never see them.
-    npmCount: Number((round1[i * 3 + 2] as bigint | undefined) ?? 0n),
-  }));
+  const basics = accounts.map((_, i) => {
+    const ethWei = round1[i * 3];
+    const usdcRaw = round1[i * 3 + 1];
+    const npmCount = round1[i * 3 + 2];
+    if (typeof ethWei !== "bigint" || typeof usdcRaw !== "bigint") miss(i, "balances");
+    if (typeof npmCount !== "bigint") miss(i, "positions");
+    return {
+      ethWei: typeof ethWei === "bigint" ? ethWei : 0n,
+      usdcRaw: typeof usdcRaw === "bigint" ? usdcRaw : 0n,
+      // Accounts with no LP NFTs stop here: the later rounds never see them.
+      npmCount: typeof npmCount === "bigint" ? Number(npmCount) : 0,
+    };
+  });
 
   const tokenIndexCalls: ContractCall[] = [];
   const tokenIndexOwner: number[] = [];
@@ -277,12 +316,16 @@ async function valueAccounts(
   const tokenIds: { accountIndex: number; tokenId: bigint }[] = [];
   round2.forEach((r, i) => {
     if (typeof r === "bigint") tokenIds.push({ accountIndex: tokenIndexOwner[i], tokenId: r });
+    else miss(tokenIndexOwner[i], "positions");
   });
 
   const round3 = tokenIds.length ? await multi(client, tokenIds.map((t) => positionsCall(t.tokenId))) : [];
-  const positions = tokenIds
-    .map((t, i) => ({ accountIndex: t.accountIndex, raw: round3[i] as RawPosition | undefined }))
-    .filter((p): p is { accountIndex: number; raw: RawPosition } => Boolean(p.raw));
+  const positions: { accountIndex: number; raw: RawPosition }[] = [];
+  tokenIds.forEach((t, i) => {
+    const raw = round3[i] as RawPosition | undefined;
+    if (raw) positions.push({ accountIndex: t.accountIndex, raw });
+    else miss(t.accountIndex, "positions");
+  });
 
   const uniquePools = new Map<string, { token0: string; token1: string; fee: number }>();
   for (const p of positions) {
@@ -325,15 +368,18 @@ async function valueAccounts(
         decimalsOf,
       );
       if (value.usd !== null) entry.usd += value.usd;
+      else miss(p.accountIndex, "prices");
       if (value.inRange) entry.inRange += 1;
+    } else {
+      miss(p.accountIndex, "pools");
     }
     perAccountLp.set(p.accountIndex, entry);
   }
 
-  return accounts.map((acc, i) => {
+  const rows = accounts.map((acc, i) => {
     const b = basics[i];
     const lp = perAccountLp.get(i) ?? { usd: 0, count: 0, inRange: 0 };
-    return {
+    const row: AccountView = {
       accountKey: shortKey(acc.account_key),
       address: acc.address,
       basescanUrl: basescanAddress(acc.address),
@@ -343,7 +389,10 @@ async function valueAccounts(
       positions: lp.count,
       inRange: lp.inRange,
     };
+    if (unread.has(i)) row.unread = true;
+    return row;
   });
+  return { rows, unreadAccounts: unread.size, parts };
 }
 
 function emptyAccountsView(error: string): AccountsView {
@@ -372,10 +421,11 @@ async function buildAccountsView(
     return { ...counts, rows: [], tvlUsd: 0, idleUsdcUsd: 0, lpUsd: 0, gasReservesEth: 0, error: "Could not read the account list." };
   }
   try {
-    const rows = await valueAccounts(client, accounts, prices);
+    const { rows, unreadAccounts, parts } = await valueAccounts(client, accounts, prices);
     return {
       ...counts,
       rows,
+      ...(unreadAccounts ? { unreadAccounts, unreadParts: [...parts] } : {}),
       tvlUsd: rows.reduce((sum, r) => sum + r.usdcIdle + r.lpUsd, 0),
       idleUsdcUsd: rows.reduce((sum, r) => sum + r.usdcIdle, 0),
       lpUsd: rows.reduce((sum, r) => sum + r.lpUsd, 0),
@@ -438,10 +488,18 @@ export async function computeInfraSnapshot(
     reserveUsd: ethToUsd(weiToEth(breakdown.reserveWei), prices.ethUsd),
     totalEth: weiToEth(breakdown.totalWei),
     totalUsd: ethToUsd(weiToEth(breakdown.totalWei), prices.ethUsd),
+    totalWei: breakdown.totalWei.toString(),
     accountsFunded: accountsFunded(relayerBalanceWei, breakdown.totalWei),
   };
 
   const accounts = await buildAccountsView(env, client, prices);
 
-  return { asOf, ethUsd: prices.ethUsd, btcUsd: prices.btcUsd, relayer, cost, accounts };
+  // A missing ETH price leaves every USD figure blank; unread accounts leave totals short.
+  const parts = new Set<UnreadPart>(accounts?.unreadParts ?? []);
+  if (prices.ethUsd === null) parts.add("prices");
+  const partial: PartialRead | undefined = parts.size
+    ? { unreadAccounts: accounts?.unreadAccounts ?? 0, parts: [...parts] }
+    : undefined;
+
+  return { asOf, ...(partial ? { partial } : {}), ethUsd: prices.ethUsd, btcUsd: prices.btcUsd, relayer, cost, accounts };
 }

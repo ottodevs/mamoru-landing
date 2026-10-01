@@ -89,7 +89,11 @@ function change(current: number, past: number | undefined, since: string | undef
   return d ? { delta: d, since, exact: since === target } : null;
 }
 
-export function buildOverview(snapshot: InfraSnapshot, inputs: OverviewInputs, now: Date): Overview {
+export interface StaleNote {
+  failedAt: string;
+}
+
+export function buildOverview(snapshot: InfraSnapshot, inputs: OverviewInputs, now: Date, stale?: StaleNote): Overview {
   const today = utcDay(now);
   const target = addDays(today, -DELTA_DAYS);
   const a = snapshot.accounts;
@@ -134,6 +138,12 @@ export function buildOverview(snapshot: InfraSnapshot, inputs: OverviewInputs, n
   const notes: string[] = [];
   if (!a) notes.push("The accounts database is not connected.");
   else if (!countsOk) notes.push("The accounts database could not be read.");
+  if (stale) notes.push("Showing the last complete reading. A fresh read failed just now.");
+  if (snapshot.partial) {
+    const n = snapshot.partial.unreadAccounts;
+    const what = n > 0 ? `${n} ${n === 1 ? "account" : "accounts"} could not be read` : "Prices could not be read";
+    notes.push(fromRow ? `${what}. Money figures are from the last capture.` : `${what}. Money figures are incomplete.`);
+  }
   if (snapshot.rpcError) notes.push(fromRow ? "Base is unreachable right now. Money figures are from the last capture." : "Base is unreachable right now. Money figures are not shown.");
   else if (a?.error && countsOk) notes.push(a.error);
 
@@ -185,13 +195,18 @@ export function buildOverview(snapshot: InfraSnapshot, inputs: OverviewInputs, n
 }
 
 /** Reads the history the overview needs. Each read degrades on its own. */
-export async function loadOverview(db: D1Db | undefined, snapshot: InfraSnapshot, now = new Date()): Promise<Overview> {
+export async function loadOverview(
+  db: D1Db | undefined,
+  snapshot: InfraSnapshot,
+  now = new Date(),
+  stale?: StaleNote,
+): Promise<Overview> {
   const today = utcDay(now);
-  if (!db) return buildOverview(snapshot, { daily: null, activity: null, signups: null }, now);
+  if (!db) return buildOverview(snapshot, { daily: null, activity: null, signups: null }, now, stale);
   const [daily, activity, signups] = await Promise.all([
     readDaily(db, addDays(today, -(TVL_DAYS + DELTA_DAYS))),
     readActivity(db, addDays(today, -(DAU_DAYS - 1))),
     readSignupDays(db),
   ]);
-  return buildOverview(snapshot, { daily, activity, signups }, now);
+  return buildOverview(snapshot, { daily, activity, signups }, now, stale);
 }

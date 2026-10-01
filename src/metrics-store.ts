@@ -6,7 +6,7 @@
  */
 
 import type { D1Db, D1PreparedStatement } from "./d1-infra";
-import { loadInfraSnapshot, type InfraSources } from "./infra-cache";
+import { type InfraReading, loadInfraReading, type InfraSources } from "./infra-cache";
 import type { InfraSnapshot } from "./infra-snapshot";
 import { addDays, cumulativeGrowth, type DayCount, utcDay } from "./metrics-math";
 
@@ -133,7 +133,7 @@ export async function readSignupDays(db: D1Db): Promise<SignupDays | null> {
 
 /** Whether the snapshot's on-chain half can be trusted for a daily row. */
 export function snapshotHasChain(snapshot: InfraSnapshot): boolean {
-  return !snapshot.rpcError && Boolean(snapshot.accounts) && !snapshot.accounts?.error;
+  return !snapshot.rpcError && !snapshot.partial && Boolean(snapshot.accounts) && !snapshot.accounts?.error;
 }
 
 /** Whether the snapshot's D1 counts were read at all. */
@@ -252,12 +252,18 @@ export type CaptureOutcome =
  */
 export async function captureDaily(
   sources: InfraSources,
-  opts: { now?: Date; settleYesterday?: boolean; load?: typeof loadInfraSnapshot } = {},
+  opts: {
+    now?: Date;
+    settleYesterday?: boolean;
+    load?: (sources: InfraSources, fresh: boolean) => Promise<InfraReading>;
+  } = {},
 ): Promise<CaptureOutcome> {
   const db = sources.db;
   if (!db) return { ok: false, reason: "no-db", snapshot: null };
   const today = utcDay(opts.now ?? new Date());
-  const snapshot = await (opts.load ?? loadInfraSnapshot)(sources, true);
+  // The row records what was read just now, even when the page falls back to an older complete reading.
+  const reading = await (opts.load ?? loadInfraReading)(sources, true);
+  const snapshot = reading.computed ?? reading.snapshot;
   if (!snapshotHasCounts(snapshot)) return { ok: false, reason: "no-counts", snapshot };
   const row = rowFromSnapshot(snapshot, today, await countDau(db, today));
   try {

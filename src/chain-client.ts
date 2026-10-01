@@ -25,20 +25,48 @@ export type ContractCall = {
   args?: readonly unknown[];
 };
 
-/**
- * Thin multicall wrapper: always allowFailure, always through Multicall3.
- * Each failed call becomes `undefined` in the returned array, same index as the input.
- */
-export async function multi(
-  client: BaseClient,
-  contracts: readonly ContractCall[],
-): Promise<unknown[]> {
-  if (contracts.length === 0) return [];
+/** Big chunks on purpose: fewer parallel eth_calls, so a rate-limited RPC drops fewer of them. */
+const MULTICALL_BATCH_BYTES = 16_384;
+const RETRY_DELAY_MS = 150;
+
+async function runMulticall(client: BaseClient, contracts: readonly ContractCall[]): Promise<unknown[]> {
   // biome-ignore lint: viem's contract-tuple typing does not infer well through a shared helper
   const results = await client.multicall({
     contracts: contracts as any,
     allowFailure: true,
+    batchSize: MULTICALL_BATCH_BYTES,
     multicallAddress: MULTICALL3_ADDRESS as Address,
   });
   return results.map((r) => (r.status === "success" ? r.result : undefined));
+}
+
+/**
+ * Multicall3 with allowFailure. Calls that fail are retried once, together, after a
+ * short pause. What still fails comes back as `undefined` at the same index: callers
+ * must treat that as "not read", never as zero.
+ */
+export async function multi(
+  client: BaseClient,
+  contracts: readonly ContractCall[],
+  retryDelayMs = RETRY_DELAY_MS,
+): Promise<unknown[]> {
+  if (contracts.length === 0) return [];
+  let results: unknown[];
+  try {
+    results = await runMulticall(client, contracts);
+  } catch {
+    results = contracts.map(() => undefined);
+  }
+  const failed = results.flatMap((r, i) => (r === undefined ? [i] : []));
+  if (failed.length === 0) return results;
+  if (retryDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+  try {
+    const again = await runMulticall(client, failed.map((i) => contracts[i]));
+    failed.forEach((index, k) => {
+      results[index] = again[k];
+    });
+  } catch {
+    // Second failure: the gaps stay undefined and the caller reports them.
+  }
+  return results;
 }
