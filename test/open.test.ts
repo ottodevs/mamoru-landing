@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setSystemTime, test } from "bun:test";
 import { OPEN_AT_MS, homeDocument, isOpen } from "../src/open-at";
 import { OPEN_COPY } from "../src/open-copy";
 import { sealSession } from "../src/ops";
@@ -113,6 +113,10 @@ function opsEnv(): Env {
 }
 
 describe("site gate", () => {
+  // The preview only exists before the instant; pin the clock so the suite does not expire with it.
+  beforeAll(() => setSystemTime(new Date(OPEN_AT_MS - 60_000)));
+  afterAll(() => setSystemTime());
+
   test("strangers and the raw file never see the page", async () => {
     const env = opsEnv();
     const stranger = await worker.fetch(new Request("https://mamoru.lol/ops/landing"), env);

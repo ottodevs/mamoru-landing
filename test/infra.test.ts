@@ -172,16 +172,18 @@ describe("uniswap-math.ts", () => {
 });
 
 describe("ops.ts nav", () => {
-  test("OPS_SECTIONS is extensible and includes Mails + Infra", () => {
-    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["mails", "infra"]);
-    expect(OPS_SECTIONS.find((s) => s.id === "mails")?.href).toBe("/ops");
+  test("OPS_SECTIONS is extensible and includes Overview + Mails + Infra", () => {
+    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["overview", "mails", "infra"]);
+    expect(OPS_SECTIONS.find((s) => s.id === "overview")?.href).toBe("/ops");
+    expect(OPS_SECTIONS.find((s) => s.id === "mails")?.href).toBe("/ops/mails");
     expect(OPS_SECTIONS.find((s) => s.id === "infra")?.href).toBe("/ops/infra");
   });
 
   test("renderNav marks the active section without a link, links the rest", () => {
     const nav = renderNav("infra");
     expect(nav).toContain("<strong>Infra</strong>");
-    expect(nav).toContain('<a href="/ops">Mails</a>');
+    expect(nav).toContain('<a href="/ops">Overview</a>');
+    expect(nav).toContain('<a href="/ops/mails">Mails</a>');
     expect(nav).not.toContain('<a href="/ops/infra">');
   });
 });
