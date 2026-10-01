@@ -1,8 +1,10 @@
-import { type Address, createPublicClient, fallback, http, type PublicClient } from "viem";
+import { type Address, type Chain, createPublicClient, fallback, http, type PublicClient } from "viem";
 import { base } from "viem/chains";
 import { MULTICALL3_ADDRESS, rpcUrls } from "./chain-addresses";
 
-export type BaseClient = PublicClient;
+// Widened to the generic `Chain`: pinning this to `typeof base`'s literal formatter
+// types makes some viem action return types blow up for tsc (known upstream issue).
+export type BaseClient = PublicClient<ReturnType<typeof fallback>, Chain>;
 
 /**
  * A read client that tries the secret RPC (if set) then the public fallbacks in order.
@@ -11,7 +13,7 @@ export type BaseClient = PublicClient;
 export function buildClient(secretRpcUrl?: string): BaseClient {
   const transports = rpcUrls(secretRpcUrl).map((url) => http(url, { timeout: 8_000 }));
   return createPublicClient({
-    chain: base,
+    chain: base as Chain,
     transport: fallback(transports, { rank: false }),
   });
 }
