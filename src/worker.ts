@@ -55,6 +55,13 @@ import { renderInfra } from "./ops-infra";
 import { loadInfraSnapshot } from "./infra-cache";
 import type { D1Db } from "./d1-infra";
 import { homeDocument, isOpen } from "./open-at";
+import {
+  isPreviewPath,
+  previewReturnUrl,
+  proxyPreview,
+  selfGate,
+  withStagingMeta,
+} from "./staging-preview";
 import { esc, normalizeEmail, sameSecret } from "./text";
 
 export interface Env {
@@ -67,6 +74,14 @@ export interface Env {
   LOOPS_TRANSACTIONAL_ID?: string;
   MAMORU_DB?: D1Db;
   BASE_RPC_URL?: string;
+  // Staging preview channel (/ops/preview). See src/staging-preview.ts.
+  DEPLOY_CHANNEL?: string;
+  STAGING?: Fetcher;
+  STAGING_URL?: string;
+  STAGING_PROXY_SECRET?: string;
+  STAGING_BASE_URL?: string;
+  GIT_SHA?: string;
+  DEPLOYED_AT?: string;
 }
 
 function loopsReady(env: Env): boolean {
@@ -380,6 +395,11 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
     return beginGoogle(oauth, secure, url.hostname, redirectUri, mockReturn(url.pathname));
   }
 
+  // /ops/preview is the staging channel preview. Same gate as everything else in /ops.
+  if (!session && isPreviewPath(url.pathname) && request.method === "GET") {
+    return beginGoogle(oauth, secure, url.hostname, redirectUri, previewReturnUrl(url.pathname));
+  }
+
   // Return from Google. Any doubt sends to the root with no session.
   if (url.pathname === "/ops/callback" && request.method === "GET") {
     const clear = [clearOauthCookie(secure, url.hostname)];
@@ -431,6 +451,10 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
 
   if (mock && (request.method === "GET" || request.method === "HEAD")) {
     return serveMock(request, env, mock);
+  }
+
+  if (isPreviewPath(url.pathname) && (request.method === "GET" || request.method === "HEAD")) {
+    return proxyPreview(request, env, url);
   }
 
   if (url.pathname === "/ops/logout" && request.method === "POST") {
@@ -635,7 +659,9 @@ const RETURN_TO = new Set([
 ]);
 
 function allowedReturn(raw: string | null | undefined): string | null {
-  if (!raw || !RETURN_TO.has(raw)) return null;
+  if (!raw) return null;
+  if (raw.startsWith("https://mamoru.lol/ops/preview")) return raw;
+  if (!RETURN_TO.has(raw)) return null;
   if (raw === "https://mamoru.lol/ops/landing" && isOpen()) return null;
   return raw;
 }
@@ -668,7 +694,9 @@ async function serveMock(request: Request, env: Env, assetPath: string): Promise
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    return finish(await dispatch(request, env));
+    const blocked = await selfGate(request, env);
+    if (blocked) return blocked;
+    return withStagingMeta(finish(await dispatch(request, env)), env);
   },
 };
 

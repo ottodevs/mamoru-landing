@@ -27,6 +27,10 @@ SHOW_EMAIL_FORM = "false"
 # Welcome note via Loops Free transactional (not CF Email Sending).
 # LOOPS_TRANSACTIONAL_ID is non-secret; set after template is published in Loops.
 LOOPS_TRANSACTIONAL_ID = "cmuhwutct03ex0j0g4gniv28r"
+# /ops/preview target (see src/staging-preview.ts). Not secret: used both as
+# the fallback fetch URL when the service binding below is unavailable (e.g.
+# local `wrangler dev`) and as the <base href> origin for staged assets.
+STAGING_BASE_URL = "https://mamoru-lol-staging.ottodevs.workers.dev"
 
 # Address list. Keys are hashes. Values stay in this account.
 [[kv_namespaces]]
@@ -38,4 +42,34 @@ id = "69293a22f249404e9e0a1bca6878252e"
 binding = "MAMORU_DB"
 database_name = "mamoru"
 database_id = "682b2a66-d9d4-49e5-ac78-596d002d02ca"
+[[services]]
+binding = "STAGING"
+service = "mamoru-lol-staging"
+
+# --- Staging preview channel ---------------------------------------------
+# A push to `staging` deploys this env. workers.dev only: no custom domain,
+# no routes. Not bound to WAITLIST/LOOPS/GOOGLE_* on purpose, so a staged
+# build can never write to the real waitlist, send a real email, or open
+# its own /ops (see src/staging-preview.ts for the self-gate that blocks
+# everything else anyway). STAGING_PROXY_SECRET is set with
+# `wrangler secret put STAGING_PROXY_SECRET --env staging`, same value as
+# the top-level one. GIT_SHA / DEPLOYED_AT are injected at deploy time with
+# `--var`, not stored here.
+[env.staging]
+name = "mamoru-lol-staging"
+workers_dev = true
+routes = []
+# Deliberately empty: no service bindings, no KV. See note above.
+services = []
+kv_namespaces = []
+
+[env.staging.assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "404-page"
+run_worker_first = true
+
+[env.staging.vars]
+DEPLOY_CHANNEL = "staging"
+SHOW_EMAIL_FORM = "false"
 
