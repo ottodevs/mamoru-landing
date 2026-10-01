@@ -90,13 +90,17 @@ function accountsSection(snapshot: InfraSnapshot): string {
   const a = snapshot.accounts;
   if (!a) return `<h2>Accounts &amp; TVL</h2><p class="quiet">D1 is not connected.</p>`;
   const error = a.error ? `<p class="quiet">${esc(a.error)}</p>` : "";
-  const table = a.rows.length
+  // Funded accounts first, by value; the ones that never held anything are only counted.
+  const value = (r: AccountView) => r.usdcIdle + r.lpUsd;
+  const funded = a.rows.filter((r) => r.ethBalance > 0 || value(r) > 0).sort((x, y) => value(y) - value(x));
+  const empty = a.rows.length - funded.length;
+  const table = funded.length
     ? `<table>
         <thead><tr><th>Account</th><th>Address</th><th>ETH</th><th>USDC idle</th><th>LP $</th><th>Positions</th><th>In range</th></tr></thead>
-        <tbody>${a.rows.map(accountRow).join("")}</tbody>
-      </table>`
+        <tbody>${funded.map(accountRow).join("")}</tbody>
+      </table>${empty ? `<p class="quiet">${empty} more accounts never funded.</p>` : ""}`
     : !a.error
-      ? "<p>No accounts yet.</p>"
+      ? `<p>${a.rows.length ? "No funded accounts yet." : "No accounts yet."}</p>`
       : "";
   return `<h2>Accounts &amp; TVL</h2>
   <p>${a.totalUsers} users · ${a.totalAccounts} accounts · ${a.last7d} created in the last 7d</p>
