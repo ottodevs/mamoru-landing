@@ -6,7 +6,8 @@ import { DAU_DAYS, type Change, type Overview } from "./metrics-overview";
 import { opsShell, renderNav } from "./ops";
 import { esc } from "./text";
 
-const STYLE = `
+/** Shared by every wide /ops page: tokens, the figures band, ruled sections, and the motion rules. */
+export const OPS_WIDE_STYLE = `
 :root {
   --rice: #f8f5ef; --paper: #f4f0e6; --ink: #0f0f0e; --wash: #d9d2c3;
   --emerald: #2f5d50; --stone: #8a8578; --muted: #5d594f;
@@ -171,12 +172,12 @@ details.tbl th { color: var(--muted); font-size: inherit; }
 `;
 
 /** Runs before first paint so nothing flashes in its final state and then restarts. */
-function headScript(nonce: string): string {
+export function motionHeadScript(nonce: string): string {
   return `<script nonce="${nonce}">if(!window.matchMedia||!matchMedia("(prefers-reduced-motion: reduce)").matches)document.documentElement.classList.add("js-motion");</script>`;
 }
 
 /** Count-up, line draw lengths, scroll-in, and the hover/focus value label. No framework, no CDN. */
-function bodyScript(nonce: string): string {
+export function pageScript(nonce: string): string {
   return `<script nonce="${nonce}">
 (function () {
   var root = document.documentElement;
@@ -195,7 +196,7 @@ function bodyScript(nonce: string): string {
   }
   function show(kind, v) {
     if (kind === "usd") return usd(v);
-    if (kind === "dec1") return v.toFixed(1);
+    if (kind.slice(0, 3) === "dec") return v.toFixed(Number(kind.slice(3)));
     return Math.round(v).toLocaleString("en-US");
   }
   function countUp(node, delay) {
@@ -584,8 +585,8 @@ export function renderOverview(opts: { overview: Overview; csrf: string; nonce: 
         ${who}<button class="quiet" type="submit">Sign out</button>
       </form>
     </footer>
-    ${bodyScript(opts.nonce)}`,
+    ${pageScript(opts.nonce)}`,
     renderNav("overview"),
-    { wide: true, head: `<style>${STYLE}</style>${headScript(opts.nonce)}` },
+    { wide: true, head: `<style>${OPS_WIDE_STYLE}</style>${motionHeadScript(opts.nonce)}` },
   );
 }

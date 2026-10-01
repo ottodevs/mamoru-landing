@@ -55,7 +55,7 @@ import {
   type Flash,
 } from "./ops";
 import { renderInfra } from "./ops-infra";
-import { loadInfraSnapshot } from "./infra-cache";
+import { loadInfraReading } from "./infra-cache";
 import { captureDaily } from "./metrics-store";
 import { loadOverview } from "./metrics-overview";
 import { renderOverview } from "./ops-metrics";
@@ -476,7 +476,7 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
     if (!(await sameSecret(String(form.get("csrf") ?? ""), session.csrf))) {
       return redirectOps(request, "bad", []);
     }
-    await loadInfraSnapshot(
+    await loadInfraReading(
       { rpcUrl: env.BASE_RPC_URL, db: env.MAMORU_DB, kv: env.WAITLIST },
       true,
     );
@@ -486,13 +486,13 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
 
   if (url.pathname === "/ops/infra" && request.method === "GET") {
     const fresh = url.searchParams.get("fresh") === "1";
-    const snapshot = await loadInfraSnapshot(
+    const reading = await loadInfraReading(
       { rpcUrl: env.BASE_RPC_URL, db: env.MAMORU_DB, kv: env.WAITLIST },
       fresh,
     );
     const nonce = randomToken(16);
     return opsResponse(
-      renderInfra({ snapshot, csrf: session.csrf, nonce }),
+      renderInfra({ reading, csrf: session.csrf, nonce, who: session.email }),
       [],
       200,
       nonce,
@@ -508,14 +508,14 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
     }
     // Without D1 there is no row to write; the Infra cache is still refreshed.
     const outcome = await captureDaily(metricsSources);
-    if (!outcome.snapshot) await loadInfraSnapshot(metricsSources, true);
+    if (!outcome.snapshot) await loadInfraReading(metricsSources, true);
     const headers = new Headers({ location: "/ops", "cache-control": "no-store" });
     return new Response(null, { status: 303, headers });
   }
 
   if (url.pathname === "/ops" && request.method === "GET") {
-    const snapshot = await loadInfraSnapshot(metricsSources, false);
-    const overview = await loadOverview(env.MAMORU_DB, snapshot);
+    const reading = await loadInfraReading(metricsSources, false);
+    const overview = await loadOverview(env.MAMORU_DB, reading.snapshot, new Date(), reading.stale);
     const nonce = randomToken(16);
     return opsResponse(
       renderOverview({ overview, csrf: session.csrf, nonce, who: session.email }),
