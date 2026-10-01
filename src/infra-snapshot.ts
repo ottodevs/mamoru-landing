@@ -120,11 +120,11 @@ export interface InfraEnv {
   MAMORU_DB?: D1Db;
 }
 
-function decimalsOf(address: string): number {
+export function decimalsOf(address: string): number {
   return tokenMeta(address)?.decimals ?? 18;
 }
 
-function priceUsdOf(prices: Prices | null, token: string): number | null {
+export function priceUsdOf(prices: Prices | null, token: string): number | null {
   if (isStable(token)) return 1;
   if (!prices) return null;
   if (sameAddress(token, WETH_ADDRESS)) return prices.ethUsd;
@@ -386,9 +386,15 @@ async function buildAccountsView(
   }
 }
 
-export async function computeInfraSnapshot(env: InfraEnv): Promise<InfraSnapshot> {
+/**
+ * `client` defaults to a real Base client; tests inject a fake one so none of
+ * this ever makes a real network call.
+ */
+export async function computeInfraSnapshot(
+  env: InfraEnv,
+  client: BaseClient = buildClient(env.BASE_RPC_URL),
+): Promise<InfraSnapshot> {
   const asOf = new Date().toISOString();
-  const client = buildClient(env.BASE_RPC_URL);
 
   let gasPriceWei: bigint;
   let relayerBalanceWei: bigint;
