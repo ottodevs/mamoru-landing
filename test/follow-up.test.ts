@@ -50,13 +50,13 @@ describe("addresses", () => {
     });
     expect(html).toContain(esc(`evil<img>@example.com`));
     expect(html).toContain(esc(maskEmail(`evil<img>@example.com`)));
-    expect(html).toContain("Reveal mail addresses");
+    expect(html).toContain("Reveal addresses");
     expect(html).not.toContain("<img>@example.com");
     expect(html).toContain("tok&quot;en");
     expect(html).not.toContain("Enviar las que faltan");
-    expect(html).toContain("<h1>The list</h1>");
+    expect(html).toContain("<h1>Mails</h1>");
     expect(html).toContain('rel="icon" href="/mark-two-stones.png"');
-    expect(html).toContain('href="/ops/landing"');
+    expect(html).not.toContain('href="/ops/landing"');
     expect(html).not.toContain("La lista");
   });
 });

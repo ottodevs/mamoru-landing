@@ -252,7 +252,7 @@ describe("metrics-store.ts", () => {
     expect(overview.value).toEqual([{ day: TODAY, idle: 7.5, lp: expect.closeTo(44.68, 5) }]);
     expect(overview.growth).toHaveLength(6);
     expect(overview.changes.tvl).toBeNull();
-    expectSoundMarkup(renderOverview({ overview, csrf: "c", nonce: "n" }).split('<main class="wide">')[1].split("<script")[0]);
+    expectSoundMarkup(renderOverview({ overview, csrf: "c", nonce: "n" }).split('<main id="ops-main"')[1].split("<script")[0].replace(/^[^>]*>/, "").replace("</main>", ""));
   });
 
   test("rowFromSnapshot: funded, active, positions and totals", () => {
@@ -385,7 +385,7 @@ describe("metrics-overview.ts", () => {
     expect(down.activated).toBe(3);
     expect(down.relayer).toBeNull();
     expect(down.notes.join(" ")).toContain("last capture");
-    expectSoundMarkup(renderOverview({ overview: down, csrf: "c", nonce: "n" }).split('<main class="wide">')[1].split("<script")[0]);
+    expectSoundMarkup(renderOverview({ overview: down, csrf: "c", nonce: "n" }).split('<main id="ops-main"')[1].split("<script")[0].replace(/^[^>]*>/, "").replace("</main>", ""));
   });
 });
 
@@ -489,8 +489,8 @@ describe("ops-metrics.ts render", () => {
   test("the page carries real text values, the nonce on both scripts, and the CSRF token", () => {
     const overview = buildOverview(snap(), { daily: null, activity: null, signups: SIGNUPS }, NOW);
     const html = renderOverview({ overview, csrf: "tok<en", nonce: "abc123", who: "ot@example.com" });
-    expect(html).toContain("<strong>Overview</strong>");
-    expect(html).toContain('<a href="/ops/mails">Mails</a>');
+    expect(html).toContain('data-section="overview" aria-current="page">Overview</a>');
+    expect(html).toContain('<a href="/ops/mails" data-section="mails">Mails</a>');
     expect(html).toContain(">$52.18<");
     expect(html).toContain("History starts today");
     expect(html).toContain("Activity is not being recorded yet.");
@@ -500,7 +500,7 @@ describe("ops-metrics.ts render", () => {
     expect(html.match(/<script nonce="abc123">/g)?.length).toBe(2);
     expect(html.match(/<script/g)?.length).toBe(2);
     expect(html).toContain("prefers-reduced-motion");
-    expect(html).not.toMatch(/https?:\/\/(?!www\.w3\.org)/);
+    expect(html).not.toMatch(/https?:\/\/(?!www\.w3\.org|basescan\.org)/);
   });
 });
 
@@ -515,14 +515,15 @@ describe("worker.ts gate for the overview", () => {
     };
   }
 
-  test("no session: /ops goes to Google, /ops/mails and the snapshot POST do not exist", async () => {
+  test("no session: sections go to Google, the snapshot POST does not exist", async () => {
     const env = opsEnv();
     const overview = await worker.fetch(new Request("https://mamoru.lol/ops"), env);
     expect(overview.status).toBe(302);
     expect(overview.headers.get("location") ?? "").toContain("https://accounts.google.com/");
     const mails = await worker.fetch(new Request("https://mamoru.lol/ops/mails"), env);
-    expect(mails.status).toBe(404);
-    expect(await mails.text()).not.toContain("The list");
+    expect(mails.status).toBe(302);
+    expect(mails.headers.get("location") ?? "").toContain("https://accounts.google.com/");
+    expect(await mails.text()).not.toContain("On the list");
     const post = await worker.fetch(new Request("https://mamoru.lol/ops/metrics/snapshot", { method: "POST" }), env);
     expect(post.status).toBe(404);
   });
@@ -549,7 +550,7 @@ describe("worker.ts gate for the overview", () => {
       env,
     );
     expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe("/ops/mails");
+    expect(res.headers.get("location")).toBe("/ops");
     expect(res.headers.get("set-cookie") ?? "").toContain("mamoru_flash=bad");
     expect(calls).toHaveLength(0);
   });
@@ -567,8 +568,8 @@ describe("worker.ts gate for the overview", () => {
     const page = await worker.fetch(new Request("https://mamoru.lol/ops/mails", { headers: { cookie } }), env);
     expect(page.status).toBe(200);
     const html = await page.text();
-    expect(html).toContain("The list");
-    expect(html).toContain("<strong>Mails</strong>");
+    expect(html).toContain("On the list");
+    expect(html).toContain('data-section="mails" aria-current="page">Mails</a>');
     const csrf = html.match(/name="csrf" value="([^"]+)"/)![1];
     const removed = await worker.fetch(
       new Request("https://mamoru.lol/ops/remove", {

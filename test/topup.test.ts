@@ -15,8 +15,8 @@ const SNAPSHOT: InfraSnapshot = { asOf: "2026-10-02T09:00:00.000Z", ethUsd: 2686
  */
 function shippedLogic(): TopupLogic {
   const html = renderInfra({ reading: { snapshot: SNAPSHOT }, csrf: "c", nonce: "n" });
-  const start = html.indexOf("var L = (") + "var L = (".length;
-  const end = html.indexOf(")();\n  var CFG = ");
+  const start = html.indexOf("/*topup-logic*/") + "/*topup-logic*/".length;
+  const end = html.indexOf("/*end-topup-logic*/");
   expect(start).toBeGreaterThan(100);
   expect(end).toBeGreaterThan(start);
   // The bundler wraps functions in __name(); the page must define it before the logic runs.
@@ -266,7 +266,9 @@ describe("the gate, on every /ops route", () => {
   test("a forged session cookie is no session", async () => {
     const forged = `mamoru_list=${await sealSession("another-secret", "ottodevs@gmail.com")}`;
     const res = await worker.fetch(new Request("https://mamoru.lol/ops/infra", { headers: { cookie: forged } }), opsEnv());
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location") ?? "").toContain("https://accounts.google.com/");
+    expect(await res.text()).not.toContain("Relayer");
   });
 
   test("POST /ops/infra/refresh refuses a wrong CSRF token", async () => {

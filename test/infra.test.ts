@@ -175,18 +175,20 @@ describe("uniswap-math.ts", () => {
 
 describe("ops.ts nav", () => {
   test("OPS_SECTIONS is extensible and includes Overview + Mails + Infra", () => {
-    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["overview", "mails", "infra"]);
+    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["overview", "mails", "infra", "preview"]);
     expect(OPS_SECTIONS.find((s) => s.id === "overview")?.href).toBe("/ops");
     expect(OPS_SECTIONS.find((s) => s.id === "mails")?.href).toBe("/ops/mails");
     expect(OPS_SECTIONS.find((s) => s.id === "infra")?.href).toBe("/ops/infra");
   });
 
-  test("renderNav marks the active section without a link, links the rest", () => {
+  test("renderNav marks the active section, links every section, and sends Preview out", () => {
     const nav = renderNav("infra");
-    expect(nav).toContain("<strong>Infra</strong>");
-    expect(nav).toContain('<a href="/ops">Overview</a>');
-    expect(nav).toContain('<a href="/ops/mails">Mails</a>');
-    expect(nav).not.toContain('<a href="/ops/infra">');
+    expect(nav).toContain('<a href="/ops/infra" data-section="infra" aria-current="page">Infra</a>');
+    expect(nav).toContain('<a href="/ops" data-section="overview">Overview</a>');
+    expect(nav).toContain('<a href="/ops/mails" data-section="mails">Mails</a>');
+    expect(nav.match(/aria-current/g)?.length).toBe(1);
+    // Preview is the staged site: it leaves the console, so the router must not take it.
+    expect(nav).toMatch(/<a class="out" href="\/ops\/preview" target="_blank" rel="noopener" data-ops-full/);
   });
 });
 
@@ -594,14 +596,14 @@ describe("ops-infra.ts render", () => {
     expect(html).toContain("Healthy");
     expect(html).toContain("More accounts at today");
     expect(html).toContain("The reserve is not burned.");
-    expect(html).toContain("<strong>Infra</strong>");
+    expect(html).toContain('data-section="infra" aria-current="page">Infra</a>');
     expect(html).toContain("39 users");
     expect(html).toContain("1 more account has never been funded.");
     expect(html).not.toContain('class="notice"');
     expect(html).not.toContain("Coming next");
     expect(html).not.toContain(">The list<");
-    expect(html.match(/<script nonce="nonce-abc">/g)?.length).toBe(3);
-    expect(html.match(/<script/g)?.length).toBe(3);
+    expect(html.match(/<script nonce="nonce-abc">/g)?.length).toBe(2);
+    expect(html.match(/<script/g)?.length).toBe(2);
     expect(noticeFor({ snapshot: HEALTHY })).toBeNull();
   });
 
@@ -642,10 +644,30 @@ describe("ops-infra.ts render", () => {
     expect(html).toContain("Not available until Base can be read.");
     // The relayer address is a public server-side constant; sending to it must not depend on our own RPC read.
     expect(html).toContain(RELAYER);
-    expect(html).toContain('"costWei":null');
-    const markup = html.split('<main class="wide">')[1].split("<script")[0];
+    expect(html).toContain("&quot;costWei&quot;:null");
+    const markup = html.split('<main id="ops-main"')[1].split("<script")[0];
     expect(markup).not.toContain("undefined");
     expect(markup).not.toContain("[object Object]");
+  });
+
+  test("a long ledger stops at the largest accounts and sums the rest; unread ones are never folded away", () => {
+    const rows = Array.from({ length: 40 }, (_, i) => ({
+      accountKey: `k${i}`,
+      address: `0x${String(i).padStart(40, "0")}`,
+      basescanUrl: "#",
+      ethBalance: 0.0005,
+      usdcIdle: 100 - i,
+      lpUsd: 0,
+      positions: 0,
+      inRange: 0,
+      ...(i === 39 ? { unread: true } : {}),
+    }));
+    const html = render({ snapshot: { ...HEALTHY, accounts: { ...HEALTHY.accounts!, rows, unreadAccounts: 1 } } });
+    expect(html.match(/<td class="a-key wide-only">/g)?.length).toBe(26);
+    expect(html).toContain(">k39<");
+    expect(html).not.toContain(">k30<");
+    // k25..k38 are folded: 14 accounts holding 75 + 74 + ... + 62.
+    expect(html).toContain("14 more funded accounts hold $959.00 between them.");
   });
 
   test("the page never carries an RPC URL", () => {
@@ -666,10 +688,11 @@ describe("worker.ts auth gate for /ops/infra", () => {
     };
   }
 
-  test("no session: /ops/infra never computes or leaks a snapshot", async () => {
+  test("no session: /ops/infra never computes or leaks a snapshot, it only starts the sign-in", async () => {
     const env = opsEnv();
     const res = await worker.fetch(new Request("https://mamoru.lol/ops/infra"), env);
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location") ?? "").toContain("https://accounts.google.com/");
     const body = await res.text();
     expect(body).not.toContain(RELAYER);
     expect(body).not.toContain("Infra");
