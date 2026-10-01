@@ -183,7 +183,24 @@ const FLASH_COPY: Record<Exclude<Flash, "">, string> = {
   bad: "That did not go through. Try again.",
 };
 
-function shell(title: string, body: string): string {
+export type OpsSection = { id: string; label: string; href: string };
+
+/** Extensible on purpose: new /ops sections are one more entry, not a rewrite. */
+export const OPS_SECTIONS: readonly OpsSection[] = [
+  { id: "mails", label: "Mails", href: "/ops" },
+  { id: "infra", label: "Infra", href: "/ops/infra" },
+];
+
+export function renderNav(active: string): string {
+  const links = OPS_SECTIONS.map((section) =>
+    section.id === active
+      ? `<strong>${esc(section.label)}</strong>`
+      : `<a href="${esc(section.href)}">${esc(section.label)}</a>`,
+  ).join(" · ");
+  return `<nav class="ops-nav">${links}</nav>`;
+}
+
+function shell(title: string, body: string, nav = ""): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -257,11 +274,18 @@ function shell(title: string, body: string): string {
     td.mail:hover .full,
     td.mail:focus-within .full,
     .reveal-box:checked ~ table td.mail .full { display: inline; }
+    .ops-nav { margin: 1rem 0 1.6rem; font-size: 0.95rem; }
+    .ops-nav strong { font-weight: 400; border-bottom: 1px solid #0f0f0e; }
+    h2 { font-weight: 400; font-size: 1.15rem; margin: 2rem 0 0.6rem; }
+    .status-ok { color: #2f5d50; }
+    .status-low { color: #8a6d1d; }
+    .status-empty { color: #a33b2e; }
   </style>
 </head>
 <body>
   <main>
     <img class="mark" src="/mark-two-stones.png" width="56" height="56" alt="Mamoru" />
+    ${nav}
     ${body}
   </main>
 </body>
@@ -362,19 +386,24 @@ export function renderList(opts: {
       <input type="hidden" name="csrf" value="${esc(opts.csrf)}" />
       <p>${who}<button class="quiet" type="submit">Sign out</button></p>
     </form>`,
+    renderNav("mails"),
   );
 }
 
-export function opsHeaders(extra?: HeadersInit): Headers {
+/** Exported so other /ops sections (Infra, …) share the exact same page chrome. */
+export { shell as opsShell };
+
+export function opsHeaders(extra?: HeadersInit, opts?: { scriptNonce?: string }): Headers {
   const headers = new Headers(extra);
   headers.set("content-type", "text/html; charset=utf-8");
   headers.set("cache-control", "no-store");
   headers.set("x-robots-tag", "noindex, nofollow");
   headers.set("referrer-policy", "no-referrer");
   headers.set("x-content-type-options", "nosniff");
+  const scriptSrc = opts?.scriptNonce ? ` script-src 'nonce-${opts.scriptNonce}';` : "";
   headers.set(
     "content-security-policy",
-    "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; font-src 'self'; form-action 'self'; base-uri 'none'",
+    `default-src 'none'; img-src 'self'; style-src 'unsafe-inline';${scriptSrc} font-src 'self'; form-action 'self'; base-uri 'none'`,
   );
   return headers;
 }

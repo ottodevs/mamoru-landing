@@ -8,11 +8,14 @@
  *   OPS_SESSION_SECRET    secret. Signs the /ops session and OAuth state cookies.
  *   LOOPS_API_KEY         secret. Loops Free API — welcome note send.
  *   LOOPS_TRANSACTIONAL_ID vars. Published Loops transactional template id.
+ *   MAMORU_DB             D1, read-only. Accounts + users, for /ops/infra.
+ *   BASE_RPC_URL          secret, optional. Tried before the public Base RPCs.
  *
  * /ops is Google sign-in only, allowlisted by exact email (src/google.ts).
  * Anything without a valid allowlisted session is sent to the root.
  * /ops/landing is that same gate, showing the page that replaces / at OPEN_AT.
  * /ops/app is that same gate, showing the UI mockup. It does not open at OPEN_AT.
+ * /ops/infra is that same gate, showing relayer, cost, and accounts + TVL.
  * /open is the built file for that page. Browsers never fetch it by path.
  */
 
@@ -48,6 +51,9 @@ import {
   sessionCookie,
   type Flash,
 } from "./ops";
+import { renderInfra } from "./ops-infra";
+import { loadInfraSnapshot } from "./infra-cache";
+import type { D1Db } from "./d1-infra";
 import { homeDocument, isOpen } from "./open-at";
 import { esc, normalizeEmail, sameSecret } from "./text";
 
@@ -59,6 +65,8 @@ export interface Env {
   OPS_SESSION_SECRET?: string;
   LOOPS_API_KEY?: string;
   LOOPS_TRANSACTIONAL_ID?: string;
+  MAMORU_DB?: D1Db;
+  BASE_RPC_URL?: string;
 }
 
 function loopsReady(env: Env): boolean {
@@ -254,8 +262,13 @@ function secureRequest(request: Request): boolean {
   return new URL(request.url).protocol === "https:";
 }
 
-function opsResponse(html: string, cookies: string[] = [], status = 200): Response {
-  const headers = opsHeaders();
+function opsResponse(
+  html: string,
+  cookies: string[] = [],
+  status = 200,
+  scriptNonce?: string,
+): Response {
+  const headers = opsHeaders(undefined, scriptNonce ? { scriptNonce } : undefined);
   for (const cookie of cookies) headers.append("set-cookie", cookie);
   return new Response(html, { status, headers });
 }
@@ -426,6 +439,34 @@ async function handleOps(request: Request, env: Env): Promise<Response> {
       return redirectOps(request, "bad", []);
     }
     return toRoot(request, [clearSessionCookie(secure, url.hostname)]);
+  }
+
+  if (url.pathname === "/ops/infra/refresh" && request.method === "POST") {
+    const form = await request.formData();
+    if (!(await sameSecret(String(form.get("csrf") ?? ""), session.csrf))) {
+      return redirectOps(request, "bad", []);
+    }
+    await loadInfraSnapshot(
+      { rpcUrl: env.BASE_RPC_URL, db: env.MAMORU_DB, kv: env.WAITLIST },
+      true,
+    );
+    const headers = new Headers({ location: "/ops/infra", "cache-control": "no-store" });
+    return new Response(null, { status: 303, headers });
+  }
+
+  if (url.pathname === "/ops/infra" && request.method === "GET") {
+    const fresh = url.searchParams.get("fresh") === "1";
+    const snapshot = await loadInfraSnapshot(
+      { rpcUrl: env.BASE_RPC_URL, db: env.MAMORU_DB, kv: env.WAITLIST },
+      fresh,
+    );
+    const nonce = randomToken(16);
+    return opsResponse(
+      renderInfra({ snapshot, csrf: session.csrf, nonce }),
+      [],
+      200,
+      nonce,
+    );
   }
 
   if (!env.WAITLIST) {

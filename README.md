@@ -30,6 +30,7 @@ bun run build && bunx wrangler dev
 | `src/components/Countdown.astro` | Countdown to `2026-09-27T09:00:00+09:00` |
 | `src/components/EmailBar.astro` | Email bar and the on-the-list follow-up |
 | `src/styles/global.css` | Rice paper field, ink, Noto Serif |
-| `src/worker.ts` | Assets, `POST /api/notify`, and the private list at `/ops` |
+| `src/worker.ts` | Assets, `POST /api/notify`, and the private panel at `/ops` |
+| `src/ops-infra.ts`, `src/infra-snapshot.ts` | `/ops/infra`: relayer status, cost per new account, accounts + TVL on Base (same Google allowlist as `/ops`) |
 
-`POST /api/notify` writes the address into KV `WAITLIST` or it does not say it saved. The list is not a marketing tool. `/ops` is the private panel (secret `LIST_GATE`, not in git). The welcome note sends only when the `EMAIL` binding can send from `notify@mamoru.lol`, and only once. Nothing secret lives in this repo.
+`POST /api/notify` writes the address into KV `WAITLIST` or it does not say it saved. The list is not a marketing tool. `/ops` is the private panel (secret `LIST_GATE`, not in git). The welcome note sends only when the `EMAIL` binding can send from `notify@mamoru.lol`, and only once. `/ops/infra` reads Base over public RPCs (optional secret `BASE_RPC_URL` tried first) and the read-only D1 binding `MAMORU_DB` (owned by `ottodevs/mamoru`). Nothing secret lives in this repo.
