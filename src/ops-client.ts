@@ -514,6 +514,7 @@ export function opsClientScript(nonce: string): string {
   var modules = {
     overview: function (scope, quiet) { return mountMotion(scope, quiet); },
     mails: function (scope, quiet) { return mountMotion(scope, quiet); },
+    experiments: function (scope, quiet) { return mountMotion(scope, quiet); },
     infra: function (scope, quiet) {
       var offMotion = mountMotion(scope, quiet);
       var offTopup = Topup.init(scope);

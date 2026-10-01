@@ -184,7 +184,7 @@ export const FLASH_COPY: Record<Exclude<Flash, "">, string> = {
   bad: "That did not go through. Try again.",
 };
 
-export type SectionId = "overview" | "mails" | "infra" | "gate";
+export type SectionId = "overview" | "mails" | "infra" | "experiments" | "gate";
 
 export type OpsSection = { id: string; label: string; href: string; /** Leaves the console: a full navigation in a new tab. */ out?: boolean };
 
@@ -193,6 +193,7 @@ export const OPS_SECTIONS: readonly OpsSection[] = [
   { id: "overview", label: "Overview", href: "/ops" },
   { id: "mails", label: "Mails", href: "/ops/mails" },
   { id: "infra", label: "Infra", href: "/ops/infra" },
+  { id: "experiments", label: "Experiments", href: "/ops/experiments" },
   // The staged site is its own document with its own base URL and CSP, so it opens beside the console.
   { id: "preview", label: "Preview", href: "/ops/preview", out: true },
 ];
@@ -499,6 +500,21 @@ table.accts td.unread { color: var(--warn); }
   .tu-line { font-size: 1.15rem; }
   .tu-actions button.go { width: 100%; }
 }
+
+/* ---- experiments ---- */
+/* A visitor on a genuinely narrow device can still swipe to the Preview column; nothing is hidden, only scrolled. */
+.exp-ledger-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table.exp-ledger thead tr + tr th { padding-top: 0; padding-bottom: 0.4rem; font-size: 0.78rem; }
+.exp-verdict { margin-top: 1.3rem; max-width: 26rem; }
+.exp-verdict-head { font-size: 0.9rem; margin-bottom: 0.3rem; }
+.exp-range { position: relative; height: 1.3rem; max-width: 22rem; margin: 0.3rem 0 0.1rem; }
+.exp-range-axis { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: var(--rule); }
+.exp-range-zero { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--muted); }
+.exp-range-bar { position: absolute; top: 50%; height: 3px; margin-top: -1.5px; background: var(--ink); }
+.exp-range-bar.ahead { background: var(--emerald); }
+.exp-range-bar.behind { background: var(--bad); }
+.exp-range-empty { background: none; }
+.exp-range-empty::after { content: ""; }
 
 /* ---- mails ---- */
 .lede { margin: 1.6rem 0 0; max-width: 40rem; line-height: 1.5; }

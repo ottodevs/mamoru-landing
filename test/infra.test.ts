@@ -175,7 +175,7 @@ describe("uniswap-math.ts", () => {
 
 describe("ops.ts nav", () => {
   test("OPS_SECTIONS is extensible and includes Overview + Mails + Infra", () => {
-    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["overview", "mails", "infra", "preview"]);
+    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["overview", "mails", "infra", "experiments", "preview"]);
     expect(OPS_SECTIONS.find((s) => s.id === "overview")?.href).toBe("/ops");
     expect(OPS_SECTIONS.find((s) => s.id === "mails")?.href).toBe("/ops/mails");
     expect(OPS_SECTIONS.find((s) => s.id === "infra")?.href).toBe("/ops/infra");
