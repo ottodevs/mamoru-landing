@@ -203,3 +203,29 @@ describe("newIdentityAllowed: per-IP-prefix daily cap on fresh identities", () =
     expect(await newIdentityAllowed(undefined, reqFrom("203.0.113.9"), "2026-10-02")).toBe(true);
   });
 });
+
+import { ipPrefix as prefixOf, newIdentityAllowed as allowed } from "../src/exp-visitor";
+
+describe("ipPrefix", () => {
+  test("expands :: before taking the /64", () => {
+    expect(prefixOf("2001:db8::1")).toBe("2001:db8:0:0::/64");
+    expect(prefixOf("2001:db8:0:0:1:2:3:4")).toBe("2001:db8:0:0::/64");
+    expect(prefixOf("2001:db8:a::")).toBe("2001:db8:a:0::/64");
+    expect(prefixOf("::1")).toBe("0:0:0:0::/64");
+  });
+  test("two addresses in one /64 share a prefix; another /64 does not", () => {
+    expect(prefixOf("2001:db8:1:2::9")).toBe(prefixOf("2001:db8:1:2:ffff::1"));
+    expect(prefixOf("2001:db8:1:3::9")).not.toBe(prefixOf("2001:db8:1:2::9"));
+  });
+  test("IPv4 is a /24", () => {
+    expect(prefixOf("203.0.113.77")).toBe("203.0.113.0/24");
+  });
+});
+
+describe("newIdentityAllowed with a failing KV", () => {
+  test("mints nothing and does not throw", async () => {
+    const kv = { get: async () => { throw new Error("kv down"); }, put: async () => { throw new Error("kv down"); } };
+    const req = new Request("https://mamoru.lol/", { headers: { "cf-connecting-ip": "203.0.113.7" } });
+    expect(await allowed(kv as never, req, "2026-10-02")).toBe(false);
+  });
+});

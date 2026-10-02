@@ -773,13 +773,24 @@ async function serveSite(request: Request, env: Env, preview: boolean, ctx?: Bac
   baseHeaders.set("referrer-policy", "strict-origin-when-cross-origin");
   baseHeaders.delete("content-length");
 
-  const qaAllowed = preview || env.DEPLOY_CHANNEL === "staging" || (await hasOpsSession(request, env));
-  const expResponse = await applyExperiments(
-    new Response(asset.body, { status: asset.status, headers: baseHeaders }),
-    request,
-    "/",
-    { qaAllowed, db: env.MAMORU_DB, ctx, secret: env.EXP_VISITOR_SECRET, kv: env.WAITLIST },
-  );
+  // The page is held in memory so that a failure anywhere in the experiment path (KV, D1, the
+  // session check, the rewriter) still serves the plain page: experiments never take the site down.
+  const page = await asset.arrayBuffer();
+  const plain = () => new Response(page, { status: asset.status, headers: baseHeaders });
+  let expResponse: Response;
+  try {
+    const qaAllowed = preview || env.DEPLOY_CHANNEL === "staging" || (await hasOpsSession(request, env));
+    expResponse = await applyExperiments(plain(), request, "/", {
+      qaAllowed,
+      db: env.MAMORU_DB,
+      ctx,
+      secret: env.EXP_VISITOR_SECRET,
+      kv: env.WAITLIST,
+    });
+  } catch (e) {
+    console.error("experiments_failed", e instanceof Error ? e.message : String(e));
+    expResponse = plain();
+  }
   const headers = new Headers(expResponse.headers);
 
   if (preview) {

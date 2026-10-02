@@ -114,11 +114,16 @@ export function clearVisitorCookie(): string {
 /** Daily cap on brand-new visitor identities per network, keyed by a salted hash of an IP prefix. No raw IP is ever stored. */
 export const NEW_IDENTITY_DAILY_CAP = 200;
 
-/** IPv4 → /24, IPv6 → /64. A coarse network, not an individual address. */
-function ipPrefix(ip: string): string {
+/** IPv4 → /24, IPv6 → /64 (with `::` expanded first). A coarse network, not an individual address. */
+export function ipPrefix(ip: string): string {
   if (ip.includes(":")) {
-    const groups = ip.split(":");
-    return `${groups.slice(0, 4).join(":")}::/64`;
+    const [head, tail] = ip.split("::") as [string, string | undefined];
+    const left = head ? head.split(":") : [];
+    const right = tail ? tail.split(":") : [];
+    // `::` stands for as many zero groups as it takes to reach eight.
+    const groups = tail === undefined ? left : [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill("0"), ...right];
+    if (groups.length !== 8) return ip;
+    return `${groups.slice(0, 4).map((g) => (parseInt(g, 16) || 0).toString(16)).join(":")}::/64`;
   }
   const parts = ip.split(".");
   return parts.length === 4 ? `${parts[0]}.${parts[1]}.${parts[2]}.0/24` : ip;
@@ -145,8 +150,15 @@ export async function newIdentityAllowed(
   const prefix = ipPrefix(ip);
   const hash = (await sha256Hex(`${day}:${prefix}`)).slice(0, 32);
   const key = `exp-newid:${day}:${hash}`;
-  const hits = Number((await kv.get(key)) || "0");
-  if (hits >= cap) return false;
-  await kv.put(key, String(hits + 1), { expirationTtl: 60 * 60 * 30 });
-  return true;
+  // A soft cap: KV has no atomic increment, so concurrent requests can pass it by a few. It bounds
+  // farming to the order of `cap` a day per network, which is all the analysis needs.
+  // KV down or throwing: mint nothing. The visitor sees control and the page still renders.
+  try {
+    const hits = Number((await kv.get(key)) || "0");
+    if (hits >= cap) return false;
+    await kv.put(key, String(hits + 1), { expirationTtl: 60 * 60 * 30 });
+    return true;
+  } catch {
+    return false;
+  }
 }

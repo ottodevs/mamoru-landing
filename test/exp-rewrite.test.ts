@@ -548,3 +548,20 @@ describe("staging isolation: experiment writes never reach prod D1", () => {
     });
   });
 });
+
+describe("serving '/': the experiment path can fail without taking the page down", () => {
+  test("a throwing KV still serves the page with control copy", async () => {
+    await withHeroRunning({}, async () => {
+      const kv = {
+        get: async () => { throw new Error("kv down"); },
+        put: async () => { throw new Error("kv down"); },
+        delete: async () => {},
+        list: async () => ({ keys: [] }),
+      };
+      const res = await worker.fetch(get("/"), baseEnv({ WAITLIST: kv as never, EXP_VISITOR_SECRET: SECRET }));
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain("Launch APP");
+      expect(res.headers.get("set-cookie")).toBeNull();
+    });
+  });
+});
