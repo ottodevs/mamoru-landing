@@ -1,13 +1,42 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { D1Db, D1PreparedStatement } from "../src/d1-infra";
 import { experimentById, type ExperimentDef } from "../src/experiments";
+import { escapeForInlineScript } from "../src/exp-rewrite";
 import { sealSession } from "../src/ops";
-import { VISITOR_COOKIE } from "../src/exp-visitor";
+import { signVisitorId, VISITOR_COOKIE } from "../src/exp-visitor";
 import { STAGING_PROXY_HEADER } from "../src/staging-preview";
+import type { WaitlistKv } from "../src/list";
+import { sha256Hex } from "../src/text";
 import worker, { type Env } from "../src/worker";
 
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
 const HERO = experimentById("hero_cta")!;
+const SECRET = "test-visitor-secret";
+
+/** Pulls the bare visitor id out of a Set-Cookie header's signed `id.mac` value. */
+function bareId(setCookie: string | null): string | undefined {
+  const signed = (setCookie ?? "").match(new RegExp(`${VISITOR_COOKIE}=([^;]+)`))?.[1];
+  return signed?.slice(0, signed.lastIndexOf("."));
+}
+
+function fakeWaitlistKv(): WaitlistKv & { store: Map<string, string> } {
+  const store = new Map<string, string>();
+  return {
+    store,
+    async get(key) {
+      return store.get(key) ?? null;
+    },
+    async put(key, value) {
+      store.set(key, value);
+    },
+    async delete(key) {
+      store.delete(key);
+    },
+    async list({ prefix }) {
+      return { keys: [...store.keys()].filter((k) => k.startsWith(prefix)).map((name) => ({ name })), list_complete: true };
+    },
+  };
+}
 
 type Recorded = { experiment: string; variant: string; visitor: string; event: string; day: string };
 
@@ -66,6 +95,7 @@ function baseEnv(over: Partial<Env> = {}): Env {
     GOOGLE_CLIENT_ID: "id",
     GOOGLE_CLIENT_SECRET: "secret",
     OPS_SESSION_SECRET: "k1",
+    EXP_VISITOR_SECRET: SECRET,
     ...over,
   };
 }
@@ -196,13 +226,13 @@ describe("serving '/': running experiment", () => {
       const { ctx, flush } = ctxCollector();
       const res = await worker.fetch(get("/"), baseEnv({ MAMORU_DB: db }), ctx as never);
       await flush();
-      const cookie = (res.headers.get("set-cookie") ?? "").match(new RegExp(`${VISITOR_COOKIE}=([^;]+)`))?.[1]!;
+      const signedCookie = (res.headers.get("set-cookie") ?? "").match(new RegExp(`${VISITOR_COOKIE}=([^;]+)`))?.[1]!;
       expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({ experiment: "hero_cta", event: "exposure", visitor: cookie });
+      expect(rows[0]).toMatchObject({ experiment: "hero_cta", event: "exposure", visitor: bareId(res.headers.get("set-cookie")) });
 
       // A second visit the same day by the same visitor does not add a second row.
       const { ctx: ctx2, flush: flush2 } = ctxCollector();
-      await worker.fetch(get("/", { cookie: `${VISITOR_COOKIE}=${cookie}` }), baseEnv({ MAMORU_DB: db }), ctx2 as never);
+      await worker.fetch(get("/", { cookie: `${VISITOR_COOKIE}=${signedCookie}` }), baseEnv({ MAMORU_DB: db }), ctx2 as never);
       await flush2();
       expect(rows).toHaveLength(1);
     });
@@ -216,6 +246,32 @@ describe("serving '/': running experiment", () => {
       expect(await heroHtml(res2)).toContain('data-exp-variant="b"');
       expect(res1.headers.get("vary")).toBeNull();
       expect(res1.headers.get("cache-control")).toContain("public");
+    });
+  });
+
+  test("a pinned winner is the page for everyone — GPC, DNT, and a bot see it too, not control", async () => {
+    await withHeroRunning({ winner: "b" }, async () => {
+      const gpc = await worker.fetch(get("/", { "sec-gpc": "1" }), baseEnv());
+      const dnt = await worker.fetch(get("/", { dnt: "1" }), baseEnv());
+      const bot = await worker.fetch(get("/", { "user-agent": "Googlebot/2.1" }), baseEnv());
+      expect(await heroHtml(gpc)).toContain('data-exp-variant="b"');
+      expect(await heroHtml(dnt)).toContain('data-exp-variant="b"');
+      expect(await heroHtml(bot)).toContain('data-exp-variant="b"');
+      // Still uniform and public: no identifier was needed to decide any of this.
+      expect(gpc.headers.get("set-cookie")).toBeNull();
+      expect(gpc.headers.get("vary")).toBeNull();
+      expect(gpc.headers.get("cache-control")).toContain("public");
+    });
+  });
+
+  test("a running, un-pinned experiment is private for an opted-out visitor too — a shared cache cannot tell them apart", async () => {
+    await withHeroRunning({}, async () => {
+      const gpc = await worker.fetch(get("/", { "sec-gpc": "1" }), baseEnv());
+      const bot = await worker.fetch(get("/", { "user-agent": "Googlebot/2.1" }), baseEnv());
+      expect(gpc.headers.get("cache-control")).toContain("no-store");
+      expect(gpc.headers.get("vary")).toBe("Cookie");
+      expect(bot.headers.get("cache-control")).toContain("no-store");
+      expect(bot.headers.get("vary")).toBe("Cookie");
     });
   });
 
@@ -278,6 +334,110 @@ describe("serving '/': running experiment", () => {
       expect(await heroHtml(res)).toContain('data-exp-variant="control"');
       expect(res.headers.get("set-cookie")).toBeNull();
     });
+  });
+});
+
+describe("signed visitor cookie (end to end through worker.fetch)", () => {
+  test("an unsigned cookie from a client is not trusted: treated as a brand-new visitor, a fresh signed id is minted", async () => {
+    await withHeroRunning({}, async () => {
+      const claimedId = "a".repeat(32);
+      const res = await worker.fetch(get("/", { cookie: `${VISITOR_COOKIE}=${claimedId}` }), baseEnv());
+      const setCookie = res.headers.get("set-cookie") ?? "";
+      expect(setCookie).toContain(`${VISITOR_COOKIE}=`);
+      expect(bareId(setCookie)).not.toBe(claimedId);
+    });
+  });
+
+  test("a cookie signed under a different secret is not trusted either", async () => {
+    await withHeroRunning({}, async () => {
+      const id = "b".repeat(32);
+      const signed = await signVisitorId("some-other-secret", id);
+      const res = await worker.fetch(get("/", { cookie: `${VISITOR_COOKIE}=${signed}` }), baseEnv());
+      const setCookie = res.headers.get("set-cookie") ?? "";
+      expect(setCookie).toContain(`${VISITOR_COOKIE}=`);
+      expect(bareId(setCookie)).not.toBe(id);
+    });
+  });
+
+  test("a validly signed cookie is reused as-is: no new Set-Cookie on a repeat visit", async () => {
+    await withHeroRunning({}, async () => {
+      const first = await worker.fetch(get("/"), baseEnv());
+      const signed = (first.headers.get("set-cookie") ?? "").match(new RegExp(`${VISITOR_COOKIE}=([^;]+)`))?.[1]!;
+      const again = await worker.fetch(get("/", { cookie: `${VISITOR_COOKIE}=${signed}` }), baseEnv());
+      expect(again.headers.get("set-cookie")).toBeNull();
+      expect(await heroHtml(again)).toContain(`data-exp-variant="${(await heroHtml(first)).includes('variant="b"') ? "b" : "control"}"`);
+    });
+  });
+
+  test("without EXP_VISITOR_SECRET configured, no cookie is ever set — every visitor reads as unidentified", async () => {
+    await withHeroRunning({}, async () => {
+      const res = await worker.fetch(get("/"), baseEnv({ EXP_VISITOR_SECRET: undefined }));
+      expect(res.headers.get("set-cookie")).toBeNull();
+      // Served as control, same as any other visitor this Worker cannot identify.
+      expect(await heroHtml(res)).toContain('data-exp-variant="control"');
+    });
+  });
+});
+
+describe("per-IP-prefix daily cap on new identities", () => {
+  test("once a network's cap is reached, a fresh visitor from it reads as control with no cookie", async () => {
+    await withHeroRunning({}, async () => {
+      const kv = fakeWaitlistKv();
+      const hash = (await sha256Hex(`${new Date().toISOString().slice(0, 10)}:203.0.113.0/24`)).slice(0, 32);
+      kv.store.set(`exp-newid:${new Date().toISOString().slice(0, 10)}:${hash}`, "999999");
+      const res = await worker.fetch(get("/", { "cf-connecting-ip": "203.0.113.55" }), baseEnv({ WAITLIST: kv }));
+      expect(res.headers.get("set-cookie")).toBeNull();
+      expect(await heroHtml(res)).toContain('data-exp-variant="control"');
+    });
+  });
+
+  test("below the cap, a fresh visitor from that network is still minted normally", async () => {
+    await withHeroRunning({}, async () => {
+      const kv = fakeWaitlistKv();
+      const res = await worker.fetch(get("/", { "cf-connecting-ip": "203.0.113.56" }), baseEnv({ WAITLIST: kv }));
+      expect(res.headers.get("set-cookie") ?? "").toContain(VISITOR_COOKIE);
+    });
+  });
+
+  test("an already-established, validly signed visitor is never throttled by the cap, even once it is reached", async () => {
+    await withHeroRunning({}, async () => {
+      const kv = fakeWaitlistKv();
+      const day = new Date().toISOString().slice(0, 10);
+      const hash = (await sha256Hex(`${day}:203.0.113.0/24`)).slice(0, 32);
+      kv.store.set(`exp-newid:${day}:${hash}`, "999999");
+      const id = "c".repeat(32);
+      const signed = await signVisitorId(SECRET, id);
+      const res = await worker.fetch(
+        get("/", { "cf-connecting-ip": "203.0.113.57", cookie: `${VISITOR_COOKIE}=${signed}` }),
+        baseEnv({ WAITLIST: kv }),
+      );
+      expect(res.headers.get("set-cookie")).toBeNull(); // already had a cookie: nothing new to set, and nothing throttled
+      expect(await heroHtml(res)).toMatch(/data-exp-variant="(control|b)"/);
+    });
+  });
+});
+
+describe("escapeForInlineScript: safe to embed JSON inside <script>", () => {
+  test("escapes <, >, & so a payload cannot break out of the script tag", () => {
+    const out = escapeForInlineScript('{"a":"</script><img src=x onerror=alert(1)>&"}');
+    expect(out).not.toContain("</script>");
+    expect(out).not.toContain("<img");
+    expect(out).toContain("\\u003c");
+    expect(out).toContain("\\u003e");
+    expect(out).toContain("\\u0026");
+  });
+
+  test("escapes U+2028 and U+2029 (valid JSON, invalid raw JS line terminators)", () => {
+    const out = escapeForInlineScript('{"a":"  "}');
+    expect(out).not.toContain(" ");
+    expect(out).not.toContain(" ");
+    expect(out).toContain("\\u2028");
+    expect(out).toContain("\\u2029");
+  });
+
+  test("leaves ordinary JSON untouched", () => {
+    const out = escapeForInlineScript('{"hero_cta":"b"}');
+    expect(out).toBe('{"hero_cta":"b"}');
   });
 });
 

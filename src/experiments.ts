@@ -3,6 +3,12 @@
  * the ops console (/ops/experiments) is read-only on purpose. Assignment is a
  * pure function of (visitorId, experimentId): same visitor, same bucket, every
  * visit, with no server-side state beyond the visitor id cookie itself.
+ *
+ * Every id in this file (experiment id, variant id, goal name) is validated
+ * at module load against ID_PATTERN and the registry throws immediately on a
+ * violation — malformed ids never reach the HTMLRewriter selector or the
+ * inline JSON payload downstream (src/exp-rewrite.ts), so there is nothing to
+ * escape there that was not already a safe token here.
  */
 
 export type ExperimentStatus = "draft" | "running" | "stopped";
@@ -18,6 +24,20 @@ export interface ExperimentVariant {
   label?: string;
 }
 
+export type GoalSource = "server" | "client";
+
+export interface ExperimentGoal {
+  name: string;
+  /**
+   * "server" goals are only ever recorded from trusted server-side code
+   * (e.g. a hook on a genuinely successful write) and the client beacon at
+   * POST /api/exp/event must refuse to record them even if asked nicely —
+   * see src/exp-events.ts. "client" goals are exactly the ones the beacon
+   * is allowed to record.
+   */
+  source: GoalSource;
+}
+
 export interface ExperimentDef {
   id: string;
   description: string;
@@ -25,8 +45,8 @@ export interface ExperimentDef {
   /** The surface this experiment's data-exp hook lives on (the logical page, not every alias path). */
   path: string;
   variants: readonly ExperimentVariant[];
-  /** Goal event names this experiment is scored against. */
-  goals: readonly string[];
+  /** Goals this experiment is scored against, each tagged with the only channel allowed to record it. */
+  goals: readonly ExperimentGoal[];
   /** ISO day (YYYY-MM-DD) recorded when status first became "running". Informational only. */
   startedAt?: string;
   /** ISO day (YYYY-MM-DD). Enforced: past this day (UTC, end of day), the experiment behaves as stopped even if `status` still says "running". */
@@ -47,9 +67,40 @@ export const EXPERIMENTS: readonly ExperimentDef[] = [
       { id: "control", weight: 1, label: "Launch APP" },
       { id: "b", weight: 1, text: "Open the app", label: "Open the app" },
     ],
-    goals: ["open_app_click"],
+    goals: [{ name: "open_app_click", source: "client" }],
   },
 ] as const;
+
+/** Experiment ids, variant ids, and goal names: lowercase, digits, underscore only, 1-40 chars. */
+export const ID_PATTERN = /^[a-z0-9_]{1,40}$/;
+
+/** Throws a descriptive error on any id that would be unsafe to embed in a CSS attribute selector or JSON. Called once, at module load, and exported so tests can exercise it against deliberately bad fixtures. */
+export function validateRegistry(defs: readonly ExperimentDef[]): void {
+  const seenIds = new Set<string>();
+  for (const def of defs) {
+    if (!ID_PATTERN.test(def.id)) throw new Error(`experiments.ts: invalid experiment id "${def.id}"`);
+    if (seenIds.has(def.id)) throw new Error(`experiments.ts: duplicate experiment id "${def.id}"`);
+    seenIds.add(def.id);
+    if (!def.variants.length) throw new Error(`experiments.ts: "${def.id}" has no variants`);
+    const seenVariants = new Set<string>();
+    for (const v of def.variants) {
+      if (!ID_PATTERN.test(v.id)) throw new Error(`experiments.ts: "${def.id}" has an invalid variant id "${v.id}"`);
+      if (seenVariants.has(v.id)) throw new Error(`experiments.ts: "${def.id}" has a duplicate variant id "${v.id}"`);
+      seenVariants.add(v.id);
+    }
+    if (def.winner !== undefined && !seenVariants.has(def.winner)) {
+      throw new Error(`experiments.ts: "${def.id}" winner "${def.winner}" is not one of its variants`);
+    }
+    const seenGoals = new Set<string>();
+    for (const g of def.goals) {
+      if (!ID_PATTERN.test(g.name)) throw new Error(`experiments.ts: "${def.id}" has an invalid goal name "${g.name}"`);
+      if (seenGoals.has(g.name)) throw new Error(`experiments.ts: "${def.id}" has a duplicate goal "${g.name}"`);
+      seenGoals.add(g.name);
+    }
+  }
+}
+
+validateRegistry(EXPERIMENTS);
 
 export function experimentById(id: string): ExperimentDef | undefined {
   return EXPERIMENTS.find((e) => e.id === id);
@@ -67,6 +118,15 @@ export function controlVariantId(def: ExperimentDef): string {
 
 export function variantById(def: ExperimentDef, id: string): ExperimentVariant | undefined {
   return def.variants.find((v) => v.id === id);
+}
+
+export function goalByName(def: ExperimentDef, name: string): ExperimentGoal | undefined {
+  return def.goals.find((g) => g.name === name);
+}
+
+/** The pinned winner's variant, or undefined when no winner is set (or it names a variant that no longer exists). */
+export function winnerVariant(def: ExperimentDef): ExperimentVariant | undefined {
+  return def.winner ? variantById(def, def.winner) : undefined;
 }
 
 /**

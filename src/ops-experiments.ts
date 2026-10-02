@@ -37,7 +37,10 @@ function splitPercents(variants: readonly VariantReport[]): number[] {
 
 /** A thin ink range mark for a lift interval, centered on zero. No fill, no box: a line and two ticks. */
 function rangeMark(interval: Interval | null, verdictKind: string): string {
-  if (!interval) return `<div class="exp-range exp-range-empty" role="img" aria-label="Not enough data to draw an interval"></div>`;
+  if (!interval) {
+    const label = verdictKind === "inconsistent" ? "Data inconsistent" : "Not enough data to draw an interval";
+    return `<div class="exp-range exp-range-empty" role="img" aria-label="${esc(label)}"></div>`;
+  }
   const span = Math.max(Math.abs(interval.low), Math.abs(interval.high), 0.01) * 1.2;
   const at = (v: number) => Math.max(0, Math.min(100, 50 + (v / span) * 50));
   const left = at(interval.low);
@@ -101,23 +104,22 @@ function experimentBlock(report: ExperimentReport, delayMs: number, now: Date): 
     list.push(v);
     byGoal.set(v.goal, list);
   }
-  const head = def.goals
-    .map((g) => `<th colspan="2" title="${esc(g)}">${esc(goalLabel(g))}</th>`)
-    .join("");
-  const subHead = def.goals.map(() => `<th>N</th><th>Rate</th>`).join("");
+  const goalNames = def.goals.map((g) => g.name);
+  const head = goalNames.map((g) => `<th colspan="2" title="${esc(g)}">${esc(goalLabel(g))}</th>`).join("");
+  const subHead = goalNames.map(() => `<th>N</th><th>Rate</th>`).join("");
   const splits = splitPercents(report.variants);
   const rows = report.variants
     .map((v, i) =>
       variantRow(
         v,
         splits[i] ?? 0,
-        def.goals,
+        goalNames,
         i === 0,
         `${def.path}${def.path.includes("?") ? "&" : "?"}exp=${encodeURIComponent(def.id)}:${encodeURIComponent(v.id)}`,
       ),
     )
     .join("");
-  const goalsHtml = def.goals.map((g) => goalBlock(g, byGoal.get(g) ?? [])).join("");
+  const goalsHtml = goalNames.map((g) => goalBlock(g, byGoal.get(g) ?? [])).join("");
   const srmNote = report.srm.mismatched
     ? `<p class="notice bad" role="status" style="border-top:1px solid var(--ink);padding-top:.6rem;margin-top:1rem">The observed split does not match the declared weights (chi-square ${report.srm.chiSquare.toFixed(2)}, p ${report.srm.pValue < 0.001 ? "&lt; 0.001" : report.srm.pValue.toFixed(3)}). Something upstream of assignment is probably broken.</p>`
     : "";

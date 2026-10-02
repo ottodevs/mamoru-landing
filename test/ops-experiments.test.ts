@@ -48,10 +48,24 @@ function fixtureDb(): D1Db {
           return null as T | null;
         },
         async all<T>() {
-          const [experiment, event] = sql.includes("event = 'exposure'") ? [args[0] as string, "exposure"] : [args[0] as string, args[1] as string];
+          if (sql.includes("JOIN exp_events e")) {
+            const [experiment, event] = args as [string, string];
+            const exposedPairs = new Set(
+              rows.filter((r) => r.experiment === experiment && r.event === "exposure").map((r) => `${r.visitor}:${r.variant}`),
+            );
+            const bucket = new Map<string, Set<string>>();
+            for (const r of rows) {
+              if (r.experiment !== experiment || r.event !== event) continue;
+              if (!exposedPairs.has(`${r.visitor}:${r.variant}`)) continue;
+              if (!bucket.has(r.variant)) bucket.set(r.variant, new Set());
+              bucket.get(r.variant)!.add(r.visitor);
+            }
+            return { results: [...bucket.entries()].map(([variant, visitors]) => ({ variant, n: visitors.size })) as T[], success: true };
+          }
+          const experiment = args[0] as string;
           const bucket = new Map<string, Set<string>>();
           for (const r of rows) {
-            if (r.experiment !== experiment || r.event !== event) continue;
+            if (r.experiment !== experiment || r.event !== "exposure") continue;
             if (!bucket.has(r.variant)) bucket.set(r.variant, new Set());
             bucket.get(r.variant)!.add(r.visitor);
           }

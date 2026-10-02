@@ -7,9 +7,13 @@ import {
   experimentStatus,
   experimentsForPath,
   type ExperimentDef,
+  goalByName,
+  ID_PATTERN,
   isRunning,
+  validateRegistry,
   variantById,
   variesPerVisitor,
+  winnerVariant,
 } from "../src/experiments";
 
 function def(over: Partial<ExperimentDef> = {}): ExperimentDef {
@@ -22,7 +26,7 @@ function def(over: Partial<ExperimentDef> = {}): ExperimentDef {
       { id: "control", weight: 1 },
       { id: "b", weight: 1 },
     ],
-    goals: ["open_app_click"],
+    goals: [{ name: "open_app_click", source: "client" }],
     ...over,
   };
 }
@@ -32,7 +36,7 @@ describe("experiments.ts registry", () => {
     const hero = experimentById("hero_cta");
     expect(hero?.status).toBe("draft");
     expect(hero?.variants[0]?.id).toBe("control");
-    expect(hero?.goals).toEqual(["open_app_click"]);
+    expect(hero?.goals).toEqual([{ name: "open_app_click", source: "client" }]);
     expect(experimentsForPath("/")).toContainEqual(hero);
   });
 
@@ -44,6 +48,74 @@ describe("experiments.ts registry", () => {
     const d = def();
     expect(variantById(d, "b")?.id).toBe("b");
     expect(variantById(d, "nope")).toBeUndefined();
+  });
+
+  test("goalByName finds a goal by name, or not", () => {
+    const d = def();
+    expect(goalByName(d, "open_app_click")).toEqual({ name: "open_app_click", source: "client" });
+    expect(goalByName(d, "nope")).toBeUndefined();
+  });
+
+  test("winnerVariant resolves the pinned winner's variant object, or undefined", () => {
+    expect(winnerVariant(def({ winner: "b" }))?.id).toBe("b");
+    expect(winnerVariant(def())).toBeUndefined();
+    expect(winnerVariant(def({ winner: "ghost" }))).toBeUndefined();
+  });
+});
+
+describe("validateRegistry: ids must be safe tokens, thrown at module load", () => {
+  test("ID_PATTERN accepts lowercase/digits/underscore only, 1-40 chars", () => {
+    expect(ID_PATTERN.test("hero_cta")).toBe(true);
+    expect(ID_PATTERN.test("a")).toBe(true);
+    expect(ID_PATTERN.test("a".repeat(40))).toBe(true);
+    expect(ID_PATTERN.test("a".repeat(41))).toBe(false);
+    expect(ID_PATTERN.test("")).toBe(false);
+    expect(ID_PATTERN.test("Hero_Cta")).toBe(false);
+    expect(ID_PATTERN.test("hero-cta")).toBe(false);
+    expect(ID_PATTERN.test("hero cta")).toBe(false);
+    expect(ID_PATTERN.test("</script>")).toBe(false);
+  });
+
+  test("the real registry validates cleanly (already proven by module load not throwing, asserted again here)", () => {
+    expect(() => validateRegistry(EXPERIMENTS)).not.toThrow();
+  });
+
+  test("throws on an invalid experiment id", () => {
+    expect(() => validateRegistry([def({ id: "bad id!" })])).toThrow(/invalid experiment id/);
+  });
+
+  test("throws on a duplicate experiment id", () => {
+    expect(() => validateRegistry([def(), def()])).toThrow(/duplicate experiment id/);
+  });
+
+  test("throws on an invalid variant id", () => {
+    expect(() => validateRegistry([def({ variants: [{ id: "ok", weight: 1 }, { id: "</script>", weight: 1 }] })])).toThrow(
+      /invalid variant id/,
+    );
+  });
+
+  test("throws on a duplicate variant id", () => {
+    expect(() => validateRegistry([def({ variants: [{ id: "x", weight: 1 }, { id: "x", weight: 1 }] })])).toThrow(/duplicate variant id/);
+  });
+
+  test("throws on a winner that names a variant that does not exist", () => {
+    expect(() => validateRegistry([def({ winner: "ghost" })])).toThrow(/not one of its variants/);
+  });
+
+  test("throws on an invalid goal name", () => {
+    expect(() => validateRegistry([def({ goals: [{ name: "<script>", source: "client" }] })])).toThrow(/invalid goal name/);
+  });
+
+  test("throws on a duplicate goal name", () => {
+    expect(() =>
+      validateRegistry([
+        def({ goals: [{ name: "g", source: "client" }, { name: "g", source: "server" }] }),
+      ]),
+    ).toThrow(/duplicate goal/);
+  });
+
+  test("throws on an experiment with no variants", () => {
+    expect(() => validateRegistry([def({ variants: [] })])).toThrow(/no variants/);
   });
 });
 

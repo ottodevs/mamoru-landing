@@ -58,10 +58,12 @@ export function absoluteLift(control: Proportion, variant: Proportion): number {
 export const DEFAULT_MIN_SAMPLE_PER_VARIANT = 100;
 
 export type Verdict =
-  | { kind: "insufficient"; needPerVariant: number }
+  | { kind: "insufficient"; controlShort: number; variantShort: number }
   | { kind: "no-difference" }
   | { kind: "ahead" }
-  | { kind: "behind" };
+  | { kind: "behind" }
+  /** More conversions than exposures somewhere in the pair — the input itself cannot be trusted, so no call is made. */
+  | { kind: "inconsistent" };
 
 /** Rounds a "needs ~N more" figure up to a readable step so it reads as an estimate, not false precision. */
 function roundNeed(n: number): number {
@@ -72,28 +74,47 @@ function roundNeed(n: number): number {
 
 /**
  * The plain-language call for one variant against control on one goal.
- * Below the sample guard, no interval is trusted yet. At or above it, the
- * two-proportion interval decides: excludes zero and on top = ahead, excludes
- * zero and below = behind, straddles zero = no detectable difference.
+ * A conversion count above its own exposure count is impossible data, not a
+ * weak signal — checked first, before any sample-size or interval logic.
+ * Below the sample guard, no interval is trusted yet, and the shortfall is
+ * reported per arm (one side can easily have enough while the other does
+ * not). At or above it, the two-proportion interval decides: excludes zero
+ * and on top = ahead, excludes zero and below = behind, straddles zero = no
+ * detectable difference.
  */
 export function verdict(control: Proportion, variant: Proportion, minSample = DEFAULT_MIN_SAMPLE_PER_VARIANT): Verdict {
+  if (control.x > control.n || variant.x > variant.n || control.n < 0 || variant.n < 0) {
+    return { kind: "inconsistent" };
+  }
   if (control.n < minSample || variant.n < minSample) {
-    const short = Math.max(minSample - control.n, minSample - variant.n, 0);
-    return { kind: "insufficient", needPerVariant: roundNeed(short) };
+    return {
+      kind: "insufficient",
+      controlShort: Math.max(0, minSample - control.n),
+      variantShort: Math.max(0, minSample - variant.n),
+    };
   }
   const interval = twoProportionDiffInterval(control, variant);
-  if (!interval) return { kind: "insufficient", needPerVariant: roundNeed(minSample) };
+  if (!interval) return { kind: "insufficient", controlShort: roundNeed(minSample), variantShort: roundNeed(minSample) };
   if (interval.low <= 0 && interval.high >= 0) return { kind: "no-difference" };
   return interval.low > 0 ? { kind: "ahead" } : { kind: "behind" };
 }
 
-/** The sentence the ops section shows next to a variant. `label` is the variant's display name. */
-export function verdictSentence(v: Verdict, label: string): string {
+/** The sentence the ops section shows next to a variant. `label` is the variant's display name; `controlLabel` defaults to "control". */
+export function verdictSentence(v: Verdict, label: string, controlLabel = "control"): string {
   switch (v.kind) {
-    case "insufficient":
-      return v.needPerVariant > 0
-        ? `Not enough data yet (needs ~${v.needPerVariant} more per variant).`
-        : "Not enough data yet.";
+    case "inconsistent":
+      return "Data inconsistent: more conversions than exposures recorded. Not shown.";
+    case "insufficient": {
+      const parts: string[] = [];
+      if (v.controlShort > 0) parts.push(`${controlLabel} needs ~${roundNeed(v.controlShort)} more`);
+      if (v.variantShort > 0) parts.push(`${label} needs ~${roundNeed(v.variantShort)} more`);
+      if (!parts.length) return "Not enough data yet.";
+      if (parts.length === 1) {
+        const otherHasEnough = v.controlShort > 0 ? label : controlLabel;
+        return `Not enough data yet: ${parts[0]}, ${otherHasEnough} has enough.`;
+      }
+      return `Not enough data yet: ${parts.join(", ")}.`;
+    }
     case "no-difference":
       return "No detectable difference.";
     case "ahead":
@@ -193,11 +214,19 @@ export function srmCheck(
   const df = Math.max(1, observed.length - 1);
   if (total <= 0 || weightTotal <= 0) return { chiSquare: 0, df, pValue: 1, mismatched: false };
   let chiSquare = 0;
+  // A variant declared at zero weight that still received exposures is not a sampling-noise question —
+  // it is traffic leaking somewhere assignment says it cannot go — so it forces mismatched regardless of
+  // the p-value, rather than silently contributing nothing to the statistic (expected = 0 is undefined).
+  let zeroWeightLeak = false;
   for (const o of observed) {
     const w = weights.find((w) => w.variant === o.variant)?.weight ?? 0;
     const expected = total * (Math.max(0, w) / weightTotal);
-    if (expected > 0) chiSquare += (o.n - expected) ** 2 / expected;
+    if (expected > 0) {
+      chiSquare += (o.n - expected) ** 2 / expected;
+    } else if (o.n > 0) {
+      zeroWeightLeak = true;
+    }
   }
   const pValue = chiSquarePValue(chiSquare, df);
-  return { chiSquare, df, pValue, mismatched: pValue < alpha };
+  return { chiSquare, df, pValue, mismatched: zeroWeightLeak || pValue < alpha };
 }

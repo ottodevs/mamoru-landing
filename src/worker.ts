@@ -12,6 +12,11 @@
  *                         written in metrics_daily (one row per UTC day) and
  *                         in exp_events (see src/exp-store.ts), both additive.
  *   BASE_RPC_URL          secret, optional. Tried before the public Base RPCs.
+ *   EXP_VISITOR_SECRET    secret. Signs the experiment visitor-id cookie and
+ *                         derives the beacon nonce (src/exp-visitor.ts,
+ *                         src/exp-events.ts). Without it no visitor is ever
+ *                         identified: experiments only ever show a pinned
+ *                         winner (uniform, no identifier needed) or control.
  *
  * /ops is Google sign-in only, allowlisted by exact email (src/google.ts).
  * Anything without a valid allowlisted session is sent to the root.
@@ -96,6 +101,7 @@ export interface Env {
   LOOPS_TRANSACTIONAL_ID?: string;
   MAMORU_DB?: D1Db;
   BASE_RPC_URL?: string;
+  EXP_VISITOR_SECRET?: string;
   // Staging preview channel (/ops/preview). See src/staging-preview.ts.
   DEPLOY_CHANNEL?: string;
   STAGING?: Fetcher;
@@ -772,7 +778,7 @@ async function serveSite(request: Request, env: Env, preview: boolean, ctx?: Bac
     new Response(asset.body, { status: asset.status, headers: baseHeaders }),
     request,
     "/",
-    { qaAllowed, db: env.MAMORU_DB, ctx, secret: env.OPS_SESSION_SECRET },
+    { qaAllowed, db: env.MAMORU_DB, ctx, secret: env.EXP_VISITOR_SECRET, kv: env.WAITLIST },
   );
   const headers = new Headers(expResponse.headers);
 

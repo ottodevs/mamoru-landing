@@ -99,6 +99,44 @@ describe("verdict", () => {
     const v = verdict({ n: DEFAULT_MIN_SAMPLE_PER_VARIANT - 1, x: 10 }, { n: DEFAULT_MIN_SAMPLE_PER_VARIANT - 1, x: 10 });
     expect(v.kind).toBe("insufficient");
   });
+
+  test("a conversion count above its own exposure count is inconsistent, not a verdict", () => {
+    const v = verdict({ n: 100, x: 150 }, { n: 100, x: 10 }, 1);
+    expect(v.kind).toBe("inconsistent");
+    expect(verdictSentence(v, "B")).toContain("Data inconsistent");
+    // The same check catches it on either side.
+    const v2 = verdict({ n: 100, x: 10 }, { n: 100, x: 150 }, 1);
+    expect(v2.kind).toBe("inconsistent");
+  });
+
+  test("per-arm shortfall: only one arm short reports which one, and that the other has enough", () => {
+    const v = verdict({ n: 20, x: 2 }, { n: 300, x: 30 }, 100);
+    expect(v.kind).toBe("insufficient");
+    if (v.kind === "insufficient") {
+      expect(v.controlShort).toBeGreaterThan(0);
+      expect(v.variantShort).toBe(0);
+    }
+    const sentence = verdictSentence(v, "B", "control");
+    expect(sentence).toContain("control needs");
+    expect(sentence).toContain("B has enough");
+  });
+
+  test("per-arm shortfall: the variant short, control has enough", () => {
+    const v = verdict({ n: 300, x: 30 }, { n: 20, x: 2 }, 100);
+    expect(v.kind).toBe("insufficient");
+    const sentence = verdictSentence(v, "B", "control");
+    expect(sentence).toContain("B needs");
+    expect(sentence).toContain("control has enough");
+  });
+
+  test("per-arm shortfall: both short lists both, no 'has enough' claim", () => {
+    const v = verdict({ n: 10, x: 1 }, { n: 20, x: 2 }, 100);
+    expect(v.kind).toBe("insufficient");
+    const sentence = verdictSentence(v, "B", "control");
+    expect(sentence).toContain("control needs");
+    expect(sentence).toContain("B needs");
+    expect(sentence).not.toContain("has enough");
+  });
 });
 
 describe("chiSquarePValue: textbook critical values", () => {
@@ -152,5 +190,21 @@ describe("srmCheck: sample ratio mismatch", () => {
     );
     expect(r.mismatched).toBe(false);
     expect(r.pValue).toBe(1);
+  });
+
+  test("a variant declared at zero weight that still received exposures is flagged, regardless of p-value", () => {
+    const r = srmCheck(
+      [{ variant: "control", n: 10000 }, { variant: "b", n: 3 }],
+      [{ variant: "control", weight: 1 }, { variant: "b", weight: 0 }],
+    );
+    expect(r.mismatched).toBe(true);
+  });
+
+  test("a zero-weight variant with zero exposures is not flagged by that rule", () => {
+    const r = srmCheck(
+      [{ variant: "control", n: 10000 }, { variant: "b", n: 0 }],
+      [{ variant: "control", weight: 1 }, { variant: "b", weight: 0 }],
+    );
+    expect(r.mismatched).toBe(false);
   });
 });

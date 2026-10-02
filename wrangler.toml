@@ -41,11 +41,19 @@ STAGING_BASE_URL = "https://mamoru-lol-staging.ottodevs.workers.dev"
 binding = "WAITLIST"
 id = "69293a22f249404e9e0a1bca6878252e"
 
-# Owned by ottodevs/mamoru. Read-only here, except metrics_daily (one row per UTC day, written by the cron).
+# Owned by ottodevs/mamoru. Read-only here, except metrics_daily (one row per UTC day, written by the cron)
+# and exp_events (src/exp-store.ts, migrations/0004_experiments.sql), both additive.
 [[d1_databases]]
 binding = "MAMORU_DB"
 database_name = "mamoru"
 database_id = "682b2a66-d9d4-49e5-ac78-596d002d02ca"
+
+# EXP_VISITOR_SECRET: not set here (secrets never are) — set once with
+# `wrangler secret put EXP_VISITOR_SECRET` (prod only; staging never identifies
+# a visitor, see env.staging below). Signs the experiment visitor-id cookie and
+# derives the beacon nonce (src/exp-visitor.ts). Without it, experiments only
+# ever show a pinned winner (uniform, no identifier needed) or control — never
+# a live, visitor-bucketed split.
 [[services]]
 binding = "STAGING"
 service = "mamoru-lol-staging"

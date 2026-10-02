@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { D1Db, D1PreparedStatement, D1Result } from "../src/d1-infra";
 import { buildExperimentReport, loadExperimentReports } from "../src/exp-report";
-import { type ExpEventRow, readExpCounts, recordExpEvent } from "../src/exp-store";
+import { hasExposure, type ExpEventRow, readExpCounts, recordExpEvent } from "../src/exp-store";
 import type { ExperimentDef } from "../src/experiments";
 
 /** A tiny in-memory exp_events table: enough SQL semantics to exercise exp-store.ts's actual queries. */
@@ -17,17 +17,41 @@ function fakeExpDb(initial: ExpEventRow[] = [], opts: { missing?: boolean } = {}
         },
         async first<T>() {
           if (opts.missing) throw new Error("D1_ERROR: no such table: exp_events");
+          if (sql.includes("LIMIT 1")) {
+            // hasExposure(): SELECT 1 FROM exp_events WHERE experiment=? AND visitor=? AND variant=? AND event='exposure' LIMIT 1
+            const [experiment, visitor, variant] = args as [string, string, string];
+            const found = rows.some(
+              (r) => r.experiment === experiment && r.visitor === visitor && r.variant === variant && r.event === "exposure",
+            );
+            return (found ? { x: 1 } : null) as T | null;
+          }
           return null as T | null;
         },
         async all<T>(): Promise<D1Result<T>> {
           if (opts.missing) throw new Error("D1_ERROR: no such table: exp_events");
-          if (sql.includes("GROUP BY variant")) {
-            const [experiment, event] = sql.includes("event = 'exposure'")
-              ? [args[0] as string, "exposure"]
-              : [args[0] as string, args[1] as string];
+          if (sql.includes("JOIN exp_events e")) {
+            // Conversion query: only counts a visitor whose claimed variant also has a matching exposure row.
+            const [experiment, event] = args as [string, string];
+            const exposedPairs = new Set<string>();
+            for (const r of rows) {
+              if (r.experiment === experiment && r.event === "exposure") exposedPairs.add(`${r.visitor}:${r.variant}`);
+            }
             const bucket = new Map<string, Set<string>>();
             for (const r of rows) {
               if (r.experiment !== experiment || r.event !== event) continue;
+              if (!exposedPairs.has(`${r.visitor}:${r.variant}`)) continue;
+              if (!bucket.has(r.variant)) bucket.set(r.variant, new Set());
+              bucket.get(r.variant)!.add(r.visitor);
+            }
+            const results = [...bucket.entries()].map(([variant, visitors]) => ({ variant, n: visitors.size }));
+            return { results: results as T[], success: true };
+          }
+          if (sql.includes("GROUP BY variant")) {
+            // Exposure query.
+            const experiment = args[0] as string;
+            const bucket = new Map<string, Set<string>>();
+            for (const r of rows) {
+              if (r.experiment !== experiment || r.event !== "exposure") continue;
               if (!bucket.has(r.variant)) bucket.set(r.variant, new Set());
               bucket.get(r.variant)!.add(r.visitor);
             }
@@ -112,6 +136,41 @@ describe("readExpCounts", () => {
     const { db } = fakeExpDb([], { missing: true });
     expect(await readExpCounts(db, "hero_cta", ["open_app_click"])).toBeNull();
   });
+
+  test("a conversion with no matching exposure (dangling, or for a different variant) is excluded, not counted", async () => {
+    const { db } = fakeExpDb([
+      { experiment: "hero_cta", variant: "control", visitor: "v1", event: "exposure", day: "2026-10-01", at: "t" },
+      // v2 converts but was never exposed at all.
+      { experiment: "hero_cta", variant: "control", visitor: "v2", event: "open_app_click", day: "2026-10-01", at: "t" },
+      // v1 was exposed to "control" but the conversion row claims "b" — a mismatch, not a legitimate count for "b".
+      { experiment: "hero_cta", variant: "b", visitor: "v1", event: "open_app_click", day: "2026-10-01", at: "t" },
+    ]);
+    const counts = await readExpCounts(db, "hero_cta", ["open_app_click"]);
+    expect(counts?.conversions.get("open_app_click")?.get("control")).toBeUndefined();
+    expect(counts?.conversions.get("open_app_click")?.get("b")).toBeUndefined();
+  });
+});
+
+describe("hasExposure", () => {
+  test("true for a recorded (experiment, visitor, variant) exposure", async () => {
+    const { db } = fakeExpDb([{ experiment: "hero_cta", variant: "b", visitor: "v1", event: "exposure", day: "2026-10-01", at: "t" }]);
+    expect(await hasExposure(db, "hero_cta", "v1", "b")).toBe(true);
+  });
+
+  test("false when the variant does not match the recorded exposure", async () => {
+    const { db } = fakeExpDb([{ experiment: "hero_cta", variant: "control", visitor: "v1", event: "exposure", day: "2026-10-01", at: "t" }]);
+    expect(await hasExposure(db, "hero_cta", "v1", "b")).toBe(false);
+  });
+
+  test("false for a visitor with no exposure at all", async () => {
+    const { db } = fakeExpDb([]);
+    expect(await hasExposure(db, "hero_cta", "ghost", "b")).toBe(false);
+  });
+
+  test("false (fail closed), not thrown, when the table is missing", async () => {
+    const { db } = fakeExpDb([], { missing: true });
+    expect(await hasExposure(db, "hero_cta", "v1", "b")).toBe(false);
+  });
 });
 
 const FIXTURE: ExperimentDef = {
@@ -123,7 +182,7 @@ const FIXTURE: ExperimentDef = {
     { id: "control", weight: 1, label: "Control" },
     { id: "b", weight: 1, label: "Variant B" },
   ],
-  goals: ["open_app_click"],
+  goals: [{ name: "open_app_click", source: "client" }],
 };
 
 describe("buildExperimentReport", () => {
@@ -158,6 +217,23 @@ describe("buildExperimentReport", () => {
     };
     const report = buildExperimentReport(FIXTURE, counts);
     expect(report.srm.mismatched).toBe(true);
+  });
+
+  test("a conversion count above its own exposure count is clamped for display and the verdict is 'inconsistent'", () => {
+    const counts = {
+      exposures: new Map([["control", 1000], ["b", 50]]),
+      // b's conversions (80) exceed b's exposures (50): impossible, honest data.
+      conversions: new Map([["open_app_click", new Map([["control", 100], ["b", 80]])]]),
+    };
+    const report = buildExperimentReport(FIXTURE, counts);
+    const b = report.variants[1];
+    expect(b.conversions.open_app_click).toBe(50); // clamped to exposures, never over 100%
+    expect(b.rate.open_app_click).toBeCloseTo(1, 6);
+    expect(report.verdicts[0].verdict.kind).toBe("inconsistent");
+    expect(report.verdicts[0].sentence).toContain("Data inconsistent");
+    expect(report.verdicts[0].absLift).toBeNull();
+    expect(report.verdicts[0].relLift).toBeNull();
+    expect(report.verdicts[0].diffInterval).toBeNull();
   });
 });
 
