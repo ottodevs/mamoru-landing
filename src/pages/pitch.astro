@@ -163,7 +163,8 @@ const moduleKeys = ["uniswap", "curvegrid", "intercepta"] as const;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const k = e.key;
       if (k === "ArrowRight" || k === "PageDown" || k === " " || k === "Enter") {
-        if (k === "Enter" && (e.target as HTMLElement).closest("a,button")) return;
+        // A focused link or button keeps its own Enter and Space.
+        if ((k === "Enter" || k === " ") && (e.target as HTMLElement).closest("a,button")) return;
         e.preventDefault();
         next();
       } else if (k === "ArrowLeft" || k === "PageUp" || k === "Backspace") {
@@ -197,7 +198,6 @@ const moduleKeys = ["uniswap", "curvegrid", "intercepta"] as const;
     });
 
     dots.forEach((d) => d.addEventListener("click", () => show(Number(d.dataset.go) - 1)));
-    deck.querySelector(".js-restart")?.addEventListener("click", () => show(0));
     window.addEventListener("hashchange", () => {
       if (fromHash() !== at) show(fromHash());
     });
@@ -429,7 +429,8 @@ const moduleKeys = ["uniswap", "curvegrid", "intercepta"] as const;
     font-size: 0.95rem;
     color: var(--muted);
     opacity: 0;
-    transition: opacity 0.4s ease;
+    visibility: hidden;
+    transition: opacity 0.4s ease, visibility 0s linear 0.4s;
   }
   .verdict b {
     font-family: var(--font-mono);
@@ -447,6 +448,8 @@ const moduleKeys = ["uniswap", "curvegrid", "intercepta"] as const;
   .attacks[data-step="3"] .layers li:nth-child(-n+3) .verdict,
   .attacks[data-step="4"] .layers li:nth-child(-n+4) .verdict {
     opacity: 1;
+    visibility: visible;
+    transition-delay: 0s;
   }
 
   .link {
