@@ -411,18 +411,21 @@ const moduleKeys = ["uniswap", "curvegrid", "intercepta"] as const;
     border-bottom: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
   }
   .who {
-    font-size: clamp(1.1rem, 1.8vw, 1.4rem);
+    font-size: clamp(1.2rem, 2.2vw, 1.75rem);
+    line-height: 1.25;
   }
   .attacks .lede {
     margin: clamp(1.5rem, 4vh, 2.25rem) 0 0;
   }
+  .key .lede {
+    max-width: 44ch;
+  }
 
+  /* The refusal is the picture of this slide: it has to read from the back of a room. */
   .verdict {
-    display: inline-flex;
-    gap: 0.6rem;
-    align-items: baseline;
-    padding: 0.5rem 0.9rem;
-    border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
     font-size: 0.95rem;
     color: var(--muted);
     opacity: 0;
@@ -431,8 +434,9 @@ const moduleKeys = ["uniswap", "curvegrid", "intercepta"] as const;
   .verdict b {
     font-family: var(--font-mono);
     font-weight: 400;
-    font-size: 0.75rem;
-    letter-spacing: 0.18em;
+    font-size: clamp(1.15rem, 2.4vw, 1.9rem);
+    line-height: 1.1;
+    letter-spacing: 0.16em;
     color: var(--ink);
   }
   .verdict.refuse b {
