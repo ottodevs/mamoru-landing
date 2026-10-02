@@ -22,7 +22,7 @@ describe("pitch copy", () => {
     const { intercepta } = PITCH.modules;
     const scoped = JSON.stringify({
       ...PITCH,
-      modules: { ...PITCH.modules, intercepta: { ...intercepta, heading: "" } },
+      modules: { ...PITCH.modules, intercepta: { ...intercepta, heading: intercepta.heading.replace(/agents/gi, "") } },
     }).toLowerCase();
     expect(scoped).not.toContain("apy");
     expect(/\bagents?\b/.test(scoped)).toBe(false);
