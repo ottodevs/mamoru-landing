@@ -19,10 +19,13 @@ describe("pitch copy", () => {
   // "Agents" is on purpose in the intercepta module heading; every other
   // field stays clear of pitch-deck words that do not belong in this one.
   test("banned words stay out, except Agents in the intercepta heading", () => {
-    const { intercepta, ...otherModules } = PITCH.modules;
-    const scoped = JSON.stringify({ ...PITCH, modules: otherModules }).toLowerCase();
+    const { intercepta } = PITCH.modules;
+    const scoped = JSON.stringify({
+      ...PITCH,
+      modules: { ...PITCH.modules, intercepta: { ...intercepta, heading: "" } },
+    }).toLowerCase();
     expect(scoped).not.toContain("apy");
-    expect(/\bagent\b/.test(scoped)).toBe(false);
+    expect(/\bagents?\b/.test(scoped)).toBe(false);
     expect(scoped).not.toContain("decentralized");
     expect(scoped).not.toContain("guarantee");
     expect(intercepta.heading.toLowerCase()).toContain("agent");
