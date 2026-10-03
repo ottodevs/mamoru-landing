@@ -8,15 +8,15 @@ export const APP_HREF = "https://app.mamoru.lol";
 
 const MIX = [
   {
-    pct: 10,
+    pct: 15,
     name: "Mercenary Capital",
     note: "High risk, high reward",
     tone: "mercenary",
   },
   {
-    pct: 40,
+    pct: 35,
     name: "BTC / ETH + Stablecoins",
-    note: "Derivatives paired with stablecoins",
+    note: "Bluechips paired with stablecoins",
     tone: "paired",
   },
   {
@@ -87,9 +87,9 @@ export const OPEN_COPY = {
     body: "Yield comes back as stablecoins and is reinvested. Transfer it to your account whenever you want.",
   },
   allocation: {
-    eyebrow: "Portfolio allocation",
-    heading: ["Three assets.", "One allocation."],
-    body: "A diversified allocation designed to capture yield.",
+    eyebrow: "The allocation",
+    heading: ["Three positions.", "One growing reserve."],
+    body: "Capital works. The yield is captured in stablecoins.",
     mix: MIX,
   },
   questions: {

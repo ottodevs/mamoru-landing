@@ -6,11 +6,12 @@ const { eyebrow, heading, moves, scene } = OPEN_COPY.works;
 type Pt = { x: number; y: number };
 type Layout = { id: "w" | "t"; w: number; h: number; purse: Pt; core: Pt; ring: number; gap: number };
 
-// Three working positions, as offsets from the centre of the ring. The last one is the stablecoin position.
+// Three working positions, as offsets from the centre of the ring. Areas follow the 35 / 15 / 50 allocation,
+// and tones are the ones the allocation chart uses. The last one is the stablecoin position.
 const DISCS = [
-  { dx: -55, dy: -45, r: 40, tone: "ink" },
-  { dx: 70, dy: -20, r: 30, tone: "ink" },
-  { dx: -5, dy: 75, r: 34, tone: "stable" },
+  { dx: -58, dy: -50, r: 37, tone: "paired" },
+  { dx: 74, dy: -24, r: 24, tone: "mercenary" },
+  { dx: -5, dy: 78, r: 44, tone: "stables" },
 ];
 // Where the yield of the three positions converges.
 const MEET = { dx: 5, dy: 5 };
@@ -257,7 +258,13 @@ const geo = (l: Layout) => JSON.stringify({ purse: l.purse, core: l.core, discs:
   .disc {
     fill: var(--ink);
   }
-  .disc.stable,
+  .disc.paired {
+    fill: #0e1b2e;
+  }
+  .disc.mercenary {
+    fill: var(--stone);
+  }
+  .disc.stables,
   .bead,
   .coin {
     fill: var(--emerald);

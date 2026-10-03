@@ -39,9 +39,9 @@ const label = mix.map((seg) => `${seg.pct}% ${seg.name}`).join(", ");
 
 <style>
   .alloc {
-    --tone-stables: #a7a9ac;
+    --tone-stables: var(--emerald);
     --tone-paired: #0e1b2e;
-    --tone-mercenary: #6fa78f;
+    --tone-mercenary: var(--stone);
     width: 100%;
     padding: clamp(4rem, 9vw, 6.5rem) clamp(1.15rem, 5vw, 4.5rem);
     box-sizing: border-box;
@@ -128,7 +128,7 @@ const label = mix.map((seg) => `${seg.pct}% ${seg.name}`).join(", ");
   }
   .seg.stables {
     background: var(--tone-stables);
-    color: var(--ink);
+    color: var(--paper);
     border-radius: 0 0 0.55rem 0.55rem;
   }
 
@@ -181,7 +181,10 @@ const label = mix.map((seg) => `${seg.pct}% ${seg.name}`).join(", ");
     letter-spacing: 0.02em;
   }
   .mercenary .key-pct {
-    color: var(--emerald);
+    color: var(--tone-mercenary);
+  }
+  .stables .key-pct {
+    color: var(--tone-stables);
   }
   .paired .key-pct {
     color: var(--tone-paired);
