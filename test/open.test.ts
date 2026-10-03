@@ -33,7 +33,11 @@ describe("open instant", () => {
     expect(OPEN_COPY.hero.lede).toBe(
       "The principal keeps working. You collect stablecoins.",
     );
-    expect(OPEN_COPY.works.moves.map((m) => m.title)).toEqual(["Connect", "Fund", "Allocate", "Harvest"]);
+    expect(OPEN_COPY.works.moves.map((m) => m.title)).toEqual([
+      "Your money goes in",
+      "It goes to work",
+      "The earnings are set aside",
+    ]);
     expect(OPEN_COPY.spend.heading).toBe("DeFi yield for the real world");
     expect(OPEN_COPY.questions.heading).toBe("FAQs");
     expect("split" in OPEN_COPY).toBe(false);
@@ -59,9 +63,9 @@ describe("open instant", () => {
     expect(`${OPEN_COPY.hero.line1} ${OPEN_COPY.hero.line2}`).toBe("SAVINGS, AUTOMATED");
     expect(OPEN_COPY.questions.items.map((i) => i.q)).not.toContain("How do I reach you?");
     expect(OPEN_COPY.footer.x).toEqual({ handle: "@entermamoru", href: "https://x.com/entermamoru" });
-    expect(OPEN_COPY.works.scene.payout).toBe("Stablecoin pool");
-    expect(OPEN_COPY.works.scene.strategy).toBe("Funds Allocation");
-    expect(OPEN_COPY.works.scene.agent).toBe("Mamoru Delegated Account");
+    expect(OPEN_COPY.works.scene.payout).toBe("Stablecoins");
+    expect(OPEN_COPY.works.scene.strategy).toBe("Three pools");
+    expect(OPEN_COPY.works.scene.agent).toBe("Your account");
     expect(OPEN_COPY.allocation.heading).toEqual(["Three assets.", "One allocation."]);
     expect(OPEN_COPY.allocation.mix.reduce((sum, m) => sum + m.pct, 0)).toBe(100);
     expect(OPEN_COPY.allocation.mix[0].note).toBe("High risk, high reward");
