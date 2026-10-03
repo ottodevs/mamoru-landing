@@ -1,329 +1,202 @@
 ---
 import { OPEN_COPY } from "../open-copy";
 
-const { heading, moves, scene } = OPEN_COPY.works;
-
-// Stone silhouettes in local coords, about 100 units across.
-const MARK = [
-  "M-34 -34 C-24 -52 8 -54 26 -42 C42 -31 40 -6 30 16 C19 40 -2 50 -21 45 C-41 40 -48 17 -46 -4 C-45 -17 -41 -26 -34 -34 Z",
-  "M37 -3 C52 3 58 22 51 37 C46 48 34 52 21 51 Z",
-];
-// Three pools: graded sizes.
-const SLEEVES = [
-  "M-52 -4 C-50 -24 -26 -32 -4 -30 C18 -28 30 -14 28 4 C26 22 6 30 -18 29 C-40 28 -54 14 -52 -4 Z",
-  "M30 8 C32 -6 46 -12 58 -8 C68 -4 72 8 68 18 C64 28 50 30 40 27 C31 24 28 16 30 8 Z",
-  "M42 -30 C45 -38 54 -40 60 -35 C65 -31 64 -23 58 -20 C51 -17 44 -20 42 -26 Z",
-];
+const { eyebrow, heading, moves, scene } = OPEN_COPY.works;
 
 type Pt = { x: number; y: number };
-type Cue = Pt | null;
-type Layout = {
-  id: "w" | "t";
-  w: number;
-  h: number;
-  mark: Pt;
-  sleeves: Pt;
-  pond: Pt & { rx: number; ry: number };
-  rakes: string[];
-  drop: string;
-  toSleeves: string[];
-  toPond: string[];
-  collect: string;
-  cue: { fees: Cue; collect: Cue };
-};
+type Layout = { id: "w" | "t"; w: number; h: number; purse: Pt; core: Pt; ring: number; gap: number };
 
-// Three moments, left to right: the money goes in, it works, the earnings are set aside.
-const wide: Layout = {
-  id: "w",
-  w: 1200,
-  h: 340,
-  mark: { x: 210, y: 170 },
-  sleeves: { x: 600, y: 170 },
-  pond: { x: 990, y: 170, rx: 86, ry: 46 },
-  rakes: Array.from({ length: 10 }, (_, i) => {
-    const y = 86 + i * 20;
-    return `M0 ${y} C300 ${y - 3} 600 ${y + 3} 900 ${y} S1200 ${y - 2} 1200 ${y}`;
-  }),
-  drop: "M210 14 L210 122",
-  toSleeves: [
-    "M265 172 C360 200 470 200 547 180",
-    "M265 166 C380 138 520 132 629 162",
-    "M265 160 C390 116 560 100 657 132",
-  ],
-  toPond: [
-    "M605 192 C720 222 850 222 932 186",
-    "M669 182 C760 176 860 166 928 170",
-    "M663 132 C770 122 880 132 934 158",
-  ],
-  collect: "M1000 150 C1024 110 1060 72 1120 44",
-  cue: { fees: { x: 990, y: 100 }, collect: { x: 1040, y: 28 } },
-};
-
-// Narrow screens: the same garden, top to bottom, text beside it.
-const tall: Layout = {
-  id: "t",
-  w: 160,
-  h: 660,
-  mark: { x: 80, y: 110 },
-  sleeves: { x: 74, y: 330 },
-  pond: { x: 80, y: 550, rx: 60, ry: 36 },
-  rakes: Array.from({ length: 7 }, (_, i) => {
-    const x = 22 + i * 20;
-    return `M${x} 0 C${x - 3} 165 ${x + 3} 330 ${x} 495 S${x - 2} 660 ${x} 660`;
-  }),
-  drop: "M80 6 L80 62",
-  toSleeves: [
-    "M80 158 C90 220 76 260 64 298",
-    "M84 158 C110 210 126 260 124 310",
-    "M88 156 C120 200 136 250 130 280",
-  ],
-  toPond: [
-    "M62 368 C60 430 70 480 76 520",
-    "M122 370 C124 440 104 490 90 522",
-    "M138 310 C156 390 130 480 100 524",
-  ],
-  collect: "M92 566 C108 592 124 618 144 644",
-  cue: { fees: { x: 80, y: 470 }, collect: { x: 76, y: 632 } },
-};
-
-const layouts = [wide, tall];
-const cueText = { fees: scene.fees, collect: scene.collect };
-const where = [scene.agent, scene.strategy, scene.payout];
-const holes = (l: Layout) => [
-  { ...l.mark, rx: 96, ry: 74 },
-  { ...l.sleeves, rx: 118, ry: 76 },
-  { x: l.pond.x, y: l.pond.y, rx: l.pond.rx + 26, ry: l.pond.ry + 26 },
+// Three working positions, as offsets from the centre of the ring. The last one is the stablecoin position.
+const DISCS = [
+  { dx: -55, dy: -45, r: 40, tone: "ink" },
+  { dx: 70, dy: -20, r: 30, tone: "ink" },
+  { dx: -5, dy: 75, r: 34, tone: "stable" },
 ];
+// Where the yield of the three positions converges.
+const MEET = { dx: 5, dy: 5 };
+
+// One composition, laid out left to right on wide screens and top to bottom on narrow ones.
+const layouts: Layout[] = [
+  { id: "w", w: 720, h: 400, purse: { x: 108, y: 200 }, core: { x: 478, y: 200 }, ring: 160, gap: 180 },
+  { id: "t", w: 360, h: 470, purse: { x: 180, y: 44 }, core: { x: 180, y: 290 }, ring: 160, gap: 270 },
+];
+const geo = (l: Layout) => JSON.stringify({ purse: l.purse, core: l.core, discs: DISCS, meet: MEET });
 ---
 <section class="works" id="works" aria-labelledby="works-title">
+  <p class="eyebrow">{eyebrow}</p>
   <h2 id="works-title">{heading}</h2>
 
-  <div class="garden">
-    {layouts.map((l) => (
-      <svg class={`scene scene-${l.id}`} viewBox={`0 0 ${l.w} ${l.h}`} role="img" aria-label={scene.aria}>
-        <defs>
-          <mask id={`clear-${l.id}`}>
-            <rect width={l.w} height={l.h} fill="#fff" />
-            {holes(l).map((h) => <ellipse cx={h.x} cy={h.y} rx={h.rx} ry={h.ry} fill="#000" />)}
-          </mask>
-          <radialGradient id={`sheen-${l.id}`} cx="35%" cy="30%" r="80%">
-            <stop offset="0" stop-color="#3a3935" />
-            <stop offset="0.55" stop-color="#171715" />
-            <stop offset="1" stop-color="#0b0b0a" />
-          </radialGradient>
-          <radialGradient id={`water-${l.id}`} cx="50%" cy="45%" r="60%">
-            <stop offset="0" stop-color="#2f5d50" stop-opacity="0.2" />
-            <stop offset="1" stop-color="#2f5d50" stop-opacity="0.06" />
-          </radialGradient>
-        </defs>
+  {layouts.map((l) => (
+    <svg class={`scene scene-${l.id}`} viewBox={`0 0 ${l.w} ${l.h}`} role="img" aria-label={scene.aria} data-geo={geo(l)}>
+      <defs>
+        <filter id={`ink-${l.id}`} filterUnits="userSpaceOnUse" x="0" y="0" width={l.w} height={l.h} color-interpolation-filters="sRGB">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="soft" />
+          <feColorMatrix in="soft" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 18 -7" />
+        </filter>
+      </defs>
 
-        <g class="rakes" mask={`url(#clear-${l.id})`}>
-          {l.rakes.map((d, i) => <path class="rake" d={d} pathLength="1" style={`--i:${i}`} />)}
-        </g>
+      <circle
+        class="ring"
+        cx={l.core.x}
+        cy={l.core.y}
+        r={l.ring}
+        pathLength="1"
+        transform={`rotate(${l.gap - 345.6} ${l.core.x} ${l.core.y})`}
+      />
+      <circle class="purse" cx={l.purse.x} cy={l.purse.y} r="26" />
+      <circle class="capital" cx={l.purse.x} cy={l.purse.y} r="10" />
 
-        {holes(l).map((h, i) => (
-          <g class="rings" style={`--i:${i}`}>
-            {[0, 1].map((r) => (
-              <ellipse class="ring" cx={h.x} cy={h.y} rx={h.rx - 26 + r * 14} ry={h.ry - 22 + r * 11} pathLength="1" style={`--r:${r}`} />
-            ))}
-          </g>
+      <g class="ink" filter={`url(#ink-${l.id})`}>
+        <circle class="drop" cx={l.core.x} cy={l.core.y} r="0" />
+        {DISCS.map((d) => (
+          <circle class={`disc ${d.tone}`} cx={l.core.x + d.dx} cy={l.core.y + d.dy} r={d.r} />
         ))}
+      </g>
 
-        <path class="return" d={l.collect} pathLength="1" />
+      {DISCS.map(() => <circle class="bead" r="0" />)}
+      <circle class="coin" r="0" />
+      <text class="coin-tag" x={l.core.x + MEET.dx} y={l.core.y + MEET.dy - 20} opacity="0">{scene.coin}</text>
+    </svg>
+  ))}
 
-        <g class="feature f-0" style="--i:0">
-          <ellipse class="shadow" cx={l.mark.x + 4} cy={l.mark.y + 44} rx="46" ry="7" />
-          <g class="stone" transform={`translate(${l.mark.x} ${l.mark.y})`}>
-            {MARK.map((d) => <path d={d} fill={`url(#sheen-${l.id})`} />)}
-          </g>
-          <circle class="pulse" cx={l.mark.x} cy={l.mark.y} r="58" />
-        </g>
-
-        <g class="feature f-1" style="--i:1">
-          <ellipse class="shadow" cx={l.sleeves.x + 4} cy={l.sleeves.y + 32} rx="56" ry="7" />
-          <g class="stone sleeves" transform={`translate(${l.sleeves.x} ${l.sleeves.y})`}>
-            {SLEEVES.map((d, k) => <path class={`sleeve s-${k}`} d={d} fill={`url(#sheen-${l.id})`} />)}
-          </g>
-          <circle class="pulse" cx={l.sleeves.x} cy={l.sleeves.y} r="62" />
-        </g>
-
-        <g class="feature f-2" style="--i:2">
-          <ellipse class="pond" cx={l.pond.x} cy={l.pond.y} rx={l.pond.rx} ry={l.pond.ry} fill={`url(#water-${l.id})`} />
-          {[0.55, 0.3].map((f) => (
-            <ellipse class="ripple-still" cx={l.pond.x} cy={l.pond.y} rx={l.pond.rx * f} ry={l.pond.ry * f} />
-          ))}
-          <ellipse class="splash" cx={l.pond.x} cy={l.pond.y} rx={l.pond.rx * 0.4} ry={l.pond.ry * 0.4} />
-          <text class="pond-tag" x={l.pond.x} y={l.pond.y + 4}>{scene.pond}</text>
-        </g>
-
-        {(Object.keys(cueText) as (keyof typeof cueText)[]).map((k) => {
-          const at = l.cue[k];
-          return at ? <text class={`cue cue-${k}`} x={at.x} y={at.y}>{cueText[k]}</text> : null;
-        })}
-
-        <path class="lane" d={l.drop} />
-        {l.toSleeves.map((d) => <path class="lane" d={d} />)}
-        {l.toPond.map((d) => <path class="lane" d={d} />)}
-
-        <g class="token coin" opacity="0"><circle r="8.5" /></g>
-        {[0, 1, 2].map(() => (
-          <g class="token coin-part" opacity="0"><circle r="5" /></g>
-        ))}
-        {[0, 1, 2].map(() => (
-          <g class="token fee" opacity="0"><circle r="4.2" /></g>
-        ))}
-        <g class="token payout" opacity="0">
-          <circle r="8.5" />
-          <text y="3.4">$</text>
-        </g>
-      </svg>
+  <ol class="steps">
+    {moves.map((move) => (
+      <li class="step">
+        <h3>{move.title}</h3>
+        <p class="body">{move.body}</p>
+      </li>
     ))}
-
-    <ol class="steps">
-      {moves.map((move, i) => (
-        <li class="step" style={`--i:${i}`}>
-          <p class="kicker">
-            <span class="num">{String(i + 1).padStart(2, "0")}</span>
-            <span class="where">{where[i]}</span>
-          </p>
-          <h3>{move.title}</h3>
-          <p class="body">{move.body}</p>
-        </li>
-      ))}
-    </ol>
-  </div>
+  </ol>
 </section>
 
 <script>
+  type Pt = { x: number; y: number };
+  type Geo = { purse: Pt; core: Pt; discs: { dx: number; dy: number; r: number }[]; meet: { dx: number; dy: number } };
+
   const root = document.querySelector<HTMLElement>("#works");
   const quiet = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-  const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
-  const out = { duration: 700, easing: "cubic-bezier(.2,.8,.2,1)", fill: "forwards" as const };
 
-  // The scene actually displayed at this viewport width.
-  const liveScene = () =>
-    [...(root?.querySelectorAll<SVGSVGElement>(".scene") ?? [])].find(
-      (s) => getComputedStyle(s).display !== "none",
-    );
+  // One clock for the whole piece, in milliseconds.
+  const LOOP = 11000;
+  const FUND = [800, 2800] as const;
+  const SPLIT = [2800, 4800] as const;
+  // Each round: beads leave, meet, become one coin, the coin returns, the stablecoin position grows.
+  const ROUNDS = [
+    { leave: 5200, meet: 6400, coin: 6800, home: 7500, grown: 7900 },
+    { leave: 8000, meet: 9000, coin: 9300, home: 9900, grown: 10250 },
+  ];
+  const CLOSE = [10300, 10900] as const;
+  const STILL = 7900;
+  const GROWTH = 0.075;
 
-  function travel(el: SVGGElement, path: SVGPathElement, ms: number, back = false) {
-    return new Promise<void>((resolve) => {
-      const len = path.getTotalLength();
-      const t0 = performance.now();
-      const tick = (now: number) => {
-        const raw = Math.min(1, (now - t0) / ms);
-        const at = ease(raw);
-        const p = path.getPointAtLength(len * (back ? 1 - at : at));
-        const fade = raw < 0.12 ? raw / 0.12 : raw > 0.88 ? (1 - raw) / 0.12 : 1;
-        el.setAttribute("transform", `translate(${p.x} ${p.y})`);
-        el.setAttribute("opacity", String(fade));
-        if (raw < 1) requestAnimationFrame(tick);
-        else resolve();
-      };
-      requestAnimationFrame(tick);
-    });
-  }
+  const clamp = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
+  const ease = (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2);
+  const lin = (t: number, a: number, b: number) => clamp((t - a) / (b - a));
+  const seg = (t: number, a: number, b: number) => ease(lin(t, a, b));
+  const mix = (a: number, b: number, k: number) => a + (b - a) * k;
+  const set = (el: Element, attrs: Record<string, number>) => {
+    for (const k in attrs) el.setAttribute(k, attrs[k]!.toFixed(2));
+  };
 
-  function pulse(svg: SVGSVGElement, i: number) {
-    svg.querySelector(`.f-${i} .pulse`)?.animate(
-      [
-        { opacity: 0.5, transform: "scale(0.72)" },
-        { opacity: 0, transform: "scale(1.4)" },
-      ],
-      { duration: 1400, easing: "cubic-bezier(.2,.7,.2,1)" },
-    );
-  }
+  function stage(svg: SVGSVGElement) {
+    const geo = JSON.parse(svg.dataset.geo ?? "{}") as Geo;
+    const one = (sel: string) => svg.querySelector(sel)!;
+    const discs = [...svg.querySelectorAll(".disc")];
+    const beads = [...svg.querySelectorAll(".bead")];
+    const [ink, drop, capital, coin, tag] = [one(".ink"), one(".drop"), one(".capital"), one(".coin"), one(".coin-tag")];
+    const meet = { x: geo.core.x + geo.meet.dx, y: geo.core.y + geo.meet.dy };
+    const homes = geo.discs.map((d) => ({ x: geo.core.x + d.dx, y: geo.core.y + d.dy, r: d.r }));
+    const stable = homes[homes.length - 1]!;
 
-  async function cue(svg: SVGSVGElement, name: string, ms = 1800) {
-    const el = svg.querySelector(`.cue-${name}`);
-    if (!el) return;
-    el.animate(
-      [
-        { opacity: 0, transform: "translateY(4px)" },
-        { opacity: 1, transform: "none", offset: 0.15 },
-        { opacity: 1, transform: "none", offset: 0.8 },
-        { opacity: 0, transform: "translateY(-3px)" },
-      ],
-      { duration: ms, easing: "ease-out" },
-    );
-  }
+    return (t: number) => {
+      // Fund: the capital leaves the purse and moves inward.
+      const fund = seg(t, FUND[0], FUND[1]);
+      set(capital, { r: 10 * (1 - seg(t, FUND[0], FUND[0] + 400)) + 10 * seg(t, CLOSE[0], LOOP) });
+      set(drop, {
+        cx: mix(geo.purse.x, geo.core.x, fund),
+        cy: mix(geo.purse.y, geo.core.y, fund),
+        r: 15 * lin(t, FUND[0], FUND[0] + 300) * (1 - seg(t, SPLIT[0] + 300, SPLIT[0] + 1200)),
+      });
 
-  function splash(svg: SVGSVGElement) {
-    svg.querySelector(".splash")?.animate(
-      [
-        { opacity: 0.7, transform: "scale(0.5)" },
-        { opacity: 0, transform: "scale(2.1)" },
-      ],
-      { duration: 1300, easing: "cubic-bezier(.2,.7,.2,1)" },
-    );
-  }
+      // Mamoru works: the capital parts into three positions, which breathe.
+      const split = seg(t, SPLIT[0], SPLIT[1]);
+      const grown = 1 + ROUNDS.reduce((sum, r) => sum + GROWTH * seg(t, r.home - 200, r.grown), 0);
+      homes.forEach((h, k) => {
+        const settle = Math.sin(Math.PI * lin(t, SPLIT[1] - 100 + k * 120, SPLIT[1] + 800 + k * 120)) * 0.035;
+        const breath = t > SPLIT[1] ? Math.sin((t - SPLIT[1]) / 700 + k) * 0.012 : 0;
+        set(discs[k]!, {
+          cx: mix(geo.core.x, h.x, split),
+          cy: mix(geo.core.y, h.y, split),
+          r: h.r * (1 - (1 - lin(t, SPLIT[0], SPLIT[1] - 400)) ** 3) * (1 + settle + breath) * (h === stable ? grown : 1),
+        });
+      });
 
-  async function cycle(svg: SVGSVGElement) {
-    const lanes = [...svg.querySelectorAll<SVGPathElement>(".lane")];
-    const [drop, ...rest] = lanes;
-    const toSleeves = rest.slice(0, 3);
-    const toPond = rest.slice(3, 6);
-    const coin = svg.querySelector<SVGGElement>(".coin");
-    const parts = [...svg.querySelectorAll<SVGGElement>(".coin-part")];
-    const fees = [...svg.querySelectorAll<SVGGElement>(".fee")];
-    const payout = svg.querySelector<SVGGElement>(".payout");
-    const sleeves = [...svg.querySelectorAll<SVGPathElement>(".sleeve")];
-    const collect = svg.querySelector<SVGPathElement>(".return");
-    if (!drop || !coin || !payout || !collect) return;
+      // You save: yield leaves each position, meets, becomes one coin and returns to the stablecoin position.
+      let coinR = 0;
+      let coinAt = meet;
+      let tagOn = 0;
+      const beadAt: (Pt & { r: number })[] = homes.map((h) => ({ x: h.x, y: h.y, r: 0 }));
+      for (const r of ROUNDS) {
+        if (t < r.leave || t > r.home + 150) continue;
+        homes.forEach((h, k) => {
+          if (t > r.meet) return;
+          const p = seg(t, r.leave + k * 90, r.meet);
+          const d = Math.hypot(meet.x - h.x, meet.y - h.y) || 1;
+          const from = { x: h.x + ((meet.x - h.x) / d) * h.r, y: h.y + ((meet.y - h.y) / d) * h.r };
+          const bend = 16 * (k - 1 || 1);
+          const via = { x: (from.x + meet.x) / 2 - ((meet.y - h.y) / d) * bend, y: (from.y + meet.y) / 2 + ((meet.x - h.x) / d) * bend };
+          const q = 1 - p;
+          beadAt[k] = {
+            x: q * q * from.x + 2 * q * p * via.x + p * p * meet.x,
+            y: q * q * from.y + 2 * q * p * via.y + p * p * meet.y,
+            r: 4.5 * lin(t, r.leave + k * 90, r.leave + k * 90 + 250),
+          };
+        });
+        const back = seg(t, r.coin, r.home);
+        coinAt = { x: mix(meet.x, stable.x, back), y: mix(meet.y, stable.y, back) };
+        coinR = 11 * seg(t, r.meet - 150, r.coin - 100) * (1 - 0.5 * back) * (1 - lin(t, r.home, r.home + 150));
+        tagOn = seg(t, r.meet, r.meet + 300) * (1 - seg(t, r.coin, r.coin + 350));
+      }
+      beads.forEach((b, k) => set(b, { cx: beadAt[k]!.x, cy: beadAt[k]!.y, r: beadAt[k]!.r }));
+      set(coin, { cx: coinAt.x, cy: coinAt.y, r: coinR });
+      set(tag, { opacity: tagOn });
 
-    // 1. Your money goes in: it lands in your account and stays there.
-    await travel(coin, drop, 1700);
-    pulse(svg, 0);
-    await sleep(900);
-
-    // 2. It goes to work: spread across three pools.
-    await Promise.all(parts.map((p, k) => sleep(k * 140).then(() => travel(p, toSleeves[k]!, 2000))));
-    pulse(svg, 1);
-    await sleep(900);
-
-    // 3. The earnings are set aside: they gather as stablecoins, twice over.
-    cue(svg, "fees", 4600);
-    for (let round = 0; round < 2; round++) {
-      sleeves.forEach((sl, k) =>
-        sl.animate([{ transform: "scale(1)" }, { transform: "scale(1.05)" }, { transform: "scale(1)" }], {
-          duration: 900,
-          delay: 120 * k,
-          easing: "ease-in-out",
-        }),
-      );
-      await Promise.all(fees.map((f, k) => sleep(k * 200).then(() => travel(f, toPond[k]!, 1800))));
-      splash(svg);
-      await sleep(500);
-    }
-
-    // And you collect them whenever you want.
-    cue(svg, "collect", 3400);
-    await travel(payout, collect, 2400);
-    await sleep(2600);
-  }
-
-  async function loop() {
-    for (;;) {
-      const svg = liveScene();
-      if (svg) await cycle(svg);
-      else await sleep(1000);
-    }
+      // The loop closes: the positions dissolve and the purse fills again.
+      set(ink, { opacity: 1 - seg(t, CLOSE[0], CLOSE[1]) });
+    };
   }
 
   if (root) {
-    if (quiet) root.classList.add("live", "still");
-    else {
-      const io = new IntersectionObserver(
+    const scenes = [...root.querySelectorAll<SVGSVGElement>(".scene")].map((svg) => ({ svg, draw: stage(svg) }));
+    const live = () => scenes.find((s) => getComputedStyle(s.svg).display !== "none");
+
+    if (quiet) {
+      scenes.forEach((s) => s.draw(STILL));
+    } else {
+      let clock = 0;
+      let last = 0;
+      let running = false;
+      const tick = (now: number) => {
+        if (!running) return;
+        clock = (clock + Math.min(64, now - last)) % LOOP;
+        last = now;
+        live()?.draw(clock);
+        root.dataset.phase = clock < SPLIT[0] ? "0" : clock < SPLIT[1] ? "1" : "2";
+        requestAnimationFrame(tick);
+      };
+      scenes.forEach((s) => s.draw(0));
+      new IntersectionObserver(
         (entries) => {
-          if (!entries.some((e) => e.isIntersecting)) return;
-          io.disconnect();
-          root.classList.add("live");
-          sleep(2000).then(loop);
+          const seen = entries.some((e) => e.isIntersecting);
+          if (seen === running) return;
+          running = seen;
+          if (!seen) return;
+          root.classList.add("run");
+          last = performance.now();
+          requestAnimationFrame(tick);
         },
-        { threshold: 0.3 },
-      );
-      io.observe(root);
+        { threshold: 0.25 },
+      ).observe(root);
     }
   }
 </script>
@@ -332,9 +205,18 @@ const holes = (l: Layout) => [
   .works {
     display: flex;
     flex-direction: column;
-    gap: clamp(1.5rem, 3vw, 2.5rem);
+    align-items: center;
     width: 100%;
     min-width: 0;
+    text-align: center;
+  }
+  .eyebrow {
+    margin: 0 0 clamp(0.9rem, 2vw, 1.25rem);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--emerald);
   }
   h2 {
     margin: 0;
@@ -343,234 +225,107 @@ const holes = (l: Layout) => [
     letter-spacing: 0.01em;
     line-height: 1.15;
   }
-  .garden {
-    display: grid;
-    gap: clamp(0.25rem, 1vw, 0.75rem);
-  }
+
   .scene {
+    display: block;
     width: 100%;
+    max-width: 45rem;
     height: auto;
+    margin: clamp(1.5rem, 4vw, 3rem) auto clamp(1.25rem, 3vw, 2.25rem);
     overflow: visible;
   }
   .scene-t {
     display: none;
+    max-width: 22.5rem;
   }
 
-  /* Gravel and rings draw in once. */
-  .rake,
   .ring {
     fill: none;
-    stroke: var(--wash);
-    stroke-width: 1.1;
+    stroke: var(--ink);
+    stroke-width: 1.3;
     stroke-linecap: round;
-    stroke-dasharray: 1;
-    stroke-dashoffset: 1;
+    stroke-dasharray: 0.92 0.08;
+    opacity: 0.5;
   }
-  .live .rake {
-    stroke-dashoffset: 0;
-    transition: stroke-dashoffset 1.8s cubic-bezier(0.6, 0, 0.2, 1) calc(var(--i) * 70ms);
+  .purse {
+    fill: none;
+    stroke: var(--ink);
+    stroke-width: 1.3;
   }
-  .live .ring {
-    stroke-dashoffset: 0;
-    transition: stroke-dashoffset 1.5s cubic-bezier(0.6, 0, 0.2, 1) calc(600ms + var(--i) * 220ms + var(--r) * 120ms);
-  }
-
-  /* Stones settle, the pond fills. */
-  .feature {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-  .live .feature {
-    opacity: 1;
-    transform: none;
-    transition:
-      opacity 0.9s ease calc(300ms + var(--i) * 220ms),
-      transform 1.1s cubic-bezier(0.2, 0.8, 0.2, 1) calc(300ms + var(--i) * 220ms);
-  }
-  .shadow {
+  .capital,
+  .drop,
+  .disc {
     fill: var(--ink);
-    opacity: 0.12;
-    filter: blur(5px);
   }
-  .sleeve {
-    transform-box: fill-box;
-    transform-origin: center;
-  }
-  .pond {
-    stroke: color-mix(in srgb, var(--emerald) 45%, transparent);
-    stroke-width: 1.2;
-  }
-  .ripple-still {
-    fill: none;
-    stroke: color-mix(in srgb, var(--emerald) 30%, transparent);
-    stroke-width: 1;
-  }
-  .splash {
-    fill: none;
-    stroke: var(--emerald);
-    stroke-width: 1.4;
-    opacity: 0;
-    transform-box: fill-box;
-    transform-origin: center;
-  }
-  .pond-tag {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
+  .disc.stable,
+  .bead,
+  .coin {
     fill: var(--emerald);
-    text-anchor: middle;
   }
-  .pulse {
-    fill: none;
-    stroke: var(--emerald);
-    stroke-width: 1.2;
-    opacity: 0;
-    transform-box: fill-box;
-    transform-origin: center;
-  }
-
-  /* The way out is always there, quietly. */
-  .return {
-    fill: none;
-    stroke: var(--stone);
-    stroke-width: 1;
-    stroke-dasharray: 1;
-    stroke-dashoffset: 1;
-    opacity: 0.55;
-  }
-  .live .return {
-    stroke-dashoffset: 0;
-    transition: stroke-dashoffset 1.6s cubic-bezier(0.6, 0, 0.2, 1) 1.4s;
-  }
-  .lane {
-    fill: none;
-    stroke: none;
-  }
-
-  .scene text.cue {
+  .coin-tag {
     font-family: var(--font-mono);
-    font-size: 11px;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.18em;
     text-anchor: middle;
+    fill: var(--emerald);
     paint-order: stroke;
     stroke: var(--paper);
-    stroke-width: 6px;
+    stroke-width: 5px;
     stroke-linejoin: round;
   }
-  .cue {
-    fill: var(--emerald);
-    opacity: 0;
-  }
-  .scene-t text.cue {
-    font-size: 8.5px;
-  }
 
-  .coin circle,
-  .coin-part circle {
-    fill: var(--ink);
-  }
-  .fee circle,
-  .payout circle {
-    fill: var(--emerald);
-  }
-  .payout text {
-    fill: var(--paper);
-    font-family: var(--font-serif);
-    font-size: 11px;
-    text-anchor: middle;
-  }
-
-  /* The three steps, under their stones. */
+  /* Three lines under the loop. The one in play is at full ink. */
   .steps {
     list-style: none;
     margin: 0;
     padding: 0;
+    width: 100%;
+    max-width: 56rem;
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: clamp(1rem, 2.5vw, 2rem);
+    gap: clamp(1rem, 3vw, 2.5rem);
   }
   .step {
-    text-align: center;
-    opacity: 0;
-    transform: translateY(10px);
+    transition: opacity 0.7s ease;
   }
-  .live .step {
+  .run .step {
+    opacity: 0.4;
+  }
+  .run[data-phase="0"] .step:nth-child(1),
+  .run[data-phase="1"] .step:nth-child(2),
+  .run[data-phase="2"] .step:nth-child(3) {
     opacity: 1;
-    transform: none;
-    transition:
-      opacity 0.8s ease calc(900ms + var(--i) * 220ms),
-      transform 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) calc(900ms + var(--i) * 220ms);
-  }
-  .kicker {
-    display: flex;
-    justify-content: center;
-    flex-wrap: wrap;
-    gap: 0.2em 0.7em;
-    margin: 0 0 0.6rem;
-    font-family: var(--font-mono);
-    font-size: 0.7rem;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--stone);
-  }
-  .num {
-    color: var(--emerald);
   }
   h3 {
-    margin: 0 0 0.45rem;
-    font-size: clamp(1.2rem, 1.8vw, 1.45rem);
+    margin: 0 0 0.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
     font-weight: 400;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--emerald);
   }
   .step .body {
     margin: 0 auto;
-    max-width: 30ch;
-    line-height: 1.55;
-    color: color-mix(in srgb, var(--ink) 78%, var(--paper));
-  }
-
-  .still .rake,
-  .still .ring,
-  .still .return,
-  .still .feature,
-  .still .step {
-    transition: none;
+    max-width: 24ch;
+    font-size: clamp(1.05rem, 1.6vw, 1.25rem);
+    line-height: 1.4;
   }
 
   @media (max-width: 760px) {
-    .garden {
-      grid-template-columns: 9.5rem minmax(0, 1fr);
-      grid-template-rows: repeat(3, 13rem);
-      gap: 0 0.9rem;
-    }
     .scene-w {
       display: none;
     }
     .scene-t {
       display: block;
-      grid-row: 1 / span 3;
-      width: 100%;
-      height: 39rem;
+    }
+    /* The ink filter is the costly part; phones get plain discs. */
+    .ink {
+      filter: none;
     }
     .steps {
-      grid-row: 1 / span 3;
       grid-template-columns: 1fr;
-      grid-template-rows: repeat(3, 13rem);
-      gap: 0;
-    }
-    .step {
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      text-align: left;
-    }
-    .kicker {
-      justify-content: flex-start;
-    }
-    .step .body {
-      margin: 0;
-      font-size: 0.92rem;
+      gap: 1.4rem;
     }
   }
 </style>

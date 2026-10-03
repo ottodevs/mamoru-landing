@@ -70,29 +70,16 @@ export const OPEN_COPY = {
     lede: "The principal keeps working. You collect stablecoins.",
   },
   works: {
-    heading: "How it works",
+    eyebrow: "How it works",
+    heading: "One simple loop.",
     moves: [
-      {
-        title: "Your money goes in",
-        body: "It lands in an account only you control. Mamoru never holds it.",
-      },
-      {
-        title: "It goes to work",
-        body: "Mamoru spreads it across three pools on Uniswap and looks after them for you.",
-      },
-      {
-        title: "The earnings are set aside",
-        body: "What your money earns is kept in stablecoins, ready to collect whenever you want.",
-      },
+      { title: "Fund", body: "You put capital to work." },
+      { title: "Mamoru works", body: "Your capital works automatically." },
+      { title: "You save", body: "Your yield becomes stablecoins." },
     ],
     scene: {
-      agent: "Your account",
-      strategy: "Three pools",
-      payout: "Stablecoins",
-      pond: "Stablecoins",
-      fees: "+ earnings",
-      collect: "Collect any time",
-      aria: "Your money goes into an account you control. Mamoru spreads it across three pools on Uniswap. What it earns is set aside in stablecoins, and you can collect it any time.",
+      coin: "USDC",
+      aria: "You fund Mamoru. Your capital parts into three working positions. Their yield flows out, becomes USDC and returns to the stablecoin position, which grows and keeps working.",
     },
   },
   spend: {
