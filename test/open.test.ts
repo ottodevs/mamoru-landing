@@ -31,7 +31,7 @@ describe("open instant", () => {
     expect(blob).not.toContain("\u2014");
     expect(blob).not.toContain("\u2013");
     expect(OPEN_COPY.hero.lede).toBe(
-      "The principal keeps working. Yield is reinvested until you transfer.",
+      "The principal keeps working. You collect stablecoins.",
     );
     expect(OPEN_COPY.works.moves.map((m) => m.title)).toEqual(["Connect", "Fund", "Allocate", "Harvest"]);
     expect(OPEN_COPY.spend.heading).toBe("DeFi yield for the real world");
@@ -56,7 +56,7 @@ describe("open instant", () => {
   });
 
   test("hero, FAQs and footer", () => {
-    expect(`${OPEN_COPY.hero.line1} ${OPEN_COPY.hero.line2}`).toBe("APY DELIVERED");
+    expect(`${OPEN_COPY.hero.line1} ${OPEN_COPY.hero.line2}`).toBe("SAVINGS AUTOMATED");
     expect(OPEN_COPY.questions.items.map((i) => i.q)).not.toContain("How do I reach you?");
     expect(OPEN_COPY.footer.x).toEqual({ handle: "@entermamoru", href: "https://x.com/entermamoru" });
     expect(OPEN_COPY.works.scene.payout).toBe("Stablecoin pool");
