@@ -6,7 +6,7 @@ interface Props {
 }
 
 const { variant = "page" } = Astro.props;
-const { eyebrow, heading, body, mix } = OPEN_COPY.allocation;
+const { eyebrow, heading, body, note, mix } = OPEN_COPY.allocation;
 const label = mix.map((seg) => `${seg.pct}% ${seg.name}`).join(", ");
 ---
 <section class:list={["alloc", variant]} id="allocation" aria-labelledby="alloc-title">
@@ -17,6 +17,7 @@ const label = mix.map((seg) => `${seg.pct}% ${seg.name}`).join(", ");
         {heading.map((line) => <span>{line}</span>)}
       </h2>
       <p class="lead">{body}</p>
+      <p class="note">{note}</p>
     </div>
 
     <figure class="board" role="img" aria-label={label}>
@@ -88,6 +89,18 @@ const label = mix.map((seg) => `${seg.pct}% ${seg.name}`).join(", ");
     font-size: 1.125rem;
     line-height: 1.5;
     color: color-mix(in srgb, var(--ink) 62%, var(--paper));
+  }
+
+  /* One quiet fact under the lead, set like the eyebrow. */
+  .note {
+    margin: clamp(1.5rem, 3vw, 2rem) 0 0;
+    padding-top: 1rem;
+    max-width: 20rem;
+    border-top: 1px solid var(--wash);
+    font-size: 0.75rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--emerald);
   }
 
   .board {

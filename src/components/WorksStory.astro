@@ -8,13 +8,14 @@ type Layout = { id: "w" | "t"; w: number; h: number; purse: Pt; core: Pt; ring: 
 
 // Three working positions, as offsets from the centre of the ring. Areas follow the 35 / 15 / 50 allocation,
 // and tones are the ones the allocation chart uses. The last one is the stablecoin position.
+// Each edge sits the same distance (34) from the centre, so the yield of all three travels equal, straight paths.
 const DISCS = [
-  { dx: -58, dy: -50, r: 37, tone: "paired" },
-  { dx: 74, dy: -24, r: 24, tone: "mercenary" },
-  { dx: -5, dy: 78, r: 44, tone: "stables" },
+  { dx: -58, dy: -41, r: 37, tone: "paired" },
+  { dx: 47.5, dy: -33, r: 24, tone: "mercenary" },
+  { dx: 0, dy: 78, r: 44, tone: "stables" },
 ];
-// Where the yield of the three positions converges.
-const MEET = { dx: 5, dy: 5 };
+// Where the yield of the three positions converges: the centre of the ring.
+const MEET = { dx: 0, dy: 0 };
 
 // One composition, laid out left to right on wide screens and top to bottom on narrow ones.
 const layouts: Layout[] = [
@@ -141,16 +142,14 @@ const geo = (l: Layout) => JSON.stringify({ purse: l.purse, core: l.core, discs:
         if (t < r.leave || t > r.home + 150) continue;
         homes.forEach((h, k) => {
           if (t > r.meet) return;
-          const p = seg(t, r.leave + k * 90, r.meet);
+          // Straight from the edge of the position to the centre, all three in step.
+          const p = (1 - Math.cos(Math.PI * lin(t, r.leave, r.meet))) / 2;
           const d = Math.hypot(meet.x - h.x, meet.y - h.y) || 1;
           const from = { x: h.x + ((meet.x - h.x) / d) * h.r, y: h.y + ((meet.y - h.y) / d) * h.r };
-          const bend = 16 * (k - 1 || 1);
-          const via = { x: (from.x + meet.x) / 2 - ((meet.y - h.y) / d) * bend, y: (from.y + meet.y) / 2 + ((meet.x - h.x) / d) * bend };
-          const q = 1 - p;
           beadAt[k] = {
-            x: q * q * from.x + 2 * q * p * via.x + p * p * meet.x,
-            y: q * q * from.y + 2 * q * p * via.y + p * p * meet.y,
-            r: 4.5 * lin(t, r.leave + k * 90, r.leave + k * 90 + 250),
+            x: mix(from.x, meet.x, p),
+            y: mix(from.y, meet.y, p),
+            r: 4.5 * lin(t, r.leave, r.leave + 250),
           };
         });
         const back = seg(t, r.coin, r.home);

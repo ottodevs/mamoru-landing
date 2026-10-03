@@ -90,6 +90,7 @@ export const OPEN_COPY = {
     eyebrow: "The allocation",
     heading: ["Three positions.", "One growing reserve."],
     body: "Capital works. The yield is captured in stablecoins.",
+    note: "65%+ in stablecoins by design",
     mix: MIX,
   },
   questions: {
