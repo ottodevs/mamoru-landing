@@ -61,10 +61,10 @@ describe("open instant", () => {
     expect(OPEN_COPY.footer.x).toEqual({ handle: "@entermamoru", href: "https://x.com/entermamoru" });
     expect(OPEN_COPY.works.heading).toBe("One simple loop.");
     expect(OPEN_COPY.works.scene.coin).toBe("USDC");
-    expect(OPEN_COPY.allocation.heading).toEqual(["Three assets.", "One allocation."]);
+    expect(OPEN_COPY.allocation.heading).toEqual(["Three positions.", "One growing reserve."]);
     expect(OPEN_COPY.allocation.mix.reduce((sum, m) => sum + m.pct, 0)).toBe(100);
     expect(OPEN_COPY.allocation.mix[0].note).toBe("High risk, high reward");
-    expect(OPEN_COPY.allocation.mix[1].note).toBe("Derivatives paired with stablecoins");
+    expect(OPEN_COPY.allocation.mix[1].note).toBe("Bluechips paired with stablecoins");
   });
 });
 
