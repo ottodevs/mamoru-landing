@@ -3,24 +3,24 @@ import Base from "../layouts/Base.astro";
 import Countdown from "../components/Countdown.astro";
 import EmailBar from "../components/EmailBar.astro";
 ---
-<Base title="Mamoru.lol" description="APY. Delivered.">
+<Base title="Mamoru.lol" description="Savings. Automated.">
   <main class="page">
     <div class="stack">
       <header class="lockup">
         <img
           class="mark"
           src="/mark-two-stones.png"
-          width="46"
-          height="46"
+          width="92"
+          height="92"
           alt="The Split"
         />
         <p class="wordmark">Mamoru</p>
       </header>
       <h1 class="hero">
-        <span>APY.</span>
-        <span>DELIVERED.</span>
+        <span>SAVINGS.</span>
+        <span>AUTOMATED.</span>
       </h1>
-      <p class="teaser">The principal keeps working. Yield is reinvested until you transfer.</p>
+      <p class="teaser">The principal keeps working.<br />You collect stablecoins.</p>
       <Countdown />
       <EmailBar />
       <a
@@ -74,9 +74,9 @@ import EmailBar from "../components/EmailBar.astro";
     max-width: 100%;
   }
 
-  /* Mark sits at roughly two wordmark cap-heights; wordmark size is untouched. */
+  /* Mark sits at roughly four wordmark cap-heights; wordmark size is untouched. */
   .mark {
-    width: clamp(2.25rem, 3.4vw, 2.9rem);
+    width: clamp(4.5rem, 6.8vw, 5.8rem);
     height: auto;
     display: block;
   }

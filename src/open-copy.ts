@@ -29,7 +29,7 @@ const MIX = [
 
 export const OPEN_COPY = {
   title: "Mamoru",
-  description: "The principal keeps working. Yield is reinvested until you transfer.",
+  description: "The principal keeps working. You collect stablecoins.",
   nav: [
     { href: "#works", label: "How it works" },
     { href: "#questions", label: "FAQs" },
@@ -65,9 +65,9 @@ export const OPEN_COPY = {
     ],
   },
   hero: {
-    line1: "APY",
-    line2: "DELIVERED",
-    lede: "The principal keeps working. Yield is reinvested until you transfer.",
+    line1: "SAVINGS",
+    line2: "AUTOMATED",
+    lede: "The principal keeps working. You collect stablecoins.",
   },
   works: {
     heading: "How it works",
@@ -137,6 +137,12 @@ export const OPEN_COPY = {
         q: "Can I withdraw my funds at any time?",
         a: [
           "Yes. There is no lockup. Transfer part or all of it to your account whenever you want.",
+        ],
+      },
+      {
+        q: "How much does Mamoru cost?",
+        a: [
+          "Nothing upfront. We take 10% of the yield you harvest to cover account maintenance and gas. No yield, no fee.",
         ],
       },
       {
