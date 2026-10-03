@@ -56,7 +56,7 @@ describe("open instant", () => {
   });
 
   test("hero, FAQs and footer", () => {
-    expect(`${OPEN_COPY.hero.line1} ${OPEN_COPY.hero.line2}`).toBe("SAVINGS AUTOMATED");
+    expect(`${OPEN_COPY.hero.line1} ${OPEN_COPY.hero.line2}`).toBe("SAVINGS, AUTOMATED");
     expect(OPEN_COPY.questions.items.map((i) => i.q)).not.toContain("How do I reach you?");
     expect(OPEN_COPY.footer.x).toEqual({ handle: "@entermamoru", href: "https://x.com/entermamoru" });
     expect(OPEN_COPY.works.scene.payout).toBe("Stablecoin pool");

@@ -65,7 +65,7 @@ export const OPEN_COPY = {
     ],
   },
   hero: {
-    line1: "SAVINGS",
+    line1: "SAVINGS,",
     line2: "AUTOMATED",
     lede: "The principal keeps working. You collect stablecoins.",
   },
