@@ -1,7 +1,13 @@
 ---
 import { OPEN_COPY } from "../open-copy";
 
-const { eyebrow, heading, moves, scene } = OPEN_COPY.works;
+interface Props {
+  /** A host page (the deck) can name the section differently. The landing keeps its own eyebrow. */
+  eyebrow?: string;
+}
+
+const { heading, moves, scene } = OPEN_COPY.works;
+const eyebrow = Astro.props.eyebrow ?? OPEN_COPY.works.eyebrow;
 
 type Pt = { x: number; y: number };
 type Layout = { id: "w" | "t"; w: number; h: number; purse: Pt; core: Pt; ring: number; gap: number };
