@@ -21,31 +21,34 @@ export const DECK_V2 = {
   loop: {
     eyebrow: "The solution",
   },
-  solution: {
-    eyebrow: "Mamoru",
-    heading: ["Deposit.", "Forget.", "It keeps working."],
-    points: [
-      "Your capital goes to work in curated Uniswap pools.",
-      "Yield is reinvested until you transfer.",
-      "No lockup. Transfer out anytime, to any wallet.",
-      "Your account, your keys. Mamoru never holds them.",
+  trust: {
+    heading: "Why trust Mamoru",
+    rows: [
+      {
+        who: "You keep control",
+        what: "Your wallet is a smart account, owned by a passkey on your device. Mamoru never holds a key.",
+      },
+      {
+        who: "A key with limits",
+        what: "Mamoru works through a session key. It can act only inside a written policy and you can revoke it anytime.",
+      },
+      { who: "Uniswap", what: "Where the capital works. Mamoru swaps and provides liquidity on Uniswap, nothing else." },
+      {
+        who: "Mostly stablecoins",
+        what: "Three positions, 65%+ in stablecoins by design. The yield is captured in stablecoins.",
+      },
     ],
-    versus: [
-      { who: "Bank", note: "your money, their rate" },
-      { who: "Vaults", note: "locked, or trust us" },
-      { who: "Mamoru", note: "yours, working, liquid" },
-    ],
-    caption: "守る · to protect",
+    plain: ["No lockup.", "No token."],
   },
   built: {
     eyebrow: "How it's built",
     heading: "Under the stone.",
     layers: [
-      { who: "Your account", what: "A Safe on Base, owned by a passkey on your device. The server never holds a key." },
+      { who: "Your account", what: "A Safe, owned by a passkey on your device. The server never holds a key." },
       { who: "Uniswap", what: "Where the capital works. The agent swaps and provides liquidity on Uniswap v3, nothing else." },
       { who: "Session key", what: "The agent acts only inside a written policy. Revoke it anytime, leave without us." },
-      { who: "Curvegrid", what: "MultiBaas indexes every pool event, checked against Base, 10 of 10." },
-      { who: "Chain snapshots", what: "Base forked at a real block. Leaked-key attacks replayed until the chain refuses them all." },
+      { who: "Curvegrid", what: "MultiBaas indexes every pool event, checked against the chain, 10 of 10." },
+      { who: "Chain snapshots", what: "The chain forked at a real block. Leaked-key attacks replayed until the chain refuses them all." },
     ],
   },
   more: {
@@ -63,7 +66,7 @@ export const DECK_V2 = {
     hrefLabel: "san.mamoru.lol",
   },
   demo: {
-    eyebrow: "Live on Base",
+    eyebrow: "Live",
     heading: "Demo",
     href: "https://app.mamoru.lol",
     hrefLabel: "app.mamoru.lol",

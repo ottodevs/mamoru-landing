@@ -4,7 +4,7 @@ import WorksStory from "../components/WorksStory.astro";
 import { DECK_V2 as DECK } from "../deck-v2-copy";
 import { OPEN_COPY } from "../open-copy";
 
-const { problem, loop, solution, built, more, demo, outro } = DECK;
+const { problem, loop, trust, built, more, demo, outro } = DECK;
 const cover = OPEN_COPY.hero;
 const total = 8;
 
@@ -76,46 +76,28 @@ const askAt = [
       <WorksStory eyebrow={loop.eyebrow} />
     </section>
 
-    <!-- 04 Solution -->
-    <section class="slide solution" data-slide="4" aria-roledescription="slide" aria-label={solution.heading}>
-      <div class="split">
-        <div class="copy">
-          <p class="eyebrow rise" style="--d:0">02 · {solution.eyebrow}</p>
-          <h2 class="rise" style="--d:1">
-            {solution.heading.map((line) => <span>{line}</span>)}
-          </h2>
-          <ul class="points">
-            {solution.points.map((p, i) => <li class="rise" style={`--d:${i + 2}`}>{p}</li>)}
-          </ul>
-          <dl class="versus rise" style={`--d:${solution.points.length + 2}`}>
-            {solution.versus.map((v) => (
-              <div class:list={{ ours: v.who === "Mamoru" }}>
-                <dt>{v.who}</dt>
-                <dd>{v.note}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-        <figure class="garden" aria-hidden="true">
-          <svg viewBox="0 0 400 300">
-            {[0, 1, 2, 3].map((r) => (
-              <ellipse class="ring" cx="200" cy="150" rx={78 + r * 22} ry={60 + r * 17} pathLength="1" style={`--r:${r}`} />
-            ))}
-            <ellipse class="shadow" cx="204" cy="196" rx="54" ry="8" />
-            <g class="settle" transform="translate(200 150)">
-              <path d="M-34 -34 C-24 -52 8 -54 26 -42 C42 -31 40 -6 30 16 C19 40 -2 50 -21 45 C-41 40 -48 17 -46 -4 C-45 -17 -41 -26 -34 -34 Z" />
-              <path class="half" d="M37 -3 C52 3 58 22 51 37 C46 48 34 52 21 51 Z" />
-            </g>
-          </svg>
-          <figcaption class="rise" style="--d:5">{solution.caption}</figcaption>
-        </figure>
+    <!-- 04 Why trust Mamoru: what the saver gets, before how it is built -->
+    <section class="slide trust" data-slide="4" aria-roledescription="slide" aria-label={trust.heading}>
+      <div class="wide">
+        <h2 class="rise" style="--d:0">{trust.heading}</h2>
+        <ol class="layers">
+          {trust.rows.map((r, i) => (
+            <li class="rise" style={`--d:${i + 1}`}>
+              <span class="who">{r.who}</span>
+              <span class="what">{r.what}</span>
+            </li>
+          ))}
+        </ol>
+        <p class="plain rise" style={`--d:${trust.rows.length + 1}`}>
+          {trust.plain.map((line) => <span>{line}</span>)}
+        </p>
       </div>
     </section>
 
     <!-- 05 How it's built -->
     <section class="slide built" data-slide="5" aria-roledescription="slide" aria-label={built.heading}>
       <div class="wide">
-        <p class="eyebrow rise" style="--d:0">03 · {built.eyebrow}</p>
+        <p class="eyebrow rise" style="--d:0">{built.eyebrow}</p>
         <h2 class="rise" style="--d:1">{built.heading}</h2>
         <ol class="layers">
           {built.layers.map((l, i) => (
@@ -814,6 +796,16 @@ const askAt = [
   }
 
   /* 04 Built: one line per layer. */
+  /* 04 Why trust Mamoru: two things that need no explaining, under the rows. */
+  .plain {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.2em 1.4em;
+    margin: clamp(1.5rem, 4.5vh, 2.75rem) 0 0;
+    font-size: clamp(1.3rem, 2.4vw, 1.9rem);
+    color: var(--emerald);
+  }
+
   .layers,
   .futures {
     list-style: none;
