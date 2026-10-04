@@ -1,29 +1,21 @@
 /**
- * Words for mamoru.lol/deck-v2: the working copy of the next deck. It starts as the Tokyo deck,
- * which stays untouched at /deck (deck-copy.ts). Slides guide, the speaker tells.
+ * Words for mamoru.lol/deck-v2: the working copy of the next deck. The Tokyo deck stays untouched
+ * at /deck (deck-copy.ts). The cover takes its words from the landing hero (open-copy.ts), and the
+ * third slide is the landing's own "How it works". Slides guide, the speaker tells.
  */
 
 export const DECK_V2 = {
   title: "Mamoru · Deck v2",
-  description: "Your DeFi profits. Automatically saved.",
-  // 150% APY is the bait that falls apart on screen. It is not a Mamoru rate.
-  hook: {
-    aria: "Your DeFi profits. Automatically saved.",
-    name: "Mamoru",
-    claim: ["Your DeFi profits.", "Automatically saved."],
-    formula: ["150% APY", "?", "Savings"],
-    bait: { from: 150, to: 7, unit: "APY", day: "Day", days: 30 },
-    asks: ["Harvest?", "Exit?", "Stay?"],
-    question: ["Your profits.", "Where do they go?"],
-  },
+  description: "Savings, automated.",
+  // 150% APY is the bait that falls to zero on screen. It is not a Mamoru rate.
   problem: {
-    eyebrow: "The problem",
-    heading: ["DeFi makes yield easy.", "Keeping it is a job."],
-    points: [
-      "Fragmented. Hundreds of pools, every APY counted differently.",
-      "Time. Harvest, exit, stay? The decisions never stop.",
-      "Trade-offs. The best rates want your funds locked, or your trust.",
-    ],
+    aria: "Your profits, where do they go?",
+    from: 150,
+    unit: "APY",
+    day: "Day",
+    days: 30,
+    asks: ["Harvest?", "Exit?", "Stay?"],
+    question: ["Your profits,", "where do they go?"],
   },
   solution: {
     eyebrow: "Mamoru",
