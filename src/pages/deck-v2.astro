@@ -47,7 +47,10 @@ const askAt = [
     <!-- 02 Problem: a rate falls to zero in ten seconds, the doubts come up, one question is left -->
     <section class="slide fall" data-slide="2" data-steps="1" aria-roledescription="slide" aria-label={problem.aria}>
       <div class="stage" aria-hidden="true" data-curve={JSON.stringify(curve)} data-from={problem.from} data-days={problem.days}>
-        <p class="day">{problem.day} <span class="js-day">1</span></p>
+        <p class="day">
+          <span class="counted">{problem.day} <span class="js-day">1</span></span>
+          <span class="open">...</span>
+        </p>
         <p class="rate">
           <span class="js-apy">{problem.from}</span><span class="pct">%</span><span class="doubt">?</span><span class="unit">{problem.unit}</span>
         </p>
@@ -583,6 +586,14 @@ const askAt = [
     letter-spacing: 0.01em;
     color: var(--tone);
     font-variant-numeric: tabular-nums;
+  }
+  /* At zero the day count gives way to "...": a pool does not run out on a set day. */
+  .day .open,
+  .zero .day .counted {
+    display: none;
+  }
+  .zero .day .open {
+    display: inline;
   }
   .rate .doubt {
     display: none;
