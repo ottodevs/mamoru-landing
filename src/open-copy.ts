@@ -29,7 +29,7 @@ const MIX = [
 
 export const OPEN_COPY = {
   title: "Mamoru",
-  description: "The principal keeps working. You collect stablecoins.",
+  description: "The principal keeps working. The yield becomes stablecoins.",
   nav: [
     { href: "#works", label: "How it works" },
     { href: "#questions", label: "FAQs" },
@@ -67,7 +67,7 @@ export const OPEN_COPY = {
   hero: {
     line1: "SAVINGS,",
     line2: "AUTOMATED",
-    lede: "The principal keeps working. You collect stablecoins.",
+    lede: "The principal keeps working. The yield becomes stablecoins.",
   },
   works: {
     eyebrow: "How it works",
@@ -90,7 +90,7 @@ export const OPEN_COPY = {
     eyebrow: "The allocation",
     heading: ["Three positions.", "One growing reserve."],
     body: "Capital works. The yield is captured in stablecoins.",
-    note: "65%+ in stablecoins by design",
+    note: "Half in stablecoins by rule",
     mix: MIX,
   },
   questions: {
