@@ -208,7 +208,10 @@ const askAt = [
         el.dataset.step = k === at ? String(step) : "0";
         el.inert = k !== at;
       });
-      playFall(slides[at]?.classList.contains("fall") === true && step === 0);
+      const onFall = slides[at]?.classList.contains("fall") === true;
+      // Once the fall has given way to the question, its stage stays out of sight until the fall starts again.
+      if (onFall && step > 0) fall?.classList.add("spent");
+      playFall(onFall && step === 0);
       if (at !== shown && slides[at]?.classList.contains("how")) {
         slides[at]?.querySelector("#works")?.dispatchEvent(new Event("works:restart"));
       }
@@ -216,13 +219,16 @@ const askAt = [
       dots.forEach((d, k) => d.setAttribute("aria-current", k === at ? "step" : "false"));
       now.textContent = String(at + 1).padStart(2, "0");
       const hash = `#${at + 1}`;
-      if (location.hash !== hash) history.replaceState(null, "", hash);
+      // Inside the staging preview the page has a cross-origin <base>, and the browser refuses the new URL.
+      try {
+        if (location.hash !== hash) history.replaceState(null, "", hash);
+      } catch {}
     }
 
     // 02 Problem: ten seconds. The rate falls to zero, 0%? blinks in red, then the question takes the slide.
     const FALL_WAIT = 400;
-    const FALL_FOR = 7600;
-    const BLINK_FOR = 2000;
+    const FALL_FOR = 7200;
+    const BLINK_FOR = 2400;
     const GREEN = [47, 93, 80];
     const RED = [155, 44, 44];
     const ASK_AT = [0.28, 0.5, 0.72];
@@ -268,6 +274,7 @@ const askAt = [
       cancelAnimationFrame(fallFrame);
       // Leave the last frame in place while the stage fades; the rate only goes back to the top when the fall starts again.
       if (!on) return;
+      fall?.classList.remove("spent");
       drawFall(0);
       const here = at;
       const done = () => {
@@ -557,7 +564,7 @@ const askAt = [
     width: min(64rem, 100%);
     transition: opacity 0.25s ease;
   }
-  .fall[data-step="1"] .stage {
+  .fall.spent .stage {
     opacity: 0;
   }
   .day {
@@ -583,14 +590,14 @@ const askAt = [
   .zero .rate .doubt {
     display: inline;
   }
-  /* The end of the fall: 0%? blinks in the alert red the app uses. */
+  /* The end of the fall: 0%? breathes twice in the alert red the app uses. */
   @keyframes blink {
-    0%, 55% { opacity: 1; }
-    56%, 100% { opacity: 0.12; }
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
   }
   .zero .rate {
     color: #9b2c2c;
-    animation: blink 0.33s steps(1, end) 6;
+    animation: blink 1.2s ease-in-out 2;
   }
   .zero .rate .unit {
     visibility: hidden;
