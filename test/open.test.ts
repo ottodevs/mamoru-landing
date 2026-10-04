@@ -32,7 +32,7 @@ describe("open instant", () => {
     expect(blob).not.toContain("\u2014");
     expect(blob).not.toContain("\u2013");
     expect(OPEN_COPY.hero.lede).toBe(
-      "The principal keeps working. You collect stablecoins.",
+      "The principal keeps working. The yield becomes stablecoins.",
     );
     expect(OPEN_COPY.works.moves.map((m) => m.title)).toEqual(["Fund", "Mamoru works", "You save"]);
     expect(OPEN_COPY.spend.heading).toBe("DeFi yield for the real world");
@@ -64,7 +64,7 @@ describe("open instant", () => {
     expect(OPEN_COPY.works.scene.coin).toBe("USDC");
     expect(OPEN_COPY.allocation.heading).toEqual(["Three positions.", "One growing reserve."]);
     expect(OPEN_COPY.allocation.mix.reduce((sum, m) => sum + m.pct, 0)).toBe(100);
-    expect(OPEN_COPY.allocation.note).toBe("65%+ in stablecoins by design");
+    expect(OPEN_COPY.allocation.note).toBe("Half in stablecoins by rule");
     expect(OPEN_COPY.allocation.mix[0].note).toBe("High risk, high reward");
     expect(OPEN_COPY.allocation.mix[1].note).toBe("Bluechips paired with stablecoins");
   });

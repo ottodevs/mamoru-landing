@@ -13,32 +13,35 @@ export const DECK_V2 = {
     aria: "Your profits, where do they go?",
     from: 150,
     unit: "APY",
-    day: "Day",
-    days: 30,
+    axis: "time",
     asks: ["Harvest?", "Exit?", "Stay?"],
     question: ["Your profits,", "where do they go?"],
   },
   loop: {
     eyebrow: "The solution",
+    // Names for the three positions, shown on the deck only. On the landing the allocation chart names them.
+    labels: { paired: "Bluechips", mercenary: "Mercenary", stables: "Stablecoins" },
   },
+  // Six lines the speaker explains. A click brings the explanations up, for whoever reads the deck alone.
   trust: {
     heading: "Why trust Mamoru",
     rows: [
       {
         who: "You keep control",
-        what: "Your wallet is a smart account, owned by a passkey on your device. Mamoru never holds a key.",
+        what: "Your wallet is a smart account, owned by a passkey on your device. Mamoru never holds the key that can move your money out.",
       },
       {
         who: "A key with limits",
         what: "Mamoru works through a session key. It can act only inside a written policy and you can revoke it anytime.",
       },
-      { who: "Uniswap", what: "Where the capital works. Mamoru swaps and provides liquidity on Uniswap, nothing else." },
+      { who: "Only on Uniswap", what: "Where the capital works. Mamoru swaps and provides liquidity on Uniswap, nothing else." },
       {
-        who: "Mostly stablecoins",
-        what: "Three positions, 65%+ in stablecoins by design. The yield is captured in stablecoins.",
+        who: "Half in stablecoins by rule",
+        what: "Three positions. Mamoru keeps half of the capital in stablecoins, and the yield becomes stablecoins.",
       },
+      { who: "No lockup", what: "Withdraw stablecoins anytime. Mamoru rebalances the rest." },
+      { who: "No token", what: "Nothing to buy, hold or farm." },
     ],
-    plain: ["No lockup.", "No token."],
   },
   built: {
     eyebrow: "How it's built",

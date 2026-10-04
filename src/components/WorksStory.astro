@@ -4,10 +4,13 @@ import { OPEN_COPY } from "../open-copy";
 interface Props {
   /** A host page (the deck) can name the section differently. The landing keeps its own eyebrow. */
   eyebrow?: string;
+  /** Names for the three positions, by tone. The deck shows them; the landing names them in its allocation chart. */
+  labels?: Partial<Record<"paired" | "mercenary" | "stables", string>>;
 }
 
 const { heading, moves, scene } = OPEN_COPY.works;
 const eyebrow = Astro.props.eyebrow ?? OPEN_COPY.works.eyebrow;
+const labels = Astro.props.labels ?? {};
 
 type Pt = { x: number; y: number };
 type Layout = { id: "w" | "t"; w: number; h: number; purse: Pt; core: Pt; ring: number; gap: number };
@@ -28,6 +31,13 @@ const layouts: Layout[] = [
   { id: "w", w: 720, h: 400, purse: { x: 108, y: 200 }, core: { x: 478, y: 200 }, ring: 160, gap: 180 },
   { id: "t", w: 360, h: 470, purse: { x: 180, y: 44 }, core: { x: 180, y: 290 }, ring: 160, gap: 270 },
 ];
+// A name sits clear of its disc, on the side away from the centre: above the two upper ones, under the lower one.
+// The stablecoin disc grows by about 15%, so its name leaves room for that.
+const tags = DISCS.map((d) => ({
+  text: labels[d.tone as keyof typeof labels],
+  dx: d.dx,
+  dy: d.dy < 0 ? d.dy - d.r - 10 : d.dy + d.r * 1.15 + 16,
+})).filter((t) => t.text);
 const geo = (l: Layout) => JSON.stringify({ purse: l.purse, core: l.core, discs: DISCS, meet: MEET });
 ---
 <section class="works" id="works" aria-labelledby="works-title">
@@ -63,6 +73,7 @@ const geo = (l: Layout) => JSON.stringify({ purse: l.purse, core: l.core, discs:
 
       {DISCS.map(() => <circle class="bead" r="0" />)}
       <circle class="coin" r="0" />
+      {tags.map((t) => <text class="disc-tag" x={l.core.x + t.dx} y={l.core.y + t.dy}>{t.text}</text>)}
       <text class="coin-tag" x={l.core.x + MEET.dx} y={l.core.y + MEET.dy - 20} opacity="0">{scene.coin}</text>
     </svg>
   ))}
@@ -112,6 +123,7 @@ const geo = (l: Layout) => JSON.stringify({ purse: l.purse, core: l.core, discs:
     const discs = [...svg.querySelectorAll(".disc")];
     const beads = [...svg.querySelectorAll(".bead")];
     const [ink, drop, capital, coin, tag] = [one(".ink"), one(".drop"), one(".capital"), one(".coin"), one(".coin-tag")];
+    const names = [...svg.querySelectorAll(".disc-tag")];
     const meet = { x: geo.core.x + geo.meet.dx, y: geo.core.y + geo.meet.dy };
     const homes = geo.discs.map((d) => ({ x: geo.core.x + d.dx, y: geo.core.y + d.dy, r: d.r }));
     const stable = homes[homes.length - 1]!;
@@ -168,7 +180,10 @@ const geo = (l: Layout) => JSON.stringify({ purse: l.purse, core: l.core, discs:
       set(tag, { opacity: tagOn });
 
       // The loop closes: the positions dissolve and the purse fills again.
-      set(ink, { opacity: 1 - seg(t, CLOSE[0], CLOSE[1]) });
+      const here = 1 - seg(t, CLOSE[0], CLOSE[1]);
+      set(ink, { opacity: here });
+      // The names of the positions come in once the positions have settled, and leave with them.
+      names.forEach((n) => set(n, { opacity: seg(t, SPLIT[1] - 200, SPLIT[1] + 500) * here }));
     };
   }
 
@@ -277,6 +292,14 @@ const geo = (l: Layout) => JSON.stringify({ purse: l.purse, core: l.core, discs:
   .bead,
   .coin {
     fill: var(--emerald);
+  }
+  .disc-tag {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    text-anchor: middle;
+    fill: var(--stone);
   }
   .coin-tag {
     font-family: var(--font-mono);

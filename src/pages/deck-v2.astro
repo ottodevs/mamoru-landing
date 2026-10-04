@@ -47,11 +47,7 @@ const askAt = [
     <!-- 02 Problem: a rate falls to zero in ten seconds, the doubts come up, one question is left -->
     <section class="slide fall" data-slide="2" data-steps="1" aria-roledescription="slide" aria-label={problem.aria}>
       <p class="label">{problem.eyebrow}</p>
-      <div class="stage" aria-hidden="true" data-curve={JSON.stringify(curve)} data-from={problem.from} data-days={problem.days}>
-        <p class="day">
-          <span class="counted">{problem.day} <span class="js-day">1</span></span>
-          <span class="open">...</span>
-        </p>
+      <div class="stage" aria-hidden="true" data-curve={JSON.stringify(curve)} data-from={problem.from}>
         <p class="rate">
           <span class="js-apy">{problem.from}</span><span class="pct">%</span><span class="doubt">?</span><span class="unit">{problem.unit}</span>
         </p>
@@ -61,6 +57,7 @@ const askAt = [
             <path class="line js-line" d="" />
           </svg>
           <span class="tip js-tip"></span>
+          <span class="axis">{problem.axis}</span>
           {problem.asks.map((ask, i) => (
             <span class="ask" style={`--x:${askAt[i]?.x ?? 50}%;--y:${askAt[i]?.y ?? 50}%`}>{ask}</span>
           ))}
@@ -73,24 +70,21 @@ const askAt = [
 
     <!-- 03 The solution: the landing's How it works loop, under the deck's own name -->
     <section class="slide how" data-slide="3" aria-roledescription="slide" aria-label={OPEN_COPY.works.heading}>
-      <WorksStory eyebrow={loop.eyebrow} />
+      <WorksStory eyebrow={loop.eyebrow} labels={loop.labels} />
     </section>
 
-    <!-- 04 Why trust Mamoru: what the saver gets, before how it is built -->
-    <section class="slide trust" data-slide="4" aria-roledescription="slide" aria-label={trust.heading}>
+    <!-- 04 Why trust Mamoru: six lines to speak to. A click brings up what each one means. -->
+    <section class="slide trust" data-slide="4" data-steps="1" aria-roledescription="slide" aria-label={trust.heading}>
       <div class="wide">
         <h2 class="rise" style="--d:0">{trust.heading}</h2>
-        <ol class="layers">
+        <ul class="claims">
           {trust.rows.map((r, i) => (
             <li class="rise" style={`--d:${i + 1}`}>
-              <span class="who">{r.who}</span>
-              <span class="what">{r.what}</span>
+              <span class="claim">{r.who}</span>
+              <span class="means">{r.what}</span>
             </li>
           ))}
-        </ol>
-        <p class="plain rise" style={`--d:${trust.rows.length + 1}`}>
-          {trust.plain.map((line) => <span>{line}</span>)}
-        </p>
+        </ul>
       </div>
     </section>
 
@@ -222,19 +216,17 @@ const askAt = [
     const fall = deck.querySelector<HTMLElement>(".fall");
     const stage = fall?.querySelector<HTMLElement>(".stage");
     const apy = fall?.querySelector<HTMLElement>(".js-apy");
-    const day = fall?.querySelector<HTMLElement>(".js-day");
     const line = fall?.querySelector<SVGPathElement>(".js-line");
     const tip = fall?.querySelector<HTMLElement>(".js-tip");
     const asks = [...(fall?.querySelectorAll<HTMLElement>(".ask") ?? [])];
     const curve: number[] = JSON.parse(stage?.dataset.curve ?? "[]");
     const from = Number(stage?.dataset.from ?? 0) || 1;
-    const days = Number(stage?.dataset.days ?? 1);
     const yOf = (v: number) => 10 + (1 - v / from) * 280;
     let fallTimers: number[] = [];
     let fallFrame = 0;
 
     function drawFall(p: number) {
-      if (!stage || !apy || !day || !line || !tip || curve.length < 2) return;
+      if (!stage || !apy || !line || !tip || curve.length < 2) return;
       const last = curve.length - 1;
       const at = p * last;
       const i = Math.min(last - 1, Math.floor(at));
@@ -249,7 +241,6 @@ const askAt = [
       tip.style.left = `${p * 100}%`;
       tip.style.top = `${(yOf(v) / 300) * 100}%`;
       apy.textContent = String(Math.round(v));
-      day.textContent = String(1 + Math.floor(p * (days - 1) + 1e-6));
       asks.forEach((a, k) => a.classList.toggle("show", p >= ASK_AT[k]!));
       stage.classList.toggle("zero", p >= 1);
     }
@@ -567,15 +558,6 @@ const askAt = [
   .fall.spent .stage {
     opacity: 0;
   }
-  .day {
-    margin: 0 0 clamp(0.4rem, 1.5vh, 0.9rem);
-    font-family: var(--font-mono);
-    font-size: clamp(0.75rem, 1.1vw, 0.9rem);
-    letter-spacing: 0.24em;
-    text-transform: uppercase;
-    color: var(--stone);
-    font-variant-numeric: tabular-nums;
-  }
   .rate {
     margin: 0;
     font-size: clamp(4rem, 13vw, 10rem);
@@ -583,14 +565,6 @@ const askAt = [
     letter-spacing: 0.01em;
     color: var(--tone);
     font-variant-numeric: tabular-nums;
-  }
-  /* At zero the day count gives way to "...": a pool does not run out on a set day. */
-  .day .open,
-  .zero .day .counted {
-    display: none;
-  }
-  .zero .day .open {
-    display: inline;
   }
   .rate .doubt {
     display: none;
@@ -640,6 +614,17 @@ const askAt = [
     stroke-linecap: round;
     stroke-linejoin: round;
     vector-effect: non-scaling-stroke;
+  }
+  /* Time runs left to right. One word at the end of the floor says so, and no day is counted. */
+  .axis {
+    position: absolute;
+    right: 0;
+    top: calc(100% - 0.2rem);
+    font-family: var(--font-mono);
+    font-size: clamp(0.7rem, 1vw, 0.85rem);
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--stone);
   }
   .tip {
     position: absolute;
@@ -796,14 +781,42 @@ const askAt = [
   }
 
   /* 04 Built: one line per layer. */
-  /* 04 Why trust Mamoru: two things that need no explaining, under the rows. */
-  .plain {
+  /* 04 Why trust Mamoru: six claims, large. What each one means stays out of sight until a click. */
+  .claims {
+    list-style: none;
+    margin: clamp(2rem, 6vh, 3.5rem) 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(1.5rem, 5vh, 3rem) clamp(1.5rem, 4vw, 3.5rem);
+  }
+  .claims li {
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.2em 1.4em;
-    margin: clamp(1.5rem, 4.5vh, 2.75rem) 0 0;
-    font-size: clamp(1.3rem, 2.4vw, 1.9rem);
+    flex-direction: column;
+    gap: 0.6rem;
+    padding-top: clamp(0.8rem, 2vh, 1.1rem);
+    border-top: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
+  }
+  .claim {
+    font-size: clamp(1.4rem, 2.5vw, 2.1rem);
+    line-height: 1.15;
+  }
+  .claims li:nth-child(n + 4) .claim {
     color: var(--emerald);
+  }
+  .means {
+    font-size: clamp(0.95rem, 1.35vw, 1.1rem);
+    line-height: 1.45;
+    color: var(--muted);
+    opacity: 0;
+    transform: translateY(6px);
+    transition:
+      opacity 0.5s ease,
+      transform 0.6s var(--ease);
+  }
+  .trust.on[data-step="1"] .means {
+    opacity: 1;
+    transform: none;
   }
 
   .layers,
@@ -1061,6 +1074,10 @@ const askAt = [
     .garden {
       display: none;
     }
+    .claims {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+    }
     .layers li,
     .futures li {
       grid-template-columns: 1fr;
@@ -1079,6 +1096,7 @@ const askAt = [
     .rise,
     .on .rise,
     .ask,
+    .means,
     .question,
     .zero .rate,
     .on .ring,
