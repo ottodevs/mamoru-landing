@@ -185,6 +185,10 @@ const geo = (l: Layout) => JSON.stringify({ purse: l.purse, core: l.core, discs:
         requestAnimationFrame(tick);
       };
       scenes.forEach((s) => s.draw(0));
+      // A host page (the deck) can ask for the loop to start over when the section comes on screen.
+      root.addEventListener("works:restart", () => {
+        clock = 0;
+      });
       new IntersectionObserver(
         (entries) => {
           const seen = entries.some((e) => e.isIntersecting);

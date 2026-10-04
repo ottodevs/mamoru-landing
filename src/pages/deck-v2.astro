@@ -1,9 +1,25 @@
 ---
 import Base from "../layouts/Base.astro";
+import WorksStory from "../components/WorksStory.astro";
 import { DECK_V2 as DECK } from "../deck-v2-copy";
+import { OPEN_COPY } from "../open-copy";
 
-const { hook, problem, solution, built, more, demo, outro } = DECK;
-const total = 6;
+const { problem, solution, built, more, demo, outro } = DECK;
+const cover = OPEN_COPY.hero;
+const total = 8;
+
+// 02 Problem: the bait rate, sampled as it falls from `from` to zero. The line and the number read the same samples.
+const SAMPLES = 120;
+const curve = Array.from({ length: SAMPLES + 1 }, (_, i) => {
+  const x = i / SAMPLES;
+  const v = problem.from * (1 - x) ** 1.5 * (1 + 0.1 * Math.sin(9 * x) + 0.05 * Math.sin(23 * x));
+  return Math.round(Math.min(problem.from, Math.max(0, v)) * 10) / 10;
+});
+const askAt = [
+  { x: 34, y: 12 },
+  { x: 56, y: 36 },
+  { x: 77, y: 56 },
+];
 ---
 <Base title={DECK.title} description={DECK.description} canonical="https://mamoru.lol/deck-v2">
   <main class="deck" id="deck" aria-roledescription="carousel" aria-label={DECK.title}>
@@ -12,52 +28,52 @@ const total = 6;
       <span>Mamoru</span>
     </header>
 
-    <!-- 01 Hook, then the problem. The hook plays once and gives way to the problem copy; a click skips ahead. -->
-    <section class="slide hook" data-slide="1" data-steps="1" aria-roledescription="slide" aria-label={hook.aria}>
-      <div class="act act-title">
-        <img class="mark" src="/mark-two-stones.png" width="56" height="56" alt="" />
-        <p class="name">{hook.name}</p>
-        <h1 class="claim">
-          {hook.claim.map((line) => <span>{line}</span>)}
+    <!-- 01 Cover: the landing hero -->
+    <section class="slide cover" data-slide="1" aria-roledescription="slide" aria-label="Mamoru">
+      <div class="center">
+        <img class="mark rise" src="/mark-two-stones.png" width="84" height="84" alt="" style="--d:0" />
+        <h1 class="hero rise" style="--d:1">
+          <span>{cover.line1}</span>
+          <span>{cover.line2}</span>
         </h1>
-        <p class="formula">
-          <span>{hook.formula[0]}</span>
-          <i aria-hidden="true">→</i>
-          <span class="unknown">{hook.formula[1]}</span>
-          <i aria-hidden="true">→</i>
-          <span class="saved">{hook.formula[2]}</span>
+        <p class="lede rise" style="--d:2">
+          {cover.lede.split(". ").filter(Boolean).map((part) => (
+            <span>{part.endsWith(".") ? part : `${part}.`}</span>
+          ))}
         </p>
-      </div>
-
-      <div class="act act-bait" aria-hidden="true" data-from={hook.bait.from} data-to={hook.bait.to} data-days={hook.bait.days}>
-        <p class="day">{hook.bait.day} <span class="js-day">1</span></p>
-        <p class="bait">
-          <span class="js-apy">{hook.bait.from}</span><span class="pct">%</span><span class="unit">{hook.bait.unit}</span>
-        </p>
-        <p class="asks">
-          {hook.asks.map((ask, i) => <span style={`--i:${i}`}>{ask}</span>)}
-        </p>
-      </div>
-
-      <p class="act act-ask" aria-hidden="true">
-        {hook.question.map((line) => <span>{line}</span>)}
-      </p>
-
-      <div class="act act-problem">
-        <div class="copy">
-          <p class="eyebrow rise" style="--d:0">01 · {problem.eyebrow}</p>
-          <h2 class="rise" style="--d:1">
-            {problem.heading.map((line) => <span>{line}</span>)}
-          </h2>
-          <ul class="points">
-            {problem.points.map((p, i) => <li class="rise" style={`--d:${i + 2}`}>{p}</li>)}
-          </ul>
-        </div>
       </div>
     </section>
 
-    <!-- 02 Solution -->
-    <section class="slide solution" data-slide="2" aria-roledescription="slide" aria-label={solution.heading}>
+    <!-- 02 Problem: a rate falls to zero in ten seconds, the doubts come up, one question is left -->
+    <section class="slide fall" data-slide="2" data-steps="1" aria-roledescription="slide" aria-label={problem.aria}>
+      <div class="stage" aria-hidden="true" data-curve={JSON.stringify(curve)} data-from={problem.from} data-days={problem.days}>
+        <p class="day">{problem.day} <span class="js-day">1</span></p>
+        <p class="rate">
+          <span class="js-apy">{problem.from}</span><span class="pct">%</span><span class="unit">{problem.unit}</span>
+        </p>
+        <div class="chart">
+          <svg viewBox="0 0 1000 300" preserveAspectRatio="none">
+            <line class="floor" x1="0" y1="290" x2="1000" y2="290" />
+            <path class="line js-line" d="" />
+          </svg>
+          <span class="tip js-tip"></span>
+          {problem.asks.map((ask, i) => (
+            <span class="ask" style={`--x:${askAt[i]?.x ?? 50}%;--y:${askAt[i]?.y ?? 50}%`}>{ask}</span>
+          ))}
+        </div>
+      </div>
+      <p class="question">
+        {problem.question.map((line) => <span>{line}</span>)}
+      </p>
+    </section>
+
+    <!-- 03 How it works: the landing section, as it is -->
+    <section class="slide how" data-slide="3" aria-roledescription="slide" aria-label={OPEN_COPY.works.heading}>
+      <WorksStory />
+    </section>
+
+    <!-- 04 Solution -->
+    <section class="slide solution" data-slide="4" aria-roledescription="slide" aria-label={solution.heading}>
       <div class="split">
         <div class="copy">
           <p class="eyebrow rise" style="--d:0">02 · {solution.eyebrow}</p>
@@ -92,8 +108,8 @@ const total = 6;
       </div>
     </section>
 
-    <!-- 03 How it's built -->
-    <section class="slide built" data-slide="3" aria-roledescription="slide" aria-label={built.heading}>
+    <!-- 05 How it's built -->
+    <section class="slide built" data-slide="5" aria-roledescription="slide" aria-label={built.heading}>
       <div class="wide">
         <p class="eyebrow rise" style="--d:0">03 · {built.eyebrow}</p>
         <h2 class="rise" style="--d:1">{built.heading}</h2>
@@ -108,8 +124,8 @@ const total = 6;
       </div>
     </section>
 
-    <!-- 04 One more thing -->
-    <section class="slide more" data-slide="4" data-steps="1" aria-roledescription="slide" aria-label={more.teaser}>
+    <!-- 06 One more thing -->
+    <section class="slide more" data-slide="6" data-steps="1" aria-roledescription="slide" aria-label={more.teaser}>
       <p class="teaser-line">{more.teaser}</p>
       <div class="reveal">
         <p class="eyebrow rise" style="--d:0">{more.eyebrow}</p>
@@ -124,8 +140,8 @@ const total = 6;
       </div>
     </section>
 
-    <!-- 05 Demo -->
-    <section class="slide demo" data-slide="5" aria-roledescription="slide" aria-label="Demo">
+    <!-- 07 Demo -->
+    <section class="slide demo" data-slide="7" aria-roledescription="slide" aria-label="Demo">
       <div class="center">
         <p class="eyebrow rise" style="--d:0">{demo.eyebrow}</p>
         <h2 class="demo-title rise" style="--d:1">{demo.heading}</h2>
@@ -139,8 +155,8 @@ const total = 6;
       </div>
     </section>
 
-    <!-- 06 Outro -->
-    <section class="slide outro" data-slide="6" aria-roledescription="slide" aria-label={outro.heading}>
+    <!-- 08 Outro -->
+    <section class="slide outro" data-slide="8" aria-roledescription="slide" aria-label={outro.heading}>
       <div class="wide">
         <p class="eyebrow rise" style="--d:0">{outro.eyebrow}</p>
         <h2 class="rise" style="--d:1">{outro.heading}</h2>
@@ -176,6 +192,7 @@ const total = 6;
     const now = deck.querySelector<HTMLElement>(".js-now")!;
     let at = 0;
     let step = 0;
+    let shown = -1;
 
     const fromHash = () => {
       const n = Number(location.hash.slice(1));
@@ -191,54 +208,83 @@ const total = 6;
         el.dataset.step = k === at ? String(step) : "0";
         el.inert = k !== at;
       });
-      playHook(at === 0 && step === 0);
+      playFall(slides[at]?.classList.contains("fall") === true && step === 0);
+      if (at !== shown && slides[at]?.classList.contains("how")) {
+        slides[at]?.querySelector("#works")?.dispatchEvent(new Event("works:restart"));
+      }
+      shown = at;
       dots.forEach((d, k) => d.setAttribute("aria-current", k === at ? "step" : "false"));
       now.textContent = String(at + 1).padStart(2, "0");
       const hash = `#${at + 1}`;
       if (location.hash !== hash) history.replaceState(null, "", hash);
     }
 
-    // 01 Hook: the bait counts down while the days go by, then the slide moves on to the problem by itself.
-    const HOOK_COUNT_AT = 4800;
-    const HOOK_COUNT_FOR = 2800;
-    const HOOK_ENDS_AT = 12100;
+    // 02 Problem: ten seconds in which the rate falls to zero, then the question takes the slide.
+    const FALL_WAIT = 500;
+    const FALL_FOR = 9500;
+    const GREEN = [47, 93, 80];
+    const RED = [155, 44, 44];
+    const ASK_AT = [0.28, 0.5, 0.72];
     const quiet = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const bait = deck.querySelector<HTMLElement>(".act-bait");
-    const apy = deck.querySelector<HTMLElement>(".js-apy");
-    const day = deck.querySelector<HTMLElement>(".js-day");
-    let hookTimers: number[] = [];
-    let hookFrame = 0;
+    const fall = deck.querySelector<HTMLElement>(".fall");
+    const stage = fall?.querySelector<HTMLElement>(".stage");
+    const apy = fall?.querySelector<HTMLElement>(".js-apy");
+    const day = fall?.querySelector<HTMLElement>(".js-day");
+    const line = fall?.querySelector<SVGPathElement>(".js-line");
+    const tip = fall?.querySelector<HTMLElement>(".js-tip");
+    const asks = [...(fall?.querySelectorAll<HTMLElement>(".ask") ?? [])];
+    const curve: number[] = JSON.parse(stage?.dataset.curve ?? "[]");
+    const from = Number(stage?.dataset.from ?? 0) || 1;
+    const days = Number(stage?.dataset.days ?? 1);
+    const yOf = (v: number) => 10 + (1 - v / from) * 280;
+    let fallTimers: number[] = [];
+    let fallFrame = 0;
 
-    function playHook(on: boolean) {
-      hookTimers.forEach((t) => clearTimeout(t));
-      hookTimers = [];
-      cancelAnimationFrame(hookFrame);
-      if (!bait || !apy || !day) return;
-      const from = Number(bait.dataset.from);
-      const to = Number(bait.dataset.to);
-      const days = Number(bait.dataset.days);
-      apy.textContent = String(from);
-      day.textContent = "1";
+    function drawFall(p: number) {
+      if (!stage || !apy || !day || !line || !tip || curve.length < 2) return;
+      const last = curve.length - 1;
+      const at = p * last;
+      const i = Math.min(last - 1, Math.floor(at));
+      const v = curve[i]! + (curve[i + 1]! - curve[i]!) * (at - i);
+      const heat = Math.min(1, (1 - v / from) * 1.15);
+      const tone = GREEN.map((g, k) => Math.round(g + (RED[k]! - g) * heat));
+      let d = "";
+      for (let k = 0; k <= i; k++) d += `${k ? "L" : "M"}${((k / last) * 1000).toFixed(1)} ${yOf(curve[k]!).toFixed(1)}`;
+      d += `L${(p * 1000).toFixed(1)} ${yOf(v).toFixed(1)}`;
+      line.setAttribute("d", d);
+      stage.style.setProperty("--tone", `rgb(${tone.join(" ")})`);
+      tip.style.left = `${p * 100}%`;
+      tip.style.top = `${(yOf(v) / 300) * 100}%`;
+      apy.textContent = String(Math.round(v));
+      day.textContent = String(1 + Math.floor(p * (days - 1) + 1e-6));
+      asks.forEach((a, k) => a.classList.toggle("show", p >= ASK_AT[k]!));
+    }
+
+    function playFall(on: boolean) {
+      fallTimers.forEach((t) => clearTimeout(t));
+      fallTimers = [];
+      cancelAnimationFrame(fallFrame);
+      drawFall(0);
       if (!on) return;
+      const here = at;
+      const done = () => {
+        if (at === here && step === 0) show(here, 1);
+      };
       if (quiet) {
-        hookTimers.push(window.setTimeout(() => show(0, 1), 0));
+        fallTimers.push(window.setTimeout(done, 0));
         return;
       }
-      hookTimers.push(
+      fallTimers.push(
         window.setTimeout(() => {
           const t0 = performance.now();
           const tick = (t: number) => {
-            const raw = Math.min(1, (t - t0) / HOOK_COUNT_FOR);
-            const p = raw * raw;
-            apy.textContent = String(Math.round(from - (from - to) * p));
-            day.textContent = String(1 + Math.round((days - 1) * raw));
-            if (raw < 1) hookFrame = requestAnimationFrame(tick);
+            const p = Math.min(1, (t - t0) / FALL_FOR);
+            drawFall(p);
+            if (p < 1) fallFrame = requestAnimationFrame(tick);
+            else fallTimers.push(window.setTimeout(done, 250));
           };
-          hookFrame = requestAnimationFrame(tick);
-        }, HOOK_COUNT_AT),
-        window.setTimeout(() => {
-          if (at === 0 && step === 0) show(0, 1);
-        }, HOOK_ENDS_AT),
+          fallFrame = requestAnimationFrame(tick);
+        }, FALL_WAIT),
       );
     }
 
@@ -475,83 +521,37 @@ const total = 6;
     background: var(--emerald);
   }
 
-  /* 01 Hook: a title, a rate that falls apart, one question. Then the problem stays. */
-  .hook .act {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    margin: 0;
-    padding: clamp(4.5rem, 10vh, 7rem) clamp(1.25rem, 7vw, 7rem);
-    opacity: 0;
-    pointer-events: none;
-  }
-  @keyframes act {
-    0% { opacity: 0; transform: translateY(10px); }
-    14% { opacity: 1; transform: none; }
-    86% { opacity: 1; transform: none; }
-    100% { opacity: 0; transform: translateY(-6px); }
-  }
-  .hook.on[data-step="0"] .act-title {
-    animation: act 3s var(--ease) 0.4s both;
-  }
-  .hook.on[data-step="0"] .act-bait {
-    animation: act 5s var(--ease) 3.4s both;
-  }
-  .hook.on[data-step="0"] .act-ask {
-    animation: act 3.4s var(--ease) 8.6s both;
-  }
-
-  .act-title .mark {
-    width: clamp(2.6rem, 4vw, 3.5rem);
+  /* 01 Cover: the landing hero, set for a room. */
+  .cover .mark {
+    width: clamp(4.15rem, 6.25vw, 5.35rem);
     height: auto;
   }
-  .name {
-    margin: 0.6rem 0 clamp(1.2rem, 4vh, 2.2rem);
-    font-size: clamp(1.1rem, 1.6vw, 1.4rem);
-    letter-spacing: 0.02em;
-  }
-  .claim {
+  .hero {
     display: flex;
     flex-direction: column;
-    margin: 0;
-    font-weight: 400;
-    font-size: clamp(2.4rem, 6.2vw, 5rem);
-    line-height: 1.06;
-    letter-spacing: 0.005em;
+    font-size: clamp(3rem, 10vw, 7rem);
+    line-height: 0.98;
+    letter-spacing: 0.04em;
   }
-  .claim span + span {
-    color: var(--emerald);
-  }
-  .formula {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    align-items: baseline;
-    gap: 0.4em 1.1em;
-    margin: clamp(1.6rem, 5vh, 3rem) 0 0;
-    font-family: var(--font-mono);
-    font-size: clamp(0.85rem, 1.4vw, 1.1rem);
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
-  .formula i {
-    font-style: normal;
-    color: var(--stone);
-  }
-  .formula .unknown {
+  .cover .lede {
+    margin-top: clamp(1rem, 4vh, 2.4rem);
     color: var(--ink);
   }
-  .formula .saved {
-    color: var(--emerald);
+  .cover .lede span {
+    display: block;
   }
 
+  /* 02 Problem: the rate goes from green to red as it falls, and the line falls with it. */
+  .fall .stage {
+    --tone: var(--emerald);
+    width: min(64rem, 100%);
+    transition: opacity 0.6s ease;
+  }
+  .fall[data-step="1"] .stage {
+    opacity: 0;
+  }
   .day {
-    margin: 0 0 clamp(0.6rem, 2vh, 1.2rem);
+    margin: 0 0 clamp(0.4rem, 1.5vh, 0.9rem);
     font-family: var(--font-mono);
     font-size: clamp(0.75rem, 1.1vw, 0.9rem);
     letter-spacing: 0.24em;
@@ -559,77 +559,105 @@ const total = 6;
     color: var(--stone);
     font-variant-numeric: tabular-nums;
   }
-  .bait {
+  .rate {
     margin: 0;
-    font-size: clamp(4.5rem, 17vw, 13rem);
+    font-size: clamp(4rem, 13vw, 10rem);
     line-height: 1;
     letter-spacing: 0.01em;
+    color: var(--tone);
     font-variant-numeric: tabular-nums;
   }
-  .bait .unit {
+  .rate .unit {
     margin-left: 0.5em;
     font-family: var(--font-mono);
     font-size: 0.2em;
     letter-spacing: 0.2em;
     vertical-align: 0.9em;
   }
-  @keyframes sink {
-    to { opacity: 0.3; transform: translateY(1.6rem) scale(0.84); }
+  .chart {
+    position: relative;
+    height: min(18rem, 34vh);
+    margin-top: clamp(1rem, 3vh, 2rem);
   }
-  .hook.on[data-step="0"] .bait {
-    animation: sink 2.8s cubic-bezier(0.5, 0, 0.9, 0.6) 4.8s both;
-  }
-  .asks {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 0.3em 1.6em;
-    margin: clamp(1.2rem, 4vh, 2.4rem) 0 0;
-    font-size: clamp(1.5rem, 3.2vw, 2.6rem);
-    font-style: italic;
-  }
-  .asks span {
-    opacity: 0;
-  }
-  @keyframes ask {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: none; }
-  }
-  .hook.on[data-step="0"] .asks span {
-    animation: ask 0.3s ease-out both;
-    animation-delay: calc(6s + var(--i) * 0.32s);
-  }
-
-  .act-ask {
-    font-size: clamp(2.2rem, 5.4vw, 4.4rem);
-    line-height: 1.1;
-  }
-  .act-ask span {
+  .chart svg {
     display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
   }
-  .act-ask span + span {
+  .floor {
+    stroke: var(--wash);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+  }
+  .line {
+    fill: none;
+    stroke: var(--tone);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+  }
+  .tip {
+    position: absolute;
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 50%;
+    background: var(--tone);
+    transform: translate(-50%, -50%);
+  }
+  .ask {
+    position: absolute;
+    left: var(--x);
+    top: var(--y);
+    font-size: clamp(1.4rem, 2.8vw, 2.3rem);
+    font-style: italic;
+    opacity: 0;
+    transform: translateY(8px);
+    transition:
+      opacity 0.35s ease,
+      transform 0.35s var(--ease);
+  }
+  .ask.show {
+    opacity: 1;
+    transform: none;
+  }
+  .question {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 0 clamp(1.25rem, 7vw, 7rem);
+    text-align: center;
+    font-size: clamp(2.2rem, 5.6vw, 4.6rem);
+    line-height: 1.1;
+    opacity: 0;
+    transform: translateY(10px);
+    transition:
+      opacity 0.5s ease,
+      transform 0.7s var(--ease);
+  }
+  .question span + span {
     font-style: italic;
     color: var(--emerald);
   }
-
-  /* The problem copy: one column, read left to right, set in the middle of the slide. */
-  .hook .act-problem {
+  .fall.on[data-step="1"] .question {
     opacity: 1;
-    text-align: left;
+    transform: none;
+    transition-delay: 0.5s;
   }
-  .hook .act-problem .copy {
-    width: min(46rem, 100%);
+
+  /* 03 How it works: the landing section. The scene is capped by height so it fits any screen. */
+  .how :global(.scene-w) {
+    max-width: min(45rem, 80vh);
+    margin-block: clamp(1rem, 3vh, 2.25rem);
   }
-  .hook[data-step="0"] .act-problem .rise {
-    opacity: 0;
-    transform: translateY(12px);
-    transition: opacity 0.4s ease;
-  }
-  .hook h2 {
-    font-size: clamp(2rem, 4.2vw, 3.3rem);
-  }
-  .hook h2 span + span {
-    color: var(--emerald);
+  .how :global(.scene-t) {
+    max-width: min(22.5rem, 42vh);
+    margin-block: 1rem;
   }
 
   .versus {
@@ -997,9 +1025,8 @@ const total = 6;
     .slide.on,
     .rise,
     .on .rise,
-    .hook .act,
-    .hook .bait,
-    .hook .asks span,
+    .ask,
+    .question,
     .on .ring,
     .on .settle path {
       transition: none !important;
