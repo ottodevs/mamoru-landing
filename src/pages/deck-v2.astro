@@ -266,8 +266,9 @@ const askAt = [
       fallTimers.forEach((t) => clearTimeout(t));
       fallTimers = [];
       cancelAnimationFrame(fallFrame);
-      drawFall(0);
+      // Leave the last frame in place while the stage fades; the rate only goes back to the top when the fall starts again.
       if (!on) return;
+      drawFall(0);
       const here = at;
       const done = () => {
         if (at === here && step === 0) show(here, 1);
@@ -554,7 +555,7 @@ const askAt = [
   .fall .stage {
     --tone: var(--emerald);
     width: min(64rem, 100%);
-    transition: opacity 0.6s ease;
+    transition: opacity 0.25s ease;
   }
   .fall[data-step="1"] .stage {
     opacity: 0;
@@ -589,7 +590,7 @@ const askAt = [
   }
   .zero .rate {
     color: #9b2c2c;
-    animation: blink 0.66s steps(1, end) 3;
+    animation: blink 0.33s steps(1, end) 6;
   }
   .zero .rate .unit {
     visibility: hidden;
@@ -674,7 +675,7 @@ const askAt = [
   .fall.on[data-step="1"] .question {
     opacity: 1;
     transform: none;
-    transition-delay: 0.5s;
+    transition-delay: 0.25s;
   }
 
   /* 03 How it works: the landing section. The scene is capped by height so it fits any screen. */
