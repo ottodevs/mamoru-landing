@@ -9,6 +9,7 @@ export const DECK_V2 = {
   description: "Savings, automated.",
   // 150% APY is the bait that falls to zero on screen. It is not a Mamoru rate.
   problem: {
+    eyebrow: "The problem",
     aria: "Your profits, where do they go?",
     from: 150,
     unit: "APY",
@@ -16,6 +17,9 @@ export const DECK_V2 = {
     days: 30,
     asks: ["Harvest?", "Exit?", "Stay?"],
     question: ["Your profits,", "where do they go?"],
+  },
+  loop: {
+    eyebrow: "The solution",
   },
   solution: {
     eyebrow: "Mamoru",

@@ -4,7 +4,7 @@ import WorksStory from "../components/WorksStory.astro";
 import { DECK_V2 as DECK } from "../deck-v2-copy";
 import { OPEN_COPY } from "../open-copy";
 
-const { problem, solution, built, more, demo, outro } = DECK;
+const { problem, loop, solution, built, more, demo, outro } = DECK;
 const cover = OPEN_COPY.hero;
 const total = 8;
 
@@ -46,6 +46,7 @@ const askAt = [
 
     <!-- 02 Problem: a rate falls to zero in ten seconds, the doubts come up, one question is left -->
     <section class="slide fall" data-slide="2" data-steps="1" aria-roledescription="slide" aria-label={problem.aria}>
+      <p class="label">{problem.eyebrow}</p>
       <div class="stage" aria-hidden="true" data-curve={JSON.stringify(curve)} data-from={problem.from} data-days={problem.days}>
         <p class="day">
           <span class="counted">{problem.day} <span class="js-day">1</span></span>
@@ -70,9 +71,9 @@ const askAt = [
       </p>
     </section>
 
-    <!-- 03 How it works: the landing section, as it is -->
+    <!-- 03 The solution: the landing's How it works loop, under the deck's own name -->
     <section class="slide how" data-slide="3" aria-roledescription="slide" aria-label={OPEN_COPY.works.heading}>
-      <WorksStory />
+      <WorksStory eyebrow={loop.eyebrow} />
     </section>
 
     <!-- 04 Solution -->
@@ -562,6 +563,20 @@ const askAt = [
   }
 
   /* 02 Problem: the rate goes from green to red as it falls, and the line falls with it. */
+  /* The slide's name, set like the eyebrow of the solution slide, and there for the fall and the question alike. */
+  .fall .label {
+    position: absolute;
+    top: clamp(4.5rem, 12vh, 7.5rem);
+    left: 0;
+    right: 0;
+    margin: 0;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--emerald);
+  }
   .fall .stage {
     --tone: var(--emerald);
     width: min(64rem, 100%);
