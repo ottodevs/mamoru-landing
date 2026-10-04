@@ -17,6 +17,7 @@ describe("open instant", () => {
   test("the deck is a plain public asset", () => {
     expect(homeDocument("/deck", OPEN_AT_MS - 1)).toBe("asset");
     expect(homeDocument("/deck/", OPEN_AT_MS)).toBe("asset");
+    expect(homeDocument("/deck-v2", OPEN_AT_MS)).toBe("asset");
   });
 
   test("the built site file is never a public path", () => {
