@@ -5,10 +5,16 @@
 
 export const DECK_V2 = {
   title: "Mamoru · Deck v2",
-  description: "Non-custodial savings on Base. Yield is reinvested until you transfer.",
-  intro: {
-    lede: "Non-custodial savings on Base. Yield is reinvested until you transfer.",
-    kicker: "ETHGlobal Tokyo 2026",
+  description: "Your DeFi profits. Automatically saved.",
+  // 150% APY is the bait that falls apart on screen. It is not a Mamoru rate.
+  hook: {
+    aria: "Your DeFi profits. Automatically saved.",
+    name: "Mamoru",
+    claim: ["Your DeFi profits.", "Automatically saved."],
+    formula: ["150% APY", "?", "Savings"],
+    bait: { from: 150, to: 7, unit: "APY", day: "Day", days: 30 },
+    asks: ["Harvest?", "Exit?", "Stay?"],
+    question: ["Your profits.", "Where do they go?"],
   },
   problem: {
     eyebrow: "The problem",
@@ -17,18 +23,6 @@ export const DECK_V2 = {
       "Fragmented. Hundreds of pools, every APY counted differently.",
       "Time. Harvest, exit, stay? The decisions never stop.",
       "Trade-offs. The best rates want your funds locked, or your trust.",
-    ],
-    chips: [
-      { label: "APR 4.2%", x: 4, y: 6, tone: "" },
-      { label: "APY 140%*", x: 50, y: 0, tone: "fade" },
-      { label: "locked 30d", x: 24, y: 24, tone: "" },
-      { label: "points?", x: 74, y: 22, tone: "" },
-      { label: "Harvest?", x: 8, y: 46, tone: "ask" },
-      { label: "Exit?", x: 44, y: 50, tone: "ask" },
-      { label: "Stay?", x: 72, y: 44, tone: "ask" },
-      { label: "APR 0.9%", x: 2, y: 76, tone: "" },
-      { label: "7d avg 11%", x: 36, y: 82, tone: "" },
-      { label: "claim · swap · redeposit", x: 56, y: 70, tone: "" },
     ],
   },
   solution: {
