@@ -678,14 +678,25 @@ const askAt = [
     transition-delay: 0.25s;
   }
 
-  /* 03 How it works: the landing section. The scene is capped by height so it fits any screen. */
+  /* 03 The solution: the landing section, drawn as large as the screen allows so a room can read it.
+     The slide gives up some of its padding, and the scene is sized by height: about 58% of the screen. */
+  .slide.how {
+    padding-block: clamp(3rem, 6vh, 4.5rem);
+  }
   .how :global(.scene-w) {
-    max-width: min(45rem, 80vh);
-    margin-block: clamp(1rem, 3vh, 2.25rem);
+    max-width: min(66rem, 104vh);
+    margin-block: clamp(0.5rem, 1.6vh, 1.25rem);
   }
   .how :global(.scene-t) {
-    max-width: min(22.5rem, 42vh);
-    margin-block: 1rem;
+    max-width: min(26rem, 46vh);
+    margin-block: 0.75rem;
+  }
+  .how :global(.disc-tag),
+  .how :global(.coin-tag) {
+    font-size: 11.5px;
+  }
+  .how :global(.steps) {
+    max-width: 64rem;
   }
 
   .versus {
