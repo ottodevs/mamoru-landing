@@ -49,7 +49,7 @@ const askAt = [
       <div class="stage" aria-hidden="true" data-curve={JSON.stringify(curve)} data-from={problem.from} data-days={problem.days}>
         <p class="day">{problem.day} <span class="js-day">1</span></p>
         <p class="rate">
-          <span class="js-apy">{problem.from}</span><span class="pct">%</span><span class="unit">{problem.unit}</span>
+          <span class="js-apy">{problem.from}</span><span class="pct">%</span><span class="doubt">?</span><span class="unit">{problem.unit}</span>
         </p>
         <div class="chart">
           <svg viewBox="0 0 1000 300" preserveAspectRatio="none">
@@ -219,9 +219,10 @@ const askAt = [
       if (location.hash !== hash) history.replaceState(null, "", hash);
     }
 
-    // 02 Problem: ten seconds in which the rate falls to zero, then the question takes the slide.
-    const FALL_WAIT = 500;
-    const FALL_FOR = 9500;
+    // 02 Problem: ten seconds. The rate falls to zero, 0%? blinks in red, then the question takes the slide.
+    const FALL_WAIT = 400;
+    const FALL_FOR = 7600;
+    const BLINK_FOR = 2000;
     const GREEN = [47, 93, 80];
     const RED = [155, 44, 44];
     const ASK_AT = [0.28, 0.5, 0.72];
@@ -258,6 +259,7 @@ const askAt = [
       apy.textContent = String(Math.round(v));
       day.textContent = String(1 + Math.floor(p * (days - 1) + 1e-6));
       asks.forEach((a, k) => a.classList.toggle("show", p >= ASK_AT[k]!));
+      stage.classList.toggle("zero", p >= 1);
     }
 
     function playFall(on: boolean) {
@@ -281,7 +283,7 @@ const askAt = [
             const p = Math.min(1, (t - t0) / FALL_FOR);
             drawFall(p);
             if (p < 1) fallFrame = requestAnimationFrame(tick);
-            else fallTimers.push(window.setTimeout(done, 250));
+            else fallTimers.push(window.setTimeout(done, BLINK_FOR));
           };
           fallFrame = requestAnimationFrame(tick);
         }, FALL_WAIT),
@@ -521,20 +523,27 @@ const askAt = [
     background: var(--emerald);
   }
 
-  /* 01 Cover: the landing hero, set for a room. */
+  /* 01 Cover: the landing hero, with the landing's own proportions (open.astro .hero). */
+  .cover .center {
+    gap: 0;
+  }
   .cover .mark {
     width: clamp(4.15rem, 6.25vw, 5.35rem);
     height: auto;
   }
-  .hero {
+  .cover .hero {
     display: flex;
     flex-direction: column;
-    font-size: clamp(3rem, 10vw, 7rem);
-    line-height: 0.98;
+    margin: clamp(0.78rem, 2.6vh, 1.22rem) 0 0;
+    font-size: clamp(2.4rem, 8vw, 5.2rem);
+    line-height: 0.95;
     letter-spacing: 0.04em;
   }
   .cover .lede {
-    margin-top: clamp(1rem, 4vh, 2.4rem);
+    margin: clamp(1.1rem, 3vh, 1.8rem) 0 0;
+    max-width: none;
+    font-size: clamp(1.05rem, 2vw, 1.3rem);
+    line-height: 1.35;
     color: var(--ink);
   }
   .cover .lede span {
@@ -566,6 +575,24 @@ const askAt = [
     letter-spacing: 0.01em;
     color: var(--tone);
     font-variant-numeric: tabular-nums;
+  }
+  .rate .doubt {
+    display: none;
+  }
+  .zero .rate .doubt {
+    display: inline;
+  }
+  /* The end of the fall: 0%? blinks in the alert red the app uses. */
+  @keyframes blink {
+    0%, 55% { opacity: 1; }
+    56%, 100% { opacity: 0.12; }
+  }
+  .zero .rate {
+    color: #9b2c2c;
+    animation: blink 0.66s steps(1, end) 3;
+  }
+  .zero .rate .unit {
+    visibility: hidden;
   }
   .rate .unit {
     margin-left: 0.5em;
@@ -1027,6 +1054,7 @@ const askAt = [
     .on .rise,
     .ask,
     .question,
+    .zero .rate,
     .on .ring,
     .on .settle path {
       transition: none !important;
