@@ -2,8 +2,8 @@
 import Base from "../layouts/Base.astro";
 import { DECK_V2 as DECK } from "../deck-v2-copy";
 
-const { intro, problem, solution, built, more, demo, outro } = DECK;
-const total = 7;
+const { hook, problem, solution, built, more, demo, outro } = DECK;
+const total = 6;
 ---
 <Base title={DECK.title} description={DECK.description} canonical="https://mamoru.lol/deck-v2">
   <main class="deck" id="deck" aria-roledescription="carousel" aria-label={DECK.title}>
@@ -12,28 +12,38 @@ const total = 7;
       <span>Mamoru</span>
     </header>
 
-    <!-- 01 Intro -->
-    <section class="slide intro" data-slide="1" aria-roledescription="slide" aria-label="Mamoru">
-      <svg class="rakes" viewBox="0 0 1200 240" preserveAspectRatio="none" aria-hidden="true">
-        {Array.from({ length: 6 }, (_, i) => {
-          const y = 40 + i * 32;
-          return <path d={`M0 ${y} C300 ${y - 4} 600 ${y + 4} 900 ${y} S1200 ${y - 3} 1200 ${y}`} pathLength="1" style={`--i:${i}`} />;
-        })}
-      </svg>
-      <div class="center">
-        <img class="mark rise" src="/mark-two-stones.png" width="72" height="72" alt="" style="--d:0" />
-        <h1 class="hero rise" style="--d:1">
-          <span>APY</span>
-          <span>DELIVERED</span>
+    <!-- 01 Hook, then the problem. The hook plays once and gives way to the problem copy; a click skips ahead. -->
+    <section class="slide hook" data-slide="1" data-steps="1" aria-roledescription="slide" aria-label={hook.aria}>
+      <div class="act act-title">
+        <img class="mark" src="/mark-two-stones.png" width="56" height="56" alt="" />
+        <p class="name">{hook.name}</p>
+        <h1 class="claim">
+          {hook.claim.map((line) => <span>{line}</span>)}
         </h1>
-        <p class="lede rise" style="--d:2">{intro.lede}</p>
-        <p class="kicker rise" style="--d:3">{intro.kicker}</p>
+        <p class="formula">
+          <span>{hook.formula[0]}</span>
+          <i aria-hidden="true">→</i>
+          <span class="unknown">{hook.formula[1]}</span>
+          <i aria-hidden="true">→</i>
+          <span class="saved">{hook.formula[2]}</span>
+        </p>
       </div>
-    </section>
 
-    <!-- 02 Problem -->
-    <section class="slide problem" data-slide="2" aria-roledescription="slide" aria-label={problem.heading}>
-      <div class="split">
+      <div class="act act-bait" aria-hidden="true" data-from={hook.bait.from} data-to={hook.bait.to} data-days={hook.bait.days}>
+        <p class="day">{hook.bait.day} <span class="js-day">1</span></p>
+        <p class="bait">
+          <span class="js-apy">{hook.bait.from}</span><span class="pct">%</span><span class="unit">{hook.bait.unit}</span>
+        </p>
+        <p class="asks">
+          {hook.asks.map((ask, i) => <span style={`--i:${i}`}>{ask}</span>)}
+        </p>
+      </div>
+
+      <p class="act act-ask" aria-hidden="true">
+        {hook.question.map((line) => <span>{line}</span>)}
+      </p>
+
+      <div class="act act-problem">
         <div class="copy">
           <p class="eyebrow rise" style="--d:0">01 · {problem.eyebrow}</p>
           <h2 class="rise" style="--d:1">
@@ -43,16 +53,11 @@ const total = 7;
             {problem.points.map((p, i) => <li class="rise" style={`--d:${i + 2}`}>{p}</li>)}
           </ul>
         </div>
-        <figure class="scatter" aria-hidden="true">
-          {problem.chips.map((c, i) => (
-            <span class:list={["chip", c.tone]} style={`--x:${c.x}%;--y:${c.y}%;--i:${i}`}>{c.label}</span>
-          ))}
-        </figure>
       </div>
     </section>
 
-    <!-- 03 Solution -->
-    <section class="slide solution" data-slide="3" aria-roledescription="slide" aria-label={solution.heading}>
+    <!-- 02 Solution -->
+    <section class="slide solution" data-slide="2" aria-roledescription="slide" aria-label={solution.heading}>
       <div class="split">
         <div class="copy">
           <p class="eyebrow rise" style="--d:0">02 · {solution.eyebrow}</p>
@@ -87,8 +92,8 @@ const total = 7;
       </div>
     </section>
 
-    <!-- 04 How it's built -->
-    <section class="slide built" data-slide="4" aria-roledescription="slide" aria-label={built.heading}>
+    <!-- 03 How it's built -->
+    <section class="slide built" data-slide="3" aria-roledescription="slide" aria-label={built.heading}>
       <div class="wide">
         <p class="eyebrow rise" style="--d:0">03 · {built.eyebrow}</p>
         <h2 class="rise" style="--d:1">{built.heading}</h2>
@@ -103,8 +108,8 @@ const total = 7;
       </div>
     </section>
 
-    <!-- 05 One more thing -->
-    <section class="slide more" data-slide="5" data-steps="1" aria-roledescription="slide" aria-label={more.teaser}>
+    <!-- 04 One more thing -->
+    <section class="slide more" data-slide="4" data-steps="1" aria-roledescription="slide" aria-label={more.teaser}>
       <p class="teaser-line">{more.teaser}</p>
       <div class="reveal">
         <p class="eyebrow rise" style="--d:0">{more.eyebrow}</p>
@@ -119,8 +124,8 @@ const total = 7;
       </div>
     </section>
 
-    <!-- 06 Demo -->
-    <section class="slide demo" data-slide="6" aria-roledescription="slide" aria-label="Demo">
+    <!-- 05 Demo -->
+    <section class="slide demo" data-slide="5" aria-roledescription="slide" aria-label="Demo">
       <div class="center">
         <p class="eyebrow rise" style="--d:0">{demo.eyebrow}</p>
         <h2 class="demo-title rise" style="--d:1">{demo.heading}</h2>
@@ -134,8 +139,8 @@ const total = 7;
       </div>
     </section>
 
-    <!-- 07 Outro -->
-    <section class="slide outro" data-slide="7" aria-roledescription="slide" aria-label={outro.heading}>
+    <!-- 06 Outro -->
+    <section class="slide outro" data-slide="6" aria-roledescription="slide" aria-label={outro.heading}>
       <div class="wide">
         <p class="eyebrow rise" style="--d:0">{outro.eyebrow}</p>
         <h2 class="rise" style="--d:1">{outro.heading}</h2>
@@ -186,10 +191,55 @@ const total = 7;
         el.dataset.step = k === at ? String(step) : "0";
         el.inert = k !== at;
       });
+      playHook(at === 0 && step === 0);
       dots.forEach((d, k) => d.setAttribute("aria-current", k === at ? "step" : "false"));
       now.textContent = String(at + 1).padStart(2, "0");
       const hash = `#${at + 1}`;
       if (location.hash !== hash) history.replaceState(null, "", hash);
+    }
+
+    // 01 Hook: the bait counts down while the days go by, then the slide moves on to the problem by itself.
+    const HOOK_COUNT_AT = 4800;
+    const HOOK_COUNT_FOR = 2800;
+    const HOOK_ENDS_AT = 12100;
+    const quiet = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const bait = deck.querySelector<HTMLElement>(".act-bait");
+    const apy = deck.querySelector<HTMLElement>(".js-apy");
+    const day = deck.querySelector<HTMLElement>(".js-day");
+    let hookTimers: number[] = [];
+    let hookFrame = 0;
+
+    function playHook(on: boolean) {
+      hookTimers.forEach((t) => clearTimeout(t));
+      hookTimers = [];
+      cancelAnimationFrame(hookFrame);
+      if (!bait || !apy || !day) return;
+      const from = Number(bait.dataset.from);
+      const to = Number(bait.dataset.to);
+      const days = Number(bait.dataset.days);
+      apy.textContent = String(from);
+      day.textContent = "1";
+      if (!on) return;
+      if (quiet) {
+        hookTimers.push(window.setTimeout(() => show(0, 1), 0));
+        return;
+      }
+      hookTimers.push(
+        window.setTimeout(() => {
+          const t0 = performance.now();
+          const tick = (t: number) => {
+            const raw = Math.min(1, (t - t0) / HOOK_COUNT_FOR);
+            const p = raw * raw;
+            apy.textContent = String(Math.round(from - (from - to) * p));
+            day.textContent = String(1 + Math.round((days - 1) * raw));
+            if (raw < 1) hookFrame = requestAnimationFrame(tick);
+          };
+          hookFrame = requestAnimationFrame(tick);
+        }, HOOK_COUNT_AT),
+        window.setTimeout(() => {
+          if (at === 0 && step === 0) show(0, 1);
+        }, HOOK_ENDS_AT),
+      );
     }
 
     function next() {
@@ -425,87 +475,161 @@ const total = 7;
     background: var(--emerald);
   }
 
-  /* 01 Intro */
-  .intro .rakes {
+  /* 01 Hook: a title, a rate that falls apart, one question. Then the problem stays. */
+  .hook .act {
     position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 9vh;
-    width: 100%;
-    height: 13vh;
-    opacity: 0.9;
-  }
-  .rakes path {
-    fill: none;
-    stroke: var(--wash);
-    stroke-width: 1.1;
-    stroke-linecap: round;
-    stroke-dasharray: 1;
-    stroke-dashoffset: 1;
-  }
-  .intro.on .rakes path {
-    stroke-dashoffset: 0;
-    transition: stroke-dashoffset 1.8s cubic-bezier(0.6, 0, 0.2, 1);
-    transition-delay: calc(0.4s + var(--i) * 0.1s);
-  }
-  .hero {
+    inset: 0;
     display: flex;
     flex-direction: column;
-    font-size: clamp(3rem, 10vw, 7rem);
-    line-height: 0.98;
-    letter-spacing: 0.04em;
-  }
-
-  /* 02 Problem: yields scattered around the page, none agreeing. */
-  .scatter {
-    position: relative;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
     margin: 0;
-    height: min(26rem, 52vh);
-  }
-  .chip {
-    position: absolute;
-    left: var(--x);
-    top: var(--y);
-    padding: 0.35rem 0.7rem;
-    border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent);
-    background: color-mix(in srgb, var(--rice) 70%, transparent);
-    font-family: var(--font-mono);
-    font-size: clamp(0.72rem, 1.1vw, 0.85rem);
-    letter-spacing: 0.04em;
-    color: var(--muted);
-    white-space: nowrap;
+    padding: clamp(4.5rem, 10vh, 7rem) clamp(1.25rem, 7vw, 7rem);
     opacity: 0;
+    pointer-events: none;
   }
-  .on .chip {
-    opacity: 1;
-    transition: opacity 1s ease;
-    transition-delay: calc(0.6s + var(--i) * 0.18s);
-    animation: drift 9s ease-in-out infinite alternate;
-    animation-delay: calc(var(--i) * -1.3s);
+  @keyframes act {
+    0% { opacity: 0; transform: translateY(10px); }
+    14% { opacity: 1; transform: none; }
+    86% { opacity: 1; transform: none; }
+    100% { opacity: 0; transform: translateY(-6px); }
   }
-  @keyframes drift {
-    from { transform: translate(0, 0); }
-    to { transform: translate(6px, -9px); }
+  .hook.on[data-step="0"] .act-title {
+    animation: act 3s var(--ease) 0.4s both;
+  }
+  .hook.on[data-step="0"] .act-bait {
+    animation: act 5s var(--ease) 3.4s both;
+  }
+  .hook.on[data-step="0"] .act-ask {
+    animation: act 3.4s var(--ease) 8.6s both;
   }
 
-  .chip.ask {
-    border-color: transparent;
-    background: none;
-    font-family: var(--font-serif);
-    font-size: clamp(1.3rem, 2.4vw, 1.9rem);
-    font-style: italic;
-    letter-spacing: 0;
+  .act-title .mark {
+    width: clamp(2.6rem, 4vw, 3.5rem);
+    height: auto;
+  }
+  .name {
+    margin: 0.6rem 0 clamp(1.2rem, 4vh, 2.2rem);
+    font-size: clamp(1.1rem, 1.6vw, 1.4rem);
+    letter-spacing: 0.02em;
+  }
+  .claim {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    font-weight: 400;
+    font-size: clamp(2.4rem, 6.2vw, 5rem);
+    line-height: 1.06;
+    letter-spacing: 0.005em;
+  }
+  .claim span + span {
+    color: var(--emerald);
+  }
+  .formula {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: baseline;
+    gap: 0.4em 1.1em;
+    margin: clamp(1.6rem, 5vh, 3rem) 0 0;
+    font-family: var(--font-mono);
+    font-size: clamp(0.85rem, 1.4vw, 1.1rem);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .formula i {
+    font-style: normal;
+    color: var(--stone);
+  }
+  .formula .unknown {
     color: var(--ink);
   }
-  .chip.fade {
-    text-decoration: line-through;
-    text-decoration-color: color-mix(in srgb, var(--ink) 35%, transparent);
+  .formula .saved {
+    color: var(--emerald);
   }
-  .on .chip.fade {
-    animation: rot 6s ease-in 1.4s forwards;
+
+  .day {
+    margin: 0 0 clamp(0.6rem, 2vh, 1.2rem);
+    font-family: var(--font-mono);
+    font-size: clamp(0.75rem, 1.1vw, 0.9rem);
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--stone);
+    font-variant-numeric: tabular-nums;
   }
-  @keyframes rot {
-    to { opacity: 0.25; transform: translateY(14px); }
+  .bait {
+    margin: 0;
+    font-size: clamp(4.5rem, 17vw, 13rem);
+    line-height: 1;
+    letter-spacing: 0.01em;
+    font-variant-numeric: tabular-nums;
+  }
+  .bait .unit {
+    margin-left: 0.5em;
+    font-family: var(--font-mono);
+    font-size: 0.2em;
+    letter-spacing: 0.2em;
+    vertical-align: 0.9em;
+  }
+  @keyframes sink {
+    to { opacity: 0.3; transform: translateY(1.6rem) scale(0.84); }
+  }
+  .hook.on[data-step="0"] .bait {
+    animation: sink 2.8s cubic-bezier(0.5, 0, 0.9, 0.6) 4.8s both;
+  }
+  .asks {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.3em 1.6em;
+    margin: clamp(1.2rem, 4vh, 2.4rem) 0 0;
+    font-size: clamp(1.5rem, 3.2vw, 2.6rem);
+    font-style: italic;
+  }
+  .asks span {
+    opacity: 0;
+  }
+  @keyframes ask {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+  }
+  .hook.on[data-step="0"] .asks span {
+    animation: ask 0.3s ease-out both;
+    animation-delay: calc(6s + var(--i) * 0.32s);
+  }
+
+  .act-ask {
+    font-size: clamp(2.2rem, 5.4vw, 4.4rem);
+    line-height: 1.1;
+  }
+  .act-ask span {
+    display: block;
+  }
+  .act-ask span + span {
+    font-style: italic;
+    color: var(--emerald);
+  }
+
+  /* The problem copy: one column, read left to right, set in the middle of the slide. */
+  .hook .act-problem {
+    opacity: 1;
+    text-align: left;
+  }
+  .hook .act-problem .copy {
+    width: min(46rem, 100%);
+  }
+  .hook[data-step="0"] .act-problem .rise {
+    opacity: 0;
+    transform: translateY(12px);
+    transition: opacity 0.4s ease;
+  }
+  .hook h2 {
+    font-size: clamp(2rem, 4.2vw, 3.3rem);
+  }
+  .hook h2 span + span {
+    color: var(--emerald);
   }
 
   .versus {
@@ -535,10 +659,6 @@ const total = 7;
     color: var(--ink);
   }
 
-  .problem h2 {
-    font-size: clamp(2rem, 4.2vw, 3.3rem);
-  }
-  .problem h2 span + span,
   .solution h2 span:last-child {
     color: var(--emerald);
   }
@@ -857,7 +977,6 @@ const total = 7;
       grid-template-columns: 1fr;
       gap: 1.5rem;
     }
-    .scatter,
     .garden {
       display: none;
     }
@@ -878,10 +997,11 @@ const total = 7;
     .slide.on,
     .rise,
     .on .rise,
-    .on .chip,
+    .hook .act,
+    .hook .bait,
+    .hook .asks span,
     .on .ring,
-    .on .settle path,
-    .intro.on .rakes path {
+    .on .settle path {
       transition: none !important;
       animation: none !important;
     }
