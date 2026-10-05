@@ -34,7 +34,7 @@ export const DECK_V2 = {
         who: "A key with limits",
         what: "Mamoru works through a session key. It can act only inside a written policy and you can revoke it anytime.",
       },
-      { who: "Only on Uniswap", what: "Where the capital works. Mamoru swaps and provides liquidity on Uniswap, nothing else." },
+      { who: "Built on Uniswap", what: "Where the capital works. Mamoru swaps and provides liquidity on Uniswap, nothing else." },
       {
         who: "Half in stablecoins by rule",
         what: "Three positions. Mamoru keeps half of the capital in stablecoins, and the yield becomes stablecoins.",

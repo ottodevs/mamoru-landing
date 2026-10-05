@@ -17,11 +17,13 @@ type Layout = { id: "w" | "t"; w: number; h: number; purse: Pt; core: Pt; ring: 
 
 // Three working positions, as offsets from the centre of the ring. Areas follow the 35 / 15 / 50 allocation,
 // and tones are the ones the allocation chart uses. The last one is the stablecoin position.
-// Each edge sits the same distance (34) from the centre, so the yield of all three travels equal, straight paths.
+// Each edge sits about the same distance from the centre (36 to 40), so the yield of all three travels
+// near-equal, straight paths. The two upper positions stand well apart: the gap between them holds the USDC
+// tag, and each has room for its own name above it.
 const DISCS = [
-  { dx: -58, dy: -41, r: 37, tone: "paired" },
-  { dx: 47.5, dy: -33, r: 24, tone: "mercenary" },
-  { dx: 0, dy: 78, r: 44, tone: "stables" },
+  { dx: -70, dy: -32.5, r: 37, tone: "paired" },
+  { dx: 58, dy: -27, r: 24, tone: "mercenary" },
+  { dx: 0, dy: 80, r: 44, tone: "stables" },
 ];
 // Where the yield of the three positions converges: the centre of the ring.
 const MEET = { dx: 0, dy: 0 };
@@ -36,7 +38,7 @@ const layouts: Layout[] = [
 const tags = DISCS.map((d) => ({
   text: labels[d.tone as keyof typeof labels],
   dx: d.dx,
-  dy: d.dy < 0 ? d.dy - d.r - 10 : d.dy + d.r * 1.15 + 16,
+  dy: d.dy < 0 ? d.dy - d.r - 10 : d.dy + d.r * 1.15 + 12,
 })).filter((t) => t.text);
 const geo = (l: Layout) => JSON.stringify({ purse: l.purse, core: l.core, discs: DISCS, meet: MEET });
 ---
