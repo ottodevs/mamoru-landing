@@ -205,8 +205,8 @@ const askAt = [
       } catch {}
     }
 
-    // 02 Problem: ten seconds. The rate falls to zero, 0%? blinks in red, then the question takes the slide.
-    const FALL_WAIT = 400;
+    // 02 Problem: 150% holds for ten seconds, then the rate falls to zero, 0%? blinks in red, and the question takes the slide.
+    const FALL_WAIT = 10000;
     const FALL_FOR = 7200;
     const BLINK_FOR = 2400;
     const GREEN = [47, 93, 80];
