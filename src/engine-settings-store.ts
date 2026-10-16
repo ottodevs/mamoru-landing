@@ -88,23 +88,37 @@ export async function listVersions(db: D1Db, limit = 50): Promise<VersionRow[] |
   }
 }
 
-/** The environment-wide version in effect for each env, read directly (not from a limited history page). */
-export async function activeByEnv(db: D1Db): Promise<Record<Env, VersionRow | null>> {
-  const one = async (env: Env) => {
+export type InEffect = { wide: VersionRow | null; canary: VersionRow | null };
+
+/**
+ * What runs per env, read directly (never from a limited history page): the newest readable environment-wide
+ * version, and the newest readable canary if it is newer than that (one canary at most is live, as the operator
+ * resolves it). Without migration 0011 both are null.
+ */
+export async function inEffect(db: D1Db): Promise<Record<Env, InEffect>> {
+  const newest = async (env: Env, canary: boolean, after: number) => {
     const r = await db
       .prepare(
-        "SELECT id, env, account_keys_json, template, settings_json, settings_hash, author, reason, created_at, rollback_of FROM engine_settings_versions WHERE env = ? AND account_keys_json IS NULL ORDER BY id DESC LIMIT 20",
+        `SELECT id, env, account_keys_json, template, settings_json, settings_hash, author, reason, created_at, rollback_of FROM engine_settings_versions WHERE env = ? AND account_keys_json IS ${canary ? "NOT NULL" : "NULL"} AND id > ? ORDER BY id DESC LIMIT 20`,
       )
-      .bind(env)
+      .bind(env, after)
       .all<RawVersion>();
-    // The newest readable one: a row the code would refuse is skipped, as the operator skips it.
     for (const raw of r.results) {
       const v = toVersion(raw);
       if (v) return v;
     }
     return null;
   };
-  return { prod: await one("prod"), beta: await one("beta") };
+  const one = async (env: Env): Promise<InEffect> => {
+    const wide = await newest(env, false, 0);
+    return { wide, canary: await newest(env, true, wide?.id ?? 0) };
+  };
+  try {
+    return { prod: await one("prod"), beta: await one("beta") };
+  } catch (e) {
+    if (missingTable(e)) return { prod: { wide: null, canary: null }, beta: { wide: null, canary: null } };
+    throw e;
+  }
 }
 
 export async function versionById(db: D1Db, id: number): Promise<VersionRow | null> {

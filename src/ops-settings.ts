@@ -5,7 +5,7 @@
  */
 
 import { BOUNDS, DEFAULT_CAP_USDC, DEFAULT_SETTINGS, type EngineSettings } from "./engine-settings-model";
-import type { Env, TemplateRow, VersionRow } from "./engine-settings-store";
+import type { Env, InEffect, TemplateRow, VersionRow } from "./engine-settings-store";
 import { csrfField, noticeHtml, pageHead, type SectionView } from "./ops";
 import { esc } from "./text";
 
@@ -25,13 +25,12 @@ export function describeSettings(s: EngineSettings): string {
 
 const when = (iso: string) => iso.replace("T", " ").slice(0, 16) + " UTC";
 
-function activeBlock(versions: readonly VersionRow[], active: Record<Env, VersionRow | null>): string {
+function activeBlock(active: Record<Env, InEffect>): string {
   const rows = (["prod", "beta"] as const)
     .map((env) => {
-      const v = active[env];
+      const v = active[env].wide;
       // One canary at most is live per environment: the newest, if newer than the environment-wide version.
-      const newest = versions.filter((x) => x.env === env && x.accountKeys !== null && (!v || x.id > v.id)).sort((a, b) => b.id - a.id)[0];
-      const canaries = newest ? [newest] : [];
+      const canaries = active[env].canary ? [active[env].canary!] : [];
       const main = v
         ? `<td>v${v.id}</td><td>${esc(v.template)}</td><td>${esc(describeSettings(v.settings))}</td><td>${esc(v.author)}<br><span class="dim">${esc(when(v.createdAt))}</span></td>`
         : `<td>none</td><td>code defaults</td><td>${esc(describeSettings(DEFAULT_SETTINGS))}</td><td></td>`;
@@ -124,7 +123,7 @@ function historyBlock(csrf: string, versions: readonly VersionRow[]): string {
 
 export type SettingsPage = {
   versions: readonly VersionRow[] | null;
-  active: Record<Env, VersionRow | null>;
+  active: Record<Env, InEffect>;
   templates: readonly TemplateRow[] | null;
   csrf: string;
   draft: { env: Env; template: string; settings: EngineSettings; canary: string; reason: string };
@@ -156,7 +155,7 @@ export function settingsSection(p: SettingsPage): SectionView {
     html: `${head}
     <p class="lede">What the engine does with deposits: cap, depth sizing and the fall guard. Bounds are enforced again by the operator, which refuses anything outside them. Settings never change what an account's approval allows.</p>
     ${notice}${confirm}
-    ${activeBlock(p.versions, p.active)}
+    ${activeBlock(p.active)}
     ${editForm(p.csrf, p.templates, p.draft)}
     ${historyBlock(p.csrf, p.versions)}`,
   };

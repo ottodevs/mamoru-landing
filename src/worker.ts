@@ -84,7 +84,7 @@ import { handleExpEvent, recordWaitlistSubmit } from "./exp-events";
 import { loadExperimentReports } from "./exp-report";
 import { experimentsSection } from "./ops-experiments";
 import { settingsSection, type SettingsPage } from "./ops-settings";
-import { activeByEnv, appendVersion, listTemplates, listVersions, versionById, type Env as SettingsEnv } from "./engine-settings-store";
+import { inEffect, appendVersion, listTemplates, listVersions, versionById, type Env as SettingsEnv } from "./engine-settings-store";
 import { DEFAULT_SETTINGS, canonicalJson, riskyChanges, settingsFromForm, validateSettings } from "./engine-settings-model";
 import { archiveTarget } from "./archive";
 import { archiveBar, archiveSection } from "./ops-archive";
@@ -656,8 +656,8 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     const wantEnv: SettingsEnv = url.searchParams.get("env") === "beta" ? "beta" : "prod";
     const wantTemplate = url.searchParams.get("template");
     const fromTemplate = templates?.find((t) => t.name === wantTemplate);
-    const activeAll = db && versions ? await activeByEnv(db) : { prod: null, beta: null };
-    const active = activeAll[wantEnv];
+    const activeAll = db && versions ? await inEffect(db) : { prod: { wide: null, canary: null }, beta: { wide: null, canary: null } };
+    const active = activeAll[wantEnv].wide;
     const draft = over.draft ?? {
       env: wantEnv,
       template: fromTemplate?.name ?? active?.template ?? templates?.[0]?.name ?? "custom",
@@ -691,17 +691,21 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
       // A rollback confirmed through this form keeps its link only if it is still exactly that version.
       const back = Number(form.get("rollback_of"));
       const target = Number.isSafeInteger(back) && back > 0 ? await versionById(db, back) : null;
-      if (target && target.env === draft.env && canonicalJson(target.settings) === canonicalJson(draft.settings)) rollbackOf = back;
-      // An edited template is recorded as such, never under the name of a preset it no longer matches.
+      const scope = (keys: readonly string[] | null) => JSON.stringify(keys && keys.length ? [...new Set(keys.map((k) => k.toLowerCase()))].sort() : null);
+      const draftKeys = draft.canary.split(/\s+/).map((k) => k.trim()).filter(Boolean);
+      if (target && target.env === draft.env && scope(target.accountKeys) === scope(draftKeys) && canonicalJson(target.settings) === canonicalJson(draft.settings)) rollbackOf = back;
+      // An edited template is recorded as such, never under the name of a preset it no longer matches. A name this
+      // code already wrote ("custom (from X)") comes back from the confirm screen and is kept as it is.
       const named = templates.find((t) => t.name === draft.template);
-      if (!rollbackOf && (!named || canonicalJson(named.settings) !== canonicalJson(draft.settings))) draft = { ...draft, template: named ? `custom (from ${named.name})`.slice(0, 120) : "custom" };
+      const alreadyCustom = draft.template === "custom" || draft.template.startsWith("custom (from ");
+      if (!rollbackOf && !alreadyCustom && (!named || canonicalJson(named.settings) !== canonicalJson(draft.settings))) draft = { ...draft, template: named ? `custom (from ${named.name})`.slice(0, 120) : "custom" };
     }
     const errors = validateSettings(draft.settings);
     if (errors.length) return respond(await settingsView({ draft, notice: { text: `Not applied: ${errors.join("; ")}.`, tone: "bad" } }, 400));
     if (!draft.reason.trim()) return respond(await settingsView({ draft, notice: { text: "Not applied: say why.", tone: "bad" } }, 400));
     const accountKeys = draft.canary.split(/\s+/).map((k) => k.trim()).filter(Boolean);
     // Risky against what those accounts run now: the environment-wide version (or the defaults).
-    const current = (await activeByEnv(db))[draft.env]?.settings ?? DEFAULT_SETTINGS;
+    const current = (await inEffect(db))[draft.env].wide?.settings ?? DEFAULT_SETTINGS;
     const risks = riskyChanges(current, draft.settings);
     if (risks.length && form.get("confirm") !== "1") return respond(await settingsView({ draft, confirm: { risks, draft, ...(rollbackOf ? { rollbackOf } : {}) } }));
     try {

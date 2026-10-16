@@ -178,3 +178,49 @@ describe("/ops/settings review fixes (spec 006)", () => {
     expect(html).toContain("prod-wide");
   });
 });
+
+describe("/ops/settings review round 2 (spec 006)", () => {
+  const KEY_A = "11111111-aaaa-4bbb-8ccc-000000000001";
+
+  test("an edited preset keeps its lineage through the confirm screen", async () => {
+    const db = memoryDb();
+    const { env, cookie } = await opsEnv(db);
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
+    const edited: EngineSettings = { ...DEPTH, capUsdc: 2000 };
+    const ask = await (await worker.fetch(post("/ops/settings/apply", formFor(edited, { csrf, template: "conservador + depth 30/500/5, cap 1000" }), cookie), env)).text();
+    const confirmBody = new URLSearchParams([...ask.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)" \/>/g)].map((m) => [m[1]!, m[2]!.replace(/&amp;/g, "&")]));
+    await worker.fetch(post("/ops/settings/apply", confirmBody, cookie), env);
+    expect((await listVersions(db))![0]!.template).toBe("custom (from conservador + depth 30/500/5, cap 1000)");
+  });
+
+  test("a rollback link is kept only for the same scope", async () => {
+    const db = memoryDb();
+    await appendVersion(db, { env: "prod", accountKeys: [KEY_A], template: "c", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    const { env, cookie } = await opsEnv(db);
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
+    await worker.fetch(post("/ops/settings/apply", formFor(DEFAULT_SETTINGS, { csrf, confirm: "1", rollback_of: "1" }), cookie), env);
+    expect((await listVersions(db))![0]!.rollbackOf).toBeNull();
+    await worker.fetch(post("/ops/settings/apply", formFor(DEFAULT_SETTINGS, { csrf, confirm: "1", rollback_of: "1", canary: KEY_A.toUpperCase() }), cookie), env);
+    expect((await listVersions(db))![0]!.rollbackOf).toBe(1);
+  });
+
+  test("the live canary is shown even behind a long history, and only the newest one", async () => {
+    const db = memoryDb();
+    await appendVersion(db, { env: "prod", accountKeys: null, template: "wide", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    await appendVersion(db, { env: "prod", accountKeys: [KEY_A], template: "old-canary", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    await appendVersion(db, { env: "prod", accountKeys: [KEY_A], template: "live-canary", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    for (let i = 0; i < 60; i++) await appendVersion(db, { env: "beta", accountKeys: null, template: `b${i}`, settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    const { env, cookie } = await opsEnv(db);
+    const html = await (await worker.fetch(get("/ops/settings", cookie), env)).text();
+    const inEffect = html.slice(html.indexOf('id="set-active"'), html.indexOf('id="set-edit"'));
+    expect(inEffect).toContain("live-canary");
+    expect(inEffect).not.toContain("old-canary");
+  });
+
+  test("a POST before migration 0011 answers with a notice, not a 500", async () => {
+    const { env, cookie } = await opsEnv(memoryDb(false));
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text().catch(() => 'name="csrf" value="x"'));
+    const res = await worker.fetch(post("/ops/settings/apply", formFor(DEPTH, { csrf, confirm: "1" }), cookie), env);
+    expect(res.status).not.toBe(500);
+  });
+});
