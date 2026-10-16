@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
-import { ARCHIVE, archiveTarget } from "../src/archive";
+import { ARCHIVE, LIVE, archiveTarget } from "../src/archive";
+import { archiveBar } from "../src/ops-archive";
 import { sealSession } from "../src/ops";
 import worker, { type Env } from "../src/worker";
 
@@ -41,6 +42,14 @@ describe("archive manifest", () => {
       expect(s.from <= s.to).toBe(true);
       expect(existsSync(`public/ops/archive/${s.id}/index.html`)).toBe(true);
     }
+  });
+
+  test("one version per number: no two entries share kind and version, one live page per kind", () => {
+    const keys = [...ARCHIVE, ...LIVE].map((e) => `${e.kind}:${e.version}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(LIVE.filter((l) => l.kind === "landing").map((l) => l.href)).toEqual(["/"]);
+    expect(LIVE.filter((l) => l.kind === "deck").map((l) => l.href)).toEqual(["/deck"]);
+    expect(archiveBar(ARCHIVE.find((s) => s.id === "deck-v1-1")!)).toContain("Deck v1.1");
   });
 
   test("snapshots stand alone: no /_astro, every local file points at the archive", () => {
@@ -120,6 +129,8 @@ describe("archive behind the gate", () => {
     const { env, cookie } = await archiveEnv();
     const html = await (await worker.fetch(get("/ops/archive", { cookie }), env)).text();
     for (const s of ARCHIVE) expect(html).toContain(`/ops/archive/${s.id}`);
+    for (const s of ARCHIVE) expect(html).toContain(`<td>${s.version}</td>`);
+    for (const l of LIVE) expect(html).toContain(`${l.version} &middot;`);
     expect(html).toContain('href="/deck"');
     expect(html).not.toContain('href="/deck-v2"');
     expect(html).not.toContain('href="/pitch"');

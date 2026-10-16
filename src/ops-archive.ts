@@ -37,7 +37,7 @@ function kindBlock(kind: ArchiveKind): string {
     .join("");
   const rows = ARCHIVE.filter((s) => s.kind === kind)
     .slice()
-    .sort((a, b) => b.from.localeCompare(a.from) || b.version.localeCompare(a.version))
+    .sort((a, b) => b.from.localeCompare(a.from) || b.version.localeCompare(a.version, undefined, { numeric: true }))
     .map(snapshotRow)
     .join("");
   return `<section class="archive-kind" aria-labelledby="archive-${kind}">
