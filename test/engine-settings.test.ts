@@ -317,3 +317,14 @@ describe('/ops/settings writes are atomic against what was checked (spec 006, So
     expect((await listVersions(db))!.map((v) => v.template)).toEqual(['cap 50', 'cap 1000'])
   })
 })
+
+test('two writes by the same author, same settings and millisecond to different canaries: only the first wins (Sol round 4)', async () => {
+  const db = memoryDb()
+  const at = new Date('2026-10-17T01:00:00.000Z')
+  const expected = await maxIdOf(db, 'prod')
+  const base = { env: 'prod' as const, template: 't', settings: DEPTH, author: 'same@x', reason: 'r', expectedMaxId: expected }
+  const a = await appendVersion(db, { ...base, accountKeys: ['11111111-aaaa-4bbb-8ccc-00000000000a'] }, at)
+  expect(a).toBe(1)
+  await expect(appendVersion(db, { ...base, accountKeys: ['11111111-aaaa-4bbb-8ccc-00000000000b'] }, at)).rejects.toBeInstanceOf(SettingsConflict)
+  expect((await listVersions(db))!.length).toBe(1)
+})
