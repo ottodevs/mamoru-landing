@@ -70,11 +70,21 @@ export function opsRouterLogic() {
     }
   };
 
-  /** Cache key: the path only. `?fresh=1` asks the server to recompute, it is not another page. */
+  /** Every other search param stays part of the cache key: otto/mamoru#130's ?env=/?chain=/?account=/?group=
+   * pick a different page's worth of figures, so env=beta must never paint from an env=prod cache entry. */
+  var cacheableSearch = function (url: URL): string {
+    var params = new URLSearchParams(url.search);
+    params.delete("fresh");
+    var s = params.toString();
+    return s ? "?" + s : "";
+  };
+
+  /** Cache key: the path plus every search param except `fresh`. `?fresh=1` asks the server to recompute
+   * the same page, it is not another page. */
   var routeKey = function (href: string, base: string): string | null {
     var url = parse(href, base);
     if (!url || !sectionOf(url.pathname)) return null;
-    return trim(url.pathname);
+    return trim(url.pathname) + cacheableSearch(url);
   };
 
   /** True when the URL asks for a recompute and so must skip the cache. */

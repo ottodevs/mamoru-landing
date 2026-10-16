@@ -1,7 +1,9 @@
 /** Builds the /ops overview model from the Infra snapshot plus D1 history. The build step is pure. */
 
+import { type AccountFilter, DEFAULT_FILTER, type GroupBy, usesLegacyHistory } from "./account-filter";
 import type { RelayerStatus } from "./cost";
 import type { D1Db } from "./d1-infra";
+import { type AccountView, matchesFilter } from "./infra-snapshot";
 import type { InfraSnapshot } from "./infra-snapshot";
 import {
   addDays,
@@ -19,10 +21,13 @@ import {
 } from "./metrics-math";
 import {
   type ActivityRead,
+  collapseDailyV2,
   type DailyRow,
+  type DailyRowV2,
   hasChainData,
   readActivity,
   readDaily,
+  readDailyV2,
   readSignupDays,
   type SignupDays,
   snapshotHasChain,
@@ -43,6 +48,17 @@ export interface Change {
 
 export interface ValuePoint {
   day: string;
+  idle: number;
+  lp: number;
+}
+
+export interface GroupBreakdown {
+  label: string;
+  accounts: number;
+  users: number;
+  funded: number;
+  activated: number;
+  tvl: number;
   idle: number;
   lp: number;
 }
@@ -75,10 +91,17 @@ export interface Overview {
   funnel: FunnelStep[];
   relayer: { ethBalance: number; usd: number | null; status: RelayerStatus; canFund: number | null } | null;
   notes: string[];
+  /** The filter this Overview was built with (otto/mamoru#130), so the page can render it back as the
+   * current selection. */
+  filter: AccountFilter;
+  /** Today's live accounts split by chain or by environment; empty when filter.group is "none". */
+  breakdown: GroupBreakdown[];
 }
 
 export interface OverviewInputs {
   daily: DailyRow[] | null;
+  /** otto/mamoru#130: used for every filter except the legacy prod/all view (see usesLegacyHistory). */
+  dailyV2?: DailyRowV2[] | null;
   activity: ActivityRead | null;
   signups: SignupDays | null;
 }
@@ -93,14 +116,41 @@ export interface StaleNote {
   failedAt: string;
 }
 
-export function buildOverview(snapshot: InfraSnapshot, inputs: OverviewInputs, now: Date, stale?: StaleNote): Overview {
+/** Today's live, filtered rows split by chain or by environment (otto/mamoru#130). */
+function breakdownOf(rows: AccountView[], by: Exclude<GroupBy, "none">): GroupBreakdown[] {
+  const groups = new Map<string, AccountView[]>();
+  for (const r of rows) {
+    const key = by === "chain" ? String(r.chainId) : r.env;
+    const list = groups.get(key);
+    if (list) list.push(r);
+    else groups.set(key, [r]);
+  }
+  return [...groups.entries()]
+    .map(([label, rs]) => ({
+      label,
+      accounts: rs.length,
+      users: new Set(rs.map((r) => r.userId)).size,
+      funded: rs.filter((r) => r.usdcIdle > 0 || r.lpUsd > 0).length,
+      activated: rs.filter((r) => r.positions >= 1).length,
+      tvl: rs.reduce((s, r) => s + r.usdcIdle + r.lpUsd, 0),
+      idle: rs.reduce((s, r) => s + r.usdcIdle, 0),
+      lp: rs.reduce((s, r) => s + r.lpUsd, 0),
+    }))
+    .sort((x, y) => x.label.localeCompare(y.label));
+}
+
+export function buildOverview(snapshot: InfraSnapshot, inputs: OverviewInputs, now: Date, stale?: StaleNote, filter: AccountFilter = DEFAULT_FILTER): Overview {
   const today = utcDay(now);
   const target = addDays(today, -DELTA_DAYS);
   const a = snapshot.accounts;
-  const rows = a?.rows ?? [];
+  // otto/mamoru#130: every headline figure below reads this filtered set, never the raw a.rows / a.totalUsers
+  // / a.totalAccounts — those are DB-wide and would mix beta and test accounts back in.
+  const rows = (a?.rows ?? []).filter((r) => matchesFilter(r, filter));
   const chainOk = snapshotHasChain(snapshot);
   const countsOk = snapshotHasCounts(snapshot);
-  const real = (inputs.daily ?? []).filter(hasChainData);
+  const legacyView = usesLegacyHistory(filter);
+  const dailySource: DailyRow[] = legacyView ? (inputs.daily ?? []) : collapseDailyV2(inputs.dailyV2 ?? [], filter);
+  const real = dailySource.filter(hasChainData);
   const latest = real[real.length - 1];
 
   // Live values when Base answered; otherwise the last captured row stands in.
@@ -112,14 +162,15 @@ export function buildOverview(snapshot: InfraSnapshot, inputs: OverviewInputs, n
   const inRangeAccounts = fromRow
     ? Math.min(fromRow.in_range, fromRow.active_accounts)
     : rows.filter((r) => r.inRange >= 1).length;
-  const idle = fromRow ? fromRow.idle_usdc_usd : (a?.idleUsdcUsd ?? 0);
-  const lp = fromRow ? fromRow.lp_usd : (a?.lpUsd ?? 0);
+  const idle = fromRow ? fromRow.idle_usdc_usd : rows.reduce((s, r) => s + r.usdcIdle, 0);
+  const lp = fromRow ? fromRow.lp_usd : rows.reduce((s, r) => s + r.lpUsd, 0);
   const tvl = idle + lp;
 
   const growth = inputs.signups ? cumulativeGrowth(inputs.signups.users, inputs.signups.accounts, today) : [];
   const lastGrowth = growth[growth.length - 1];
-  const users = countsOk ? (a?.totalUsers ?? 0) : (lastGrowth?.users ?? 0);
-  const accounts = countsOk ? (a?.totalAccounts ?? 0) : (lastGrowth?.accounts ?? 0);
+  const users = countsOk ? new Set(rows.map((r) => r.userId)).size : (lastGrowth?.users ?? 0);
+  const accounts = countsOk ? rows.length : (lastGrowth?.accounts ?? 0);
+  const breakdown = filter.group === "none" ? [] : breakdownOf(rows, filter.group);
 
   const value: ValuePoint[] = real
     .filter((r) => r.day >= addDays(today, -(TVL_DAYS - 1)) && r.day < today)
@@ -191,6 +242,8 @@ export function buildOverview(snapshot: InfraSnapshot, inputs: OverviewInputs, n
     ]),
     relayer,
     notes,
+    filter,
+    breakdown,
   };
 }
 
@@ -200,13 +253,17 @@ export async function loadOverview(
   snapshot: InfraSnapshot,
   now = new Date(),
   stale?: StaleNote,
+  filter: AccountFilter = DEFAULT_FILTER,
 ): Promise<Overview> {
   const today = utcDay(now);
-  if (!db) return buildOverview(snapshot, { daily: null, activity: null, signups: null }, now, stale);
-  const [daily, activity, signups] = await Promise.all([
-    readDaily(db, addDays(today, -(TVL_DAYS + DELTA_DAYS))),
-    readActivity(db, addDays(today, -(DAU_DAYS - 1))),
-    readSignupDays(db),
+  if (!db) return buildOverview(snapshot, { daily: null, dailyV2: null, activity: null, signups: null }, now, stale, filter);
+  const legacyView = usesLegacyHistory(filter);
+  const scope = { env: filter.env, chainId: filter.chainId };
+  const [daily, dailyV2, activity, signups] = await Promise.all([
+    legacyView ? readDaily(db, addDays(today, -(TVL_DAYS + DELTA_DAYS))) : Promise.resolve(null),
+    legacyView ? Promise.resolve(null) : readDailyV2(db, addDays(today, -(TVL_DAYS + DELTA_DAYS))),
+    readActivity(db, addDays(today, -(DAU_DAYS - 1)), scope),
+    readSignupDays(db, scope),
   ]);
-  return buildOverview(snapshot, { daily, activity, signups }, now, stale);
+  return buildOverview(snapshot, { daily, dailyV2, activity, signups }, now, stale, filter);
 }

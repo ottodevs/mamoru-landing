@@ -24,8 +24,13 @@ export interface D1Db {
 export type AccountRow = {
   account_key: string;
   user_id: string;
+  chain_id: number;
   address: string;
   created_at: string;
+  /** 'prod' | 'beta' (otto/mamoru#130). 'prod' when the columns below are not on this D1 yet. */
+  env: string;
+  /** 1 for Ot's test account and any coordinator smoke-test account; 0 otherwise (otto/mamoru#130). */
+  is_test: number;
 };
 
 export interface InfraCounts {
@@ -56,12 +61,25 @@ export async function fetchChainAccounts(
   chainId: number,
   cap = 500,
 ): Promise<AccountRow[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT account_key, user_id, address, created_at FROM accounts
-       WHERE chain_id = ? ORDER BY created_at ASC LIMIT ?`,
-    )
-    .bind(chainId, cap)
-    .all<AccountRow>();
-  return results;
+  try {
+    const { results } = await db
+      .prepare(
+        `SELECT account_key, user_id, chain_id, address, created_at, env, is_test FROM accounts
+         WHERE chain_id = ? ORDER BY created_at ASC LIMIT ?`,
+      )
+      .bind(chainId, cap)
+      .all<AccountRow>();
+    return results;
+  } catch {
+    // otto/mamoru#130's env/is_test columns are not on this D1 yet: read without them and treat every
+    // row as prod, non-test — the same as every row was treated before this ticket.
+    const { results } = await db
+      .prepare(
+        `SELECT account_key, user_id, chain_id, address, created_at FROM accounts
+         WHERE chain_id = ? ORDER BY created_at ASC LIMIT ?`,
+      )
+      .bind(chainId, cap)
+      .all<Omit<AccountRow, "env" | "is_test">>();
+    return results.map((r) => ({ ...r, env: "prod", is_test: 0 }));
+  }
 }

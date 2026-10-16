@@ -37,9 +37,11 @@ import worker, { type Env } from "../src/worker";
 const NOW = new Date("2026-10-01T14:05:00Z");
 const TODAY = "2026-10-01";
 
-function acct(i: number, usdcIdle: number, lpUsd: number, positions: number, inRange: number): AccountView {
+function acct(i: number, usdcIdle: number, lpUsd: number, positions: number, inRange: number, over: Partial<AccountView> = {}): AccountView {
   return {
     accountKey: `acc${i}`,
+    key: `key-${i}`,
+    userId: `user-${i}`,
     address: `0x${String(i).padStart(40, "0")}`,
     basescanUrl: "#",
     ethBalance: 0,
@@ -47,6 +49,10 @@ function acct(i: number, usdcIdle: number, lpUsd: number, positions: number, inR
     lpUsd,
     positions,
     inRange,
+    env: "prod",
+    chainId: 8453,
+    isTest: false,
+    ...over,
   };
 }
 
@@ -302,7 +308,7 @@ describe("metrics-store.ts", () => {
     expect(rows.every((r) => r.captured_at === BACKFILL_MARK && r.tvl_usd === 0)).toBe(true);
   });
 
-  test("captureDaily: backfills an empty table, then upserts today's row; only metrics_daily is written", async () => {
+  test("captureDaily: backfills an empty table, then upserts today's row, then its per-(chain,env) breakdown", async () => {
     const { db, calls } = fakeDb({
       tables: { users: SIGNUPS.users, accounts: SIGNUPS.accounts },
       first: (sql) => (sql.includes("FROM metrics_daily") ? { n: 0 } : sql.includes("account_activity") ? { n: 2 } : null),
@@ -313,20 +319,26 @@ describe("metrics-store.ts", () => {
     expect(outcome.backfilled).toBe(5);
     expect(outcome.row).toMatchObject({ day: TODAY, dau: 2, active_accounts: 3 });
     const writes = calls.filter((c) => c.kind === "run");
-    expect(writes).toHaveLength(7);
-    expect(writes.every((c) => /^(INSERT( OR IGNORE)? INTO|UPDATE) metrics_daily\b/.test(c.sql))).toBe(true);
+    // 5 backfill rows, the metrics_daily upsert, one metrics_daily_v2 row (every ROWS account is 8453/prod),
+    // then settleYesterday's metrics_daily UPDATE.
+    expect(writes).toHaveLength(8);
+    expect(writes.every((c) => /^(INSERT( OR IGNORE)? INTO|UPDATE) metrics_daily(_v2)?\b/.test(c.sql))).toBe(true);
     const upsert = writes[5];
     expect(upsert.sql).toContain("ON CONFLICT(day) DO UPDATE");
     expect(upsert.args[0]).toBe(TODAY);
     expect(upsert.args).toHaveLength(14);
-    expect(writes[6].args).toEqual([2, "2026-09-30"]);
+    const upsertV2 = writes[6];
+    expect(upsertV2.sql).toContain("metrics_daily_v2");
+    expect(upsertV2.sql).toContain("ON CONFLICT(day, chain_id, env) DO UPDATE");
+    expect(upsertV2.args.slice(0, 3)).toEqual([TODAY, 8453, "prod"]);
+    expect(writes[7].args).toEqual([2, "2026-09-30"]);
   });
 
   test("captureDaily: a table with rows is not backfilled again", async () => {
     const { db, calls } = fakeDb({ first: (sql) => (sql.includes("FROM metrics_daily") ? { n: 12 } : { n: 0 }) });
     const outcome = await captureDaily({ db }, { now: NOW, load: async () => ({ snapshot: snap() }) });
     expect(outcome.ok && outcome.backfilled).toBe(0);
-    expect(calls.filter((c) => c.kind === "run")).toHaveLength(1);
+    expect(calls.filter((c) => c.kind === "run")).toHaveLength(2);
   });
 
   test("captureDaily reports instead of throwing: no D1, unreadable counts, missing table", async () => {
@@ -353,8 +365,10 @@ describe("metrics-overview.ts", () => {
     expect(overview.changes.tvl?.delta.abs).toBeCloseTo(22.18, 6);
     expect(overview.changes.activated?.delta.abs).toBe(2);
     expect(overview.changes.users).toMatchObject({ since: "2026-09-24", exact: true });
-    expect(overview.changes.users?.delta.abs).toBe(9);
-    expect(changeLine(overview.changes.users, "int")).toBe("+9 in 7 days");
+    // otto/mamoru#130: "users" is now the live, filtered account set (5 in ROWS), not the unfiltered
+    // historical growth curve this fixture's signups describe — hence the drop rather than a rise.
+    expect(overview.changes.users?.delta.abs).toBe(-25);
+    expect(changeLine(overview.changes.users, "int")).toBe("−25 in 7 days");
     expect(changeLine(overview.changes.tvl, "usd")).toBe("+$22.18 (+74%) since 22 Sep");
     expect(changeLine(null, "int")).toBe("");
   });
@@ -371,7 +385,8 @@ describe("metrics-overview.ts", () => {
 
   test("funnel counts accounts, and Base being down falls back to the last capture", () => {
     const live = buildOverview(snap(), { daily: null, activity: null, signups: SIGNUPS }, NOW);
-    expect(live.funnel.map((s) => s.count)).toEqual([39, 4, 3, 2]);
+    // otto/mamoru#130: "signed up" is now the live, filtered row count (5 in ROWS), not a.totalUsers.
+    expect(live.funnel.map((s) => s.count)).toEqual([5, 4, 3, 2]);
     expect(live.positionsInRange).toBe(3);
     expect(live.positions).toBe(4);
 
