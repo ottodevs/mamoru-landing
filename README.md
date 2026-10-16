@@ -67,6 +67,10 @@ bun run build && bunx wrangler dev
 
 `POST /api/notify` writes the address into KV `WAITLIST` or it does not say it saved. The list is not a marketing tool. `/ops` is the private panel (secret `LIST_GATE`, not in git). The welcome note sends only when the `EMAIL` binding can send from `notify@mamoru.lol`, and only once. `/ops/infra` reads Base over public RPCs (optional secret `BASE_RPC_URL` tried first) and the read-only D1 binding `MAMORU_DB` (owned by `ottodevs/mamoru`). Nothing secret lives in this repo.
 
+## Archive
+
+`/ops/archive` lists every landing and deck that was public, beside what is live now. Each past version is its built page frozen as one HTML file in `public/ops/archive/<id>/index.html` (stylesheet inlined, images and fonts in `public/ops/archive/assets/`), served only behind the `/ops` Google gate with an ARCHIVE bar. The list lives in `src/archive.ts`. To retire a page: add its entry there, run `bun scripts/archive-snapshot.ts <id>` (builds that commit in a throwaway worktree), commit the snapshot, then remove the page. A snapshot is never rebuilt once committed.
+
 ## Experiments
 
 A/B experiments are declared in `src/experiments.ts` (id, status, weighted variants, goals, optional `winner`/`endedAt`) and served at the edge in `src/exp-rewrite.ts`: HTMLRewriter swaps `data-exp="<id>"` hooks already baked into the static Astro pages, so the build output never changes per variant, only the response does. `/ops/experiments` is a read-only ledger in the ops console; status and winners only ever change by code + deploy.

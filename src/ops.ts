@@ -184,7 +184,7 @@ export const FLASH_COPY: Record<Exclude<Flash, "">, string> = {
   bad: "That did not go through. Try again.",
 };
 
-export type SectionId = "overview" | "mails" | "infra" | "experiments" | "gate";
+export type SectionId = "overview" | "mails" | "infra" | "experiments" | "archive" | "gate";
 
 export type OpsSection = { id: string; label: string; href: string; /** Leaves the console: a full navigation in a new tab. */ out?: boolean };
 
@@ -194,6 +194,7 @@ export const OPS_SECTIONS: readonly OpsSection[] = [
   { id: "mails", label: "Mails", href: "/ops/mails" },
   { id: "infra", label: "Infra", href: "/ops/infra" },
   { id: "experiments", label: "Experiments", href: "/ops/experiments" },
+  { id: "archive", label: "Archive", href: "/ops/archive" },
   // The staged site is its own document with its own base URL and CSP, so it opens beside the console.
   { id: "preview", label: "Preview", href: "/ops/preview", out: true },
 ];
@@ -518,6 +519,8 @@ table.exp-ledger thead tr + tr th { padding-top: 0; padding-bottom: 0.4rem; font
 
 /* ---- mails ---- */
 .lede { margin: 1.6rem 0 0; max-width: 40rem; line-height: 1.5; }
+.archive-kind + .archive-kind { margin-top: 2.6rem; }
+.archive-kind ul { margin: 0 0 1.2rem; padding-left: 1.1rem; line-height: 1.6; }
 .lede + .lede { margin-top: 0.5rem; }
 .mail-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 1.6rem; margin-top: 1.4rem; min-height: 2.4rem; }
 .reveal-box { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

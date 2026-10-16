@@ -82,6 +82,8 @@ import { applyExperiments } from "./exp-rewrite";
 import { handleExpEvent, recordWaitlistSubmit } from "./exp-events";
 import { loadExperimentReports } from "./exp-report";
 import { experimentsSection } from "./ops-experiments";
+import { archiveTarget } from "./archive";
+import { archiveBar, archiveSection } from "./ops-archive";
 import {
   isPreviewPath,
   previewReturnUrl,
@@ -365,7 +367,7 @@ function withNotice(view: SectionView, text: string, tone: "plain" | "bad" = "pl
 }
 
 /** Sections a stranger is sent to Google from, and returned to after signing in. */
-const SECTION_PATHS = new Set(["/ops", "/ops/mails", "/ops/infra", "/ops/experiments"]);
+const SECTION_PATHS = new Set(["/ops", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/archive"]);
 
 /** Anyone who is not signed in and allowlisted sees the landing. Nothing else. */
 function toRoot(request: Request, cookies: string[] = []): Response {
@@ -471,6 +473,12 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     return beginGoogle(oauth, secure, url.hostname, redirectUri, mockReturn(url.pathname));
   }
 
+  // /ops/archive/<id> is a past page. Same gate; Google returns to that page.
+  const archived = archiveTarget(url.pathname);
+  if (!session && archived?.kind === "page" && request.method === "GET") {
+    return beginGoogle(oauth, secure, url.hostname, redirectUri, mockReturn(url.pathname));
+  }
+
   // /ops/preview is the staging channel preview. Same gate as everything else in /ops.
   if (!session && isPreviewPath(url.pathname) && request.method === "GET") {
     return beginGoogle(oauth, secure, url.hostname, redirectUri, previewReturnUrl(url.pathname));
@@ -544,6 +552,11 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
 
   if (isPreviewPath(url.pathname) && (request.method === "GET" || request.method === "HEAD")) {
     return proxyPreview(request, env, url);
+  }
+
+  if (archived && archived.kind !== "list") {
+    if (archived.kind === "missing" || (request.method !== "GET" && request.method !== "HEAD")) return notFound();
+    return serveArchived(request, env, archived.asset, archived.kind === "page" ? archiveBar(archived.snapshot) : null);
   }
 
   const fragment = wantsFragment(request);
@@ -626,6 +639,10 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
 
   if (sectionPath === "/ops/experiments" && request.method === "GET") {
     return flashed(await experimentsView());
+  }
+
+  if (sectionPath === "/ops/archive" && request.method === "GET") {
+    return flashed(archiveSection());
   }
 
   if (url.pathname === "/ops/metrics/snapshot" && request.method === "POST") {
@@ -869,6 +886,31 @@ async function serveMock(request: Request, env: Env, assetPath: string): Promise
   headers.set("x-robots-tag", "noindex, nofollow");
   if (request.method === "HEAD") return new Response(null, { status: 200, headers });
   return new Response(asset.body, { status: 200, headers });
+}
+
+/**
+ * A past page or one of its files from /ops/archive (src/archive.ts). Call only behind the session
+ * gate. Pages get the archive bar so a snapshot is never taken for the live site.
+ */
+async function serveArchived(request: Request, env: Env, assetPath: string, bar: string | null): Promise<Response> {
+  const asset = await env.ASSETS.fetch(new Request(new URL(assetPath, request.url).toString(), { method: "GET" }));
+  if (!asset.ok) return notFound();
+  const headers = new Headers(asset.headers);
+  headers.delete("content-length");
+  headers.set("cache-control", "no-store");
+  headers.set("x-robots-tag", "noindex, nofollow");
+  headers.set("referrer-policy", "no-referrer");
+  if (bar) headers.set("content-type", "text/html; charset=utf-8");
+  if (request.method === "HEAD") return new Response(null, { status: 200, headers });
+  if (!bar) return new Response(asset.body, { status: 200, headers });
+  headers.delete("content-encoding");
+  return new HTMLRewriter()
+    .on("body", {
+      element(el: { append: (content: string, opts: { html: boolean }) => void }) {
+        el.append(bar, { html: true });
+      },
+    })
+    .transform(new Response(asset.body, { status: 200, headers }));
 }
 
 export default {

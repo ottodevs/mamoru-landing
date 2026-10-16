@@ -65,6 +65,7 @@ const SECTIONS = [
   { path: "/ops/mails", section: "mails", title: "Mails", marker: "On the list" },
   { path: "/ops/infra", section: "infra", title: "Infra and costs", marker: "Relayer balance" },
   { path: "/ops/experiments", section: "experiments", title: "Experiments", marker: "hero_cta" },
+  { path: "/ops/archive", section: "archive", title: "Archive", marker: "Tokyo landing" },
 ] as const;
 
 function get(path: string, headers: Record<string, string> = {}) {
