@@ -1,60 +1,57 @@
 /**
- * Words for mamoru.lol/deck. Slides guide, the speaker tells.
+ * Words for mamoru.lol/deck. The cover takes its words from the landing hero (open-copy.ts), and the
+ * third slide is the landing's own "How it works". Slides guide, the speaker tells.
+ * Past decks are kept in /ops/archive (src/archive.ts), not as more public routes.
  */
 
 export const DECK = {
   title: "Mamoru · Deck",
-  description: "Non-custodial savings on Base. Yield is reinvested until you transfer.",
-  intro: {
-    lede: "Non-custodial savings on Base. Yield is reinvested until you transfer.",
-    kicker: "ETHGlobal Tokyo 2026",
-  },
+  description: "Savings, automated.",
+  // 150% APY is the bait that falls to zero on screen. It is not a Mamoru rate.
   problem: {
     eyebrow: "The problem",
-    heading: ["DeFi makes yield easy.", "Keeping it is a job."],
-    points: [
-      "Fragmented. Hundreds of pools, every APY counted differently.",
-      "Time. Harvest, exit, stay? The decisions never stop.",
-      "Trade-offs. The best rates want your funds locked, or your trust.",
-    ],
-    chips: [
-      { label: "APR 4.2%", x: 4, y: 6, tone: "" },
-      { label: "APY 140%*", x: 50, y: 0, tone: "fade" },
-      { label: "locked 30d", x: 24, y: 24, tone: "" },
-      { label: "points?", x: 74, y: 22, tone: "" },
-      { label: "Harvest?", x: 8, y: 46, tone: "ask" },
-      { label: "Exit?", x: 44, y: 50, tone: "ask" },
-      { label: "Stay?", x: 72, y: 44, tone: "ask" },
-      { label: "APR 0.9%", x: 2, y: 76, tone: "" },
-      { label: "7d avg 11%", x: 36, y: 82, tone: "" },
-      { label: "claim · swap · redeposit", x: 56, y: 70, tone: "" },
-    ],
+    aria: "Your profits, where do they go?",
+    from: 150,
+    unit: "APY",
+    axis: "time",
+    asks: ["Harvest?", "Exit?", "Stay?"],
+    question: ["Your profits,", "where do they go?"],
   },
-  solution: {
-    eyebrow: "Mamoru",
-    heading: ["Deposit.", "Forget.", "It keeps working."],
-    points: [
-      "Your capital goes to work in curated Uniswap pools.",
-      "Yield is reinvested until you transfer.",
-      "No lockup. Transfer out anytime, to any wallet.",
-      "Your account, your keys. Mamoru never holds them.",
+  loop: {
+    eyebrow: "The solution",
+    // Names for the three positions, shown on the deck only. On the landing the allocation chart names them.
+    labels: { paired: "Bluechips", mercenary: "Mercenary", stables: "Stablecoins" },
+  },
+  // Six lines the speaker explains. A click brings the explanations up, for whoever reads the deck alone.
+  trust: {
+    heading: "Why trust Mamoru",
+    rows: [
+      {
+        who: "You keep control",
+        what: "Your wallet is a smart account, owned by a passkey on your device. Mamoru never holds the key that can move your money out.",
+      },
+      {
+        who: "A key with limits",
+        what: "Mamoru works through a session key. It can act only inside a written policy and you can revoke it anytime.",
+      },
+      { who: "Built on Uniswap", what: "Where the capital works. Mamoru swaps and provides liquidity on Uniswap, nothing else." },
+      {
+        who: "Half in stablecoins by rule",
+        what: "Three positions. Mamoru keeps half of the capital in stablecoins, and the yield becomes stablecoins.",
+      },
+      { who: "No lockup", what: "Withdraw stablecoins anytime. Mamoru rebalances the rest." },
+      { who: "No token", what: "Nothing to buy, hold or farm." },
     ],
-    versus: [
-      { who: "Bank", note: "your money, their rate" },
-      { who: "Vaults", note: "locked, or trust us" },
-      { who: "Mamoru", note: "yours, working, liquid" },
-    ],
-    caption: "守る · to protect",
   },
   built: {
     eyebrow: "How it's built",
     heading: "Under the stone.",
     layers: [
-      { who: "Your account", what: "A Safe on Base, owned by a passkey on your device. The server never holds a key." },
+      { who: "Your account", what: "A Safe, owned by a passkey on your device. The server never holds a key." },
       { who: "Uniswap", what: "Where the capital works. The agent swaps and provides liquidity on Uniswap v3, nothing else." },
       { who: "Session key", what: "The agent acts only inside a written policy. Revoke it anytime, leave without us." },
-      { who: "Curvegrid", what: "MultiBaas indexes every pool event, checked against Base, 10 of 10." },
-      { who: "Chain snapshots", what: "Base forked at a real block. Leaked-key attacks replayed until the chain refuses them all." },
+      { who: "Curvegrid", what: "MultiBaas indexes every pool event, checked against the chain, 10 of 10." },
+      { who: "Chain snapshots", what: "The chain forked at a real block. Leaked-key attacks replayed until the chain refuses them all." },
     ],
   },
   more: {
@@ -72,7 +69,7 @@ export const DECK = {
     hrefLabel: "san.mamoru.lol",
   },
   demo: {
-    eyebrow: "Live on Base",
+    eyebrow: "Live",
     heading: "Demo",
     href: "https://app.mamoru.lol",
     hrefLabel: "app.mamoru.lol",

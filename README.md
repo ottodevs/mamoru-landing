@@ -69,7 +69,7 @@ bun run build && bunx wrangler dev
 
 ## Archive
 
-`/ops/archive` lists every landing and deck that was public, beside what is live now. Each past version is its built page frozen as one HTML file in `public/ops/archive/<id>/index.html` (stylesheet inlined, images and fonts in `public/ops/archive/assets/`), served only behind the `/ops` Google gate with an ARCHIVE bar. The list lives in `src/archive.ts`. To retire a page: add its entry there, run `bun scripts/archive-snapshot.ts <id>` (builds that commit in a throwaway worktree), commit the snapshot, then remove the page. A snapshot is never rebuilt once committed.
+Production serves **one landing (`/`) and one deck (`/deck`)**, nothing else. Each version has a number (landing v2, deck v1.1, ...) that lives only in `/ops/archive`, never on the public page. `/ops/archive` lists the live version of each beside every past one. Each past version is its built page frozen as one HTML file in `public/ops/archive/<id>/index.html` (stylesheet inlined, images and fonts in `public/ops/archive/assets/`), served only behind the `/ops` Google gate with an ARCHIVE bar. The list lives in `src/archive.ts`. To retire a version: add its entry there (id `<kind>-v<version>`, dots as hyphens), run `bun scripts/archive-snapshot.ts <id>` (builds that commit in a throwaway worktree), commit the snapshot, then replace the page in place and move `LIVE` to the new version. A snapshot is never rebuilt once committed.
 
 ## Experiments
 

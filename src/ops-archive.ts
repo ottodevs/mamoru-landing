@@ -1,10 +1,10 @@
-/** Renders /ops/archive: what is live, and every past landing and deck that can still be opened. Read-only. */
+/** Renders /ops/archive: the live version of the landing and the deck, and every past version. Read-only. */
 
 import { ARCHIVE, ARCHIVE_PREFIX, LIVE, type ArchiveKind, type ArchiveSnapshot } from "./archive";
 import { pageHead, type SectionView } from "./ops";
 import { esc } from "./text";
 
-const KIND_LABEL: Record<ArchiveKind, string> = { landing: "Landing", deck: "Deck and pitch" };
+const KIND_LABEL: Record<ArchiveKind, string> = { landing: "Landing", deck: "Deck" };
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -20,10 +20,11 @@ function span(from: string, to: string): string {
 
 function snapshotRow(s: ArchiveSnapshot): string {
   return `<tr>
+    <td>${esc(s.version)}</td>
     <td><a href="${ARCHIVE_PREFIX}/${esc(s.id)}" target="_blank" rel="noopener">${esc(s.title)}</a><br><span class="soft">${esc(s.note)}</span></td>
-    <td>${esc(s.servedAt)}</td>
+    <td class="archive-wide">${esc(s.servedAt)}</td>
     <td>${span(s.from, s.to)}</td>
-    <td><code title="${esc(s.commit)}">${esc(s.commit.slice(0, 7))}</code></td>
+    <td class="archive-wide"><code title="${esc(s.commit)}">${esc(s.commit.slice(0, 7))}</code></td>
   </tr>`;
 }
 
@@ -31,12 +32,12 @@ function kindBlock(kind: ArchiveKind): string {
   const live = LIVE.filter((l) => l.kind === kind)
     .map(
       (l) =>
-        `<li><a href="${esc(l.href)}" target="_blank" rel="noopener">${esc(l.title)}</a> <span class="soft">at ${esc(l.href)}, since ${esc(day(l.since))}</span></li>`,
+        `<li>${esc(l.version)} &middot; <a href="${esc(l.href)}" target="_blank" rel="noopener">${esc(l.title)}</a> <span class="soft">at ${esc(l.href)}, since ${esc(day(l.since))}</span></li>`,
     )
     .join("");
   const rows = ARCHIVE.filter((s) => s.kind === kind)
     .slice()
-    .sort((a, b) => b.from.localeCompare(a.from))
+    .sort((a, b) => b.from.localeCompare(a.from) || b.version.localeCompare(a.version))
     .map(snapshotRow)
     .join("");
   return `<section class="archive-kind" aria-labelledby="archive-${kind}">
@@ -44,7 +45,7 @@ function kindBlock(kind: ArchiveKind): string {
     <p class="soft">Live now</p>
     <ul>${live}</ul>
     <table>
-      <thead><tr><th>Past version</th><th>Served at</th><th>Live</th><th>Commit</th></tr></thead>
+      <thead><tr><th>Version</th><th>Past version</th><th class="archive-wide">Served at</th><th>Live</th><th class="archive-wide">Commit</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </section>`;
@@ -55,7 +56,7 @@ export function archiveSection(): SectionView {
     section: "archive",
     title: "Archive",
     html: `${pageHead({ title: "Archive" })}
-    <p class="lede">Every landing and deck that was public, frozen as it was built. Each one opens in its own tab, behind this same sign-in. To add one: an entry in src/archive.ts and <code>bun scripts/archive-snapshot.ts &lt;id&gt;</code>.</p>
+    <p class="lede">Production serves one landing and one deck. Each version has a number here, and every past one is frozen as it was built and opens in its own tab, behind this same sign-in. To retire a version: an entry in src/archive.ts, <code>bun scripts/archive-snapshot.ts &lt;id&gt;</code>, then replace the page.</p>
     <div class="cols" style="grid-template-columns:1fr">
       ${kindBlock("landing")}
       ${kindBlock("deck")}
@@ -70,6 +71,6 @@ const BAR_STYLE =
 
 /** The bar every archived page carries, so a snapshot is never mistaken for the live site. */
 export function archiveBar(s: ArchiveSnapshot): string {
-  const label = `ARCHIVE &middot; ${esc(s.title)} &middot; ${esc(day(s.from))} to ${esc(day(s.to))} &middot; ${esc(s.commit.slice(0, 7))}`;
+  const label = `ARCHIVE &middot; ${esc(KIND_LABEL[s.kind])} ${esc(s.version)} &middot; ${esc(s.title)} &middot; ${esc(day(s.from))} to ${esc(day(s.to))} &middot; ${esc(s.commit.slice(0, 7))}`;
   return `<style>${BAR_STYLE}</style><div class="mamoru-archive-bar"><span>${label}</span><a href="${ARCHIVE_PREFIX}">Back to the archive</a></div>`;
 }

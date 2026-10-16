@@ -29,14 +29,14 @@ function get(path: string, headers: Record<string, string> = {}) {
   return new Request(`https://mamoru.lol${path}`, { headers });
 }
 
-const TOKYO = "2026-09-27-landing-tokyo";
+const TOKYO = "landing-v1";
 
 describe("archive manifest", () => {
   test("every entry has a committed snapshot and a unique id", () => {
     const ids = ARCHIVE.map((s) => s.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const s of ARCHIVE) {
-      expect(s.id).toMatch(/^[a-z0-9-]+$/);
+      expect(s.id).toBe(`${s.kind}-${s.version.replace(/\./g, "-")}`);
       expect(s.commit).toMatch(/^[0-9a-f]{40}$/);
       expect(s.from <= s.to).toBe(true);
       expect(existsSync(`public/ops/archive/${s.id}/index.html`)).toBe(true);
@@ -120,11 +120,13 @@ describe("archive behind the gate", () => {
     const { env, cookie } = await archiveEnv();
     const html = await (await worker.fetch(get("/ops/archive", { cookie }), env)).text();
     for (const s of ARCHIVE) expect(html).toContain(`/ops/archive/${s.id}`);
-    expect(html).toContain('href="/deck-v2"');
+    expect(html).toContain('href="/deck"');
+    expect(html).not.toContain('href="/deck-v2"');
     expect(html).not.toContain('href="/pitch"');
   });
 
-  test("/pitch is gone from the public site", async () => {
+  test("one landing and one deck: no second public route", async () => {
     expect(existsSync("src/pages/pitch.astro")).toBe(false);
+    expect(existsSync("src/pages/deck-v2.astro")).toBe(false);
   });
 });

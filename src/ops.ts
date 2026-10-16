@@ -521,6 +521,7 @@ table.exp-ledger thead tr + tr th { padding-top: 0; padding-bottom: 0.4rem; font
 .lede { margin: 1.6rem 0 0; max-width: 40rem; line-height: 1.5; }
 .archive-kind + .archive-kind { margin-top: 2.6rem; }
 .archive-kind ul { margin: 0 0 1.2rem; padding-left: 1.1rem; line-height: 1.6; }
+@media (max-width: 40rem) { .archive-kind .archive-wide { display: none; } .archive-kind:first-child { margin-top: 1.6rem; } }
 .lede + .lede { margin-top: 0.5rem; }
 .mail-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 1.6rem; margin-top: 1.4rem; min-height: 2.4rem; }
 .reveal-box { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

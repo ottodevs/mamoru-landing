@@ -1,12 +1,17 @@
 /**
- * Past versions of the landing and the deck, kept for /ops/archive.
+ * Versions of the landing and the deck, kept for /ops/archive.
+ *
+ * Production serves one landing (/) and one deck (/deck). Every version gets a number here
+ * (landing v2, deck v1.1, ...); that number lives only in this list, never on the public page.
+ * Retiring a version: freeze it (below), then replace the page. No second public route.
  *
  * Each snapshot is the built page of one commit, frozen as a single HTML file under
  * public/ops/archive/<id>/index.html, its stylesheet inlined and its images and fonts
  * copied once into public/ops/archive/assets/. Everything under /ops goes through the
  * Google gate in worker.ts, so these files are never public.
  *
- * Adding one: append an entry here, then `bun scripts/archive-snapshot.ts <id>`.
+ * Adding one: append an entry here (id = `<kind>-v<version>` with dots as hyphens), then
+ * `bun scripts/archive-snapshot.ts <id>`, then move LIVE to the new version.
  * A snapshot is never rebuilt once committed: it is the record of what was live.
  */
 
@@ -16,6 +21,8 @@ export interface ArchiveSnapshot {
   /** Folder name under /ops/archive. Lowercase, digits and hyphens. */
   id: string;
   kind: ArchiveKind;
+  /** "v1", "v1.1": the version number shown in the archive. */
+  version: string;
   title: string;
   /** What it was, in one line. */
   note: string;
@@ -34,7 +41,8 @@ export interface ArchiveSnapshot {
 
 export const ARCHIVE: readonly ArchiveSnapshot[] = [
   {
-    id: "2026-09-25-teaser",
+    id: "landing-v0",
+    version: "v0",
     kind: "landing",
     title: "Countdown teaser",
     note: "The page before ETHGlobal Tokyo closed: mark, countdown and the email bar. Shown without its script, so the countdown stands still.",
@@ -46,7 +54,8 @@ export const ARCHIVE: readonly ArchiveSnapshot[] = [
     static: true,
   },
   {
-    id: "2026-09-27-landing-tokyo",
+    id: "landing-v1",
+    version: "v1",
     kind: "landing",
     title: "Tokyo landing (APY delivered)",
     note: "The landing judges and the first users saw: APY delivered, the harvest flow, allocation and FAQ.",
@@ -57,10 +66,11 @@ export const ARCHIVE: readonly ArchiveSnapshot[] = [
     page: "open/index.html",
   },
   {
-    id: "2026-09-26-deck-tokyo",
+    id: "deck-v1",
+    version: "v1",
     kind: "deck",
     title: "Tokyo deck",
-    note: "The pitch deck of the ETHGlobal Tokyo submission. Still live at /deck; frozen here so /deck can change.",
+    note: "The pitch deck of the ETHGlobal Tokyo submission. Replaced at /deck by v2 on 16 Oct.",
     servedAt: "/deck",
     from: "2026-09-26",
     to: "2026-10-16",
@@ -68,10 +78,11 @@ export const ARCHIVE: readonly ArchiveSnapshot[] = [
     page: "deck/index.html",
   },
   {
-    id: "2026-10-02-pitch",
+    id: "deck-v1-1",
+    version: "v1.1",
     kind: "deck",
     title: "Attack-first pitch",
-    note: "The deck variant that opens with a refused attack. Retired from /pitch on 16 Oct.",
+    note: "A variant of v1 that opens with a refused attack, served beside it at /pitch. Retired on 16 Oct.",
     servedAt: "/pitch",
     from: "2026-10-02",
     to: "2026-10-16",
@@ -81,10 +92,9 @@ export const ARCHIVE: readonly ArchiveSnapshot[] = [
 ];
 
 /** What is live today, listed beside the archive so the two read as one history. */
-export const LIVE: readonly { kind: ArchiveKind; title: string; href: string; since: string }[] = [
-  { kind: "landing", title: "Savings, automated", href: "/", since: "2026-10-16" },
-  { kind: "deck", title: "Tokyo deck", href: "/deck", since: "2026-09-26" },
-  { kind: "deck", title: "Deck v2 (working copy)", href: "/deck-v2", since: "2026-10-16" },
+export const LIVE: readonly { kind: ArchiveKind; version: string; title: string; href: string; since: string }[] = [
+  { kind: "landing", version: "v2", title: "Savings, automated", href: "/", since: "2026-10-16" },
+  { kind: "deck", version: "v2", title: "Savings, automated", href: "/deck", since: "2026-10-16" },
 ];
 
 export const ARCHIVE_PREFIX = "/ops/archive";
