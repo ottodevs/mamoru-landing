@@ -79,7 +79,7 @@ function editForm(csrf: string, templates: readonly TemplateRow[], draft: { env:
     <label>for <select name="env"><option value="prod"${draft.env === "prod" ? " selected" : ""}>prod</option><option value="beta"${draft.env === "beta" ? " selected" : ""}>beta</option></select></label>
     <button class="link" type="submit">Load</button>
   </form>
-  <form method="post" action="/ops/settings/apply" class="set-form" data-ops-form>
+  <form method="post" action="/ops/settings/apply" class="set-form" data-ops-form data-ops-no-retry>
     ${csrfField(csrf)}
     <input type="hidden" name="template" value="${esc(draft.template)}" />
     <fieldset><legend>Where</legend>
@@ -113,7 +113,7 @@ function historyBlock(csrf: string, versions: readonly VersionRow[]): string {
   const rows = versions
     .map(
       (v) => `<tr><td>v${v.id}</td><td>${v.env}${v.accountKeys ? ` canary (${v.accountKeys.length})` : ""}</td><td>${esc(v.template)}${v.rollbackOf ? ` <span class="dim">rollback to v${v.rollbackOf}</span>` : ""}</td><td>${esc(describeSettings(v.settings))}</td><td>${esc(v.author)}<br><span class="dim">${esc(when(v.createdAt))}</span></td><td>${esc(v.reason)}</td>
-      <td class="act"><form method="post" action="/ops/settings/rollback" data-ops-form>${csrfField(csrf)}<input type="hidden" name="id" value="${v.id}" /><input name="reason" required maxlength="500" placeholder="why" aria-label="Why roll back to v${v.id}" /><button class="link" type="submit">Roll back to this</button></form></td></tr>`,
+      <td class="act"><form method="post" action="/ops/settings/rollback" data-ops-form data-ops-no-retry>${csrfField(csrf)}<input type="hidden" name="id" value="${v.id}" /><input name="reason" required maxlength="500" placeholder="why" aria-label="Why roll back to v${v.id}" /><button class="link" type="submit">Roll back to this</button></form></td></tr>`,
     )
     .join("");
   return `<section aria-labelledby="set-hist"><h2 id="set-hist">History</h2>
@@ -147,7 +147,7 @@ export function settingsSection(p: SettingsPage): SectionView {
       <p>This change, to ${esc(p.confirm.draft.env)}${p.confirm.draft.canary ? " (canary)" : ""}:</p>
       <ul>${p.confirm.risks.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
       <p class="soft">${esc(describeSettings(p.confirm.draft.settings))}</p>
-      <form method="post" action="/ops/settings/apply" data-ops-form>${csrfField(p.csrf)}${hiddenFields(p.confirm.draft.env, p.confirm.draft.template, p.confirm.draft.settings, p.confirm.draft.canary, p.confirm.draft.reason)}<input type="hidden" name="confirm_token" value="${esc(p.confirm.token)}" />${p.confirm.rollbackOf ? `<input type="hidden" name="rollback_of" value="${p.confirm.rollbackOf}" />` : ""}<button type="submit">Yes, apply it</button> <a href="/ops/settings">Cancel</a></form></section>`
+      <form method="post" action="/ops/settings/apply" data-ops-form data-ops-no-retry>${csrfField(p.csrf)}${hiddenFields(p.confirm.draft.env, p.confirm.draft.template, p.confirm.draft.settings, p.confirm.draft.canary, p.confirm.draft.reason)}<input type="hidden" name="confirm_token" value="${esc(p.confirm.token)}" />${p.confirm.rollbackOf ? `<input type="hidden" name="rollback_of" value="${p.confirm.rollbackOf}" />` : ""}<button type="submit">Yes, apply it</button> <a href="/ops/settings">Cancel</a></form></section>`
     : "";
   return {
     section: "settings",

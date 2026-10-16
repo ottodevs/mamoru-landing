@@ -346,3 +346,78 @@ test('a successful write returns its own id from the insert, without a second re
   const id = await appendVersion(db, { env: 'beta', accountKeys: null, template: 't', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r', expectedMaxId: 0 })
   expect(id).toBe(1)
 })
+
+describe('concurrent writers: property over every interleaving (spec 006, Sol round 6)', () => {
+  const KA = '11111111-aaaa-4bbb-8ccc-0000000000aa'
+  const KB = '11111111-aaaa-4bbb-8ccc-0000000000bb'
+  type Scope = 'wide' | 'canaryA' | 'canaryB'
+  const keysOf = (s: Scope) => (s === 'wide' ? null : s === 'canaryA' ? [KA] : [KB])
+  const raceAt = ['before', 'between', 'after'] as const
+  const scopes: Scope[] = ['wide', 'canaryA', 'canaryB']
+  const cases: { aScope: Scope; risky: boolean; bScope: Scope; when: (typeof raceAt)[number] }[] = []
+  for (const aScope of scopes) for (const risky of [true, false]) for (const bScope of scopes) for (const when of raceAt) cases.push({ aScope, risky, bScope, when })
+
+  /** What runs before version `id`: the env-wide version and the live canary, from the rows below it. */
+  function stateBelow(rows: { id: number; accountKeys: string[] | null; settings: EngineSettings }[], id: number) {
+    const below = rows.filter((r) => r.id < id).sort((a, b) => b.id - a.id)
+    const wide = below.find((r) => r.accountKeys === null) ?? null
+    const canary = below.find((r) => r.accountKeys !== null && (!wide || r.id > wide.id)) ?? null
+    return { wide, canary } as never
+  }
+
+  test.each(cases)('A %o', async ({ aScope, risky, bScope, when }) => {
+    const { risksOf } = await import('../src/engine-settings-confirm')
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'base', settings: DEPTH, author: 'seed', reason: 'r' })
+    const bWrite = () => seed(db, { env: 'prod', accountKeys: keysOf(bScope), template: 'B', settings: { ...DEPTH, capUsdc: 50 }, author: 'b@x', reason: 'r' })
+    if (when === 'before') await bWrite()
+    const aSettings: EngineSettings = { ...DEPTH, capUsdc: risky ? 2000 : 500 }
+    const { env, cookie } = await opsEnv(db)
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/settings', cookie), env)).text())
+    // B lands between A's last check and A's insert: injected just before A's INSERT runs.
+    if (when === 'between') {
+      const orig = db.prepare.bind(db)
+      let done = false
+      db.prepare = ((sql: string) => {
+        if (!done && sql.startsWith('INSERT INTO engine_settings_versions')) {
+          done = true
+          db.prepare = orig
+          db.raw.query(`INSERT INTO engine_settings_versions (env, account_keys_json, template, settings_json, settings_hash, author, reason, created_at, rollback_of) VALUES ('prod', ?, 'B', ?, 'h', 'b@x', 'r', '2026-10-17T00:00:00Z', NULL)`).run(keysOf(bScope) ? JSON.stringify(keysOf(bScope)) : null, canonicalJson({ ...DEPTH, capUsdc: 50 }))
+        }
+        return orig(sql)
+      }) as typeof db.prepare
+    }
+    const form = formFor(aSettings, { csrf, ...(keysOf(aScope) ? { canary: keysOf(aScope)!.join('\n') } : {}) })
+    let res = await worker.fetch(post('/ops/settings/apply', form, cookie), env)
+    let html = await res.text()
+    let confirmedAt: number | null = null
+    if (html.includes('Confirm this change')) {
+      confirmedAt = (await maxIdOf(db, 'prod'))
+      res = await worker.fetch(post('/ops/settings/apply', confirmBodyOf(html), cookie), env)
+      html = await res.text()
+    }
+    if (when === 'after') await bWrite()
+
+    const rows = (await listVersions(db, 500))!
+    const mine = rows.filter((r) => r.author === 'ottodevs@gmail.com')
+    const written = /Version (\d+) written/.exec(html)
+    // Every response reports exactly what was committed.
+    if (written) {
+      expect(mine.map((r) => r.id)).toEqual([Number(written[1])])
+      expect(canonicalJson(mine[0]!.settings)).toBe(canonicalJson(aSettings))
+    } else {
+      expect(mine).toEqual([])
+      expect(html).toMatch(/Not applied|Confirm this change|Unknown whether/)
+    }
+    // No unconfirmed risky change is ever committed: a committed row is either not risky against what ran just
+    // before it, or it was confirmed against exactly that state.
+    for (const r of mine) {
+      const change = { env: 'prod' as const, accountKeys: r.accountKeys, template: r.template, settings: r.settings, rollbackOf: r.rollbackOf }
+      const risks = risksOf(change, stateBelow(rows, r.id), DEFAULT_SETTINGS)
+      if (risks.length) {
+        expect(confirmedAt).not.toBeNull()
+        expect(Math.max(0, ...rows.filter((x) => x.id < r.id).map((x) => x.id))).toBe(confirmedAt!)
+      }
+    }
+  })
+})

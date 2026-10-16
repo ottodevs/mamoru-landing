@@ -791,6 +791,13 @@ export function opsClientScript(nonce: string): string {
       else tickNote();
     }).catch(function () {
       progress.done();
+      // A form whose POST may already have written something is never sent again behind the reader's back: the
+      // first request can have committed and only its answer been lost.
+      if (form.hasAttribute("data-ops-no-retry")) {
+        for (var k = 0; k < buttons.length; k++) buttons[k].disabled = false;
+        announce("No answer from the server. Nothing was sent again: check the history before submitting once more.");
+        return;
+      }
       native();
     });
   });

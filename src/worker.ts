@@ -85,7 +85,7 @@ import { loadExperimentReports } from "./exp-report";
 import { experimentsSection } from "./ops-experiments";
 import { settingsSection, type SettingsPage } from "./ops-settings";
 import { checkConfirmToken, issueConfirmToken, risksOf } from "./engine-settings-confirm";
-import { inEffect, appendVersion, maxIdOf, SettingsConflict, listTemplates, listVersions, versionById, type Env as SettingsEnv } from "./engine-settings-store";
+import { inEffect, appendVersion, maxIdOf, SettingsConflict, SettingsOutcomeUnknown, listTemplates, listVersions, versionById, type Env as SettingsEnv } from "./engine-settings-store";
 import { DEFAULT_SETTINGS, canonicalJson, settingsFromForm, validateSettings } from "./engine-settings-model";
 import { archiveTarget } from "./archive";
 import { archiveBar, archiveSection } from "./ops-archive";
@@ -720,13 +720,21 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
         return respond(await settingsView({ draft, confirm: { risks, draft, token: issued, ...(rollbackOf ? { rollbackOf } : {}) } }));
       }
     }
+    // The write decides the message; the page around it is read afterwards and can never turn a committed write
+    // into "Not applied".
+    let outcome: { status: number; text: string; tone: "plain" | "bad"; keepDraft: boolean };
     try {
       const id = await appendVersion(db, { env: draft.env, accountKeys: accountKeys.length ? accountKeys : null, template: draft.template, settings: draft.settings, author: session.email, reason: draft.reason, rollbackOf: rollbackOf ?? null, expectedMaxId });
-      const text = `Version ${id} written for ${draft.env}${accountKeys.length ? ` (canary, ${accountKeys.length} account(s))` : ""}. The operator applies it within a minute.`;
-      return respond(await settingsView({ notice: { text } }));
+      outcome = { status: 200, tone: "plain", keepDraft: false, text: `Version ${id} written for ${draft.env}${accountKeys.length ? ` (canary, ${accountKeys.length} account(s))` : ""}. The operator applies it within a minute.` };
     } catch (e) {
-      if (e instanceof SettingsConflict) return respond(await settingsView({ draft, notice: { text: "Not applied: someone changed the settings of this environment meanwhile. Review the change again against what is in effect now.", tone: "bad" } }, 409));
-      return respond(await settingsView({ draft, notice: { text: `Not applied: ${(e as Error).message}.`, tone: "bad" } }, 400));
+      if (e instanceof SettingsConflict) outcome = { status: 409, tone: "bad", keepDraft: true, text: "Not applied: someone changed the settings of this environment meanwhile. Review the change again against what is in effect now." };
+      else if (e instanceof SettingsOutcomeUnknown) outcome = { status: 503, tone: "bad", keepDraft: false, text: "Unknown whether this was written: the database did not say. Check the history below before submitting anything again." };
+      else outcome = { status: 400, tone: "bad", keepDraft: true, text: `Not applied: ${(e as Error).message}.` };
+    }
+    try {
+      return respond(await settingsView({ ...(outcome.keepDraft ? { draft } : {}), notice: { text: outcome.text, tone: outcome.tone } }, outcome.status));
+    } catch {
+      return respond({ section: "settings", title: "Engine settings", html: noticeHtml(`${outcome.text} (The page could not be read; reload it.)`, { tone: outcome.tone }), status: outcome.status });
     }
   }
 

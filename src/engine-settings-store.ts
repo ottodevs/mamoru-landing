@@ -145,6 +145,9 @@ export async function maxIdOf(db: D1Db, env: Env): Promise<number> {
 /** Thrown when another version of the env was written after the one the change was checked against. */
 export class SettingsConflict extends Error {}
 
+/** The database did not report whether the insert ran: it may have committed. Never reported as "not applied". */
+export class SettingsOutcomeUnknown extends Error {}
+
 export type NewVersion = { env: Env; accountKeys: string[] | null; template: string; settings: EngineSettings; author: string; reason: string; rollbackOf?: number | null };
 
 /** Appends one version. Refuses settings out of bounds and an empty reason; returns the new id. */
@@ -186,6 +189,6 @@ export async function appendVersion(db: D1Db, v: NewVersion & { expectedMaxId: n
   const changes = res?.meta?.changes ?? res?.changes;
   const id = res?.meta?.last_row_id ?? (res?.lastInsertRowid === undefined ? undefined : Number(res.lastInsertRowid));
   if (changes === 0) throw new SettingsConflict("the settings of this environment changed meanwhile");
-  if (changes !== 1 || !id) throw new Error("the database did not say whether the version was written; check the history before trying again");
+  if (changes !== 1 || !id) throw new SettingsOutcomeUnknown("the database did not say whether the version was written");
   return id;
 }
