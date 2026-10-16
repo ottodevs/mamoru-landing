@@ -179,20 +179,13 @@ export async function appendVersion(db: D1Db, v: NewVersion & { expectedMaxId: n
       v.env,
       v.expectedMaxId,
     ) as WriteStatement;
-  const res = (await stmt.run()) as { meta?: { changes?: number }; changes?: number } | undefined;
-  // The row count of the guarded insert itself decides (D1 reports it in meta.changes): 0 means the env moved.
+  const res = (await stmt.run()) as { meta?: { changes?: number; last_row_id?: number }; changes?: number; lastInsertRowid?: number | bigint } | undefined;
+  // The guarded insert reports its own outcome (D1: meta.changes and meta.last_row_id): 0 rows means the env moved;
+  // 1 row carries its id. No second read decides anything, so a committed write is never reported as failed and a
+  // losing request never claims another one's row.
   const changes = res?.meta?.changes ?? res?.changes;
+  const id = res?.meta?.last_row_id ?? (res?.lastInsertRowid === undefined ? undefined : Number(res.lastInsertRowid));
   if (changes === 0) throw new SettingsConflict("the settings of this environment changed meanwhile");
-  // The first row of the env after the expected id: with the guard held it can only be this insert. Every column is
-  // compared, so a row another request wrote with the same settings, author and millisecond is never taken for ours.
-  const row = await db
-    .prepare("SELECT id, account_keys_json, template, settings_hash, author, reason, created_at, rollback_of FROM engine_settings_versions WHERE env = ? AND id > ? ORDER BY id LIMIT 2")
-    .bind(v.env, v.expectedMaxId)
-    .all<{ id: number; account_keys_json: string | null; template: string; settings_hash: string; author: string; reason: string; created_at: string; rollback_of: number | null }>();
-  const [first, second] = row.results;
-  const ours = (x: typeof first) =>
-    !!x && x.account_keys_json === (accountKeys === null ? null : JSON.stringify(accountKeys)) && x.template === v.template.slice(0, 120) && x.settings_hash === hash && x.author === v.author && x.reason === v.reason.trim().slice(0, 500) && x.created_at === createdAt && (x.rollback_of ?? null) === (v.rollbackOf ?? null);
-  if (changes === undefined && (!ours(first) || second)) throw new SettingsConflict("the settings of this environment changed meanwhile");
-  if (!ours(first)) throw new SettingsConflict("the settings of this environment changed meanwhile");
-  return first!.id;
+  if (changes !== 1 || !id) throw new Error("the database did not say whether the version was written; check the history before trying again");
+  return id;
 }

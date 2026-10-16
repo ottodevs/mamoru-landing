@@ -328,3 +328,21 @@ test('two writes by the same author, same settings and millisecond to different 
   await expect(appendVersion(db, { ...base, accountKeys: ['11111111-aaaa-4bbb-8ccc-00000000000b'] }, at)).rejects.toBeInstanceOf(SettingsConflict)
   expect((await listVersions(db))!.length).toBe(1)
 })
+
+test('a write whose outcome the database does not report is never claimed as written (Sol round 5)', async () => {
+  const db = memoryDb()
+  const orig = db.prepare.bind(db)
+  db.prepare = ((sql: string) => {
+    const st = orig(sql)
+    if (!sql.startsWith('INSERT INTO engine_settings_versions')) return st
+    const bindOrig = st.bind
+    return { ...st, bind: (...v: unknown[]) => ({ ...bindOrig(...v), run: async () => { await bindOrig(...v).run(); return {} } }) }
+  }) as typeof db.prepare
+  await expect(appendVersion(db, { env: 'prod', accountKeys: null, template: 't', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r', expectedMaxId: 0 })).rejects.toThrow('did not say whether')
+})
+
+test('a successful write returns its own id from the insert, without a second read (Sol round 5)', async () => {
+  const db = memoryDb()
+  const id = await appendVersion(db, { env: 'beta', accountKeys: null, template: 't', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r', expectedMaxId: 0 })
+  expect(id).toBe(1)
+})
