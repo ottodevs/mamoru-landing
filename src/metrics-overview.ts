@@ -2,7 +2,7 @@
 
 import { type AccountFilter, DEFAULT_FILTER, type GroupBy, usesLegacyHistory } from "./account-filter";
 import type { RelayerStatus } from "./cost";
-import type { D1Db } from "./d1-infra";
+import { fetchInfraCounts, type D1Db, type InfraCounts } from "./d1-infra";
 import { type AccountView, matchesFilter } from "./infra-snapshot";
 import type { InfraSnapshot } from "./infra-snapshot";
 import {
@@ -104,6 +104,11 @@ export interface OverviewInputs {
   dailyV2?: DailyRowV2[] | null;
   activity: ActivityRead | null;
   signups: SignupDays | null;
+  /** otto/mamoru#130: the filtered, uncapped users/accounts/last7d count (`fetchInfraCounts`), fetched fresh
+   * on every request — never part of the cached Infra snapshot, which is shared unfiltered across every
+   * filter a reader might pick. Missing (undefined) falls back to the live, on-chain `rows`, which are
+   * capped at 500 by `fetchChainAccounts`. */
+  counts?: InfraCounts | null;
 }
 
 function change(current: number, past: number | undefined, since: string | undefined, target: string): Change | null {
@@ -168,8 +173,10 @@ export function buildOverview(snapshot: InfraSnapshot, inputs: OverviewInputs, n
 
   const growth = inputs.signups ? cumulativeGrowth(inputs.signups.users, inputs.signups.accounts, today) : [];
   const lastGrowth = growth[growth.length - 1];
-  const users = countsOk ? new Set(rows.map((r) => r.userId)).size : (lastGrowth?.users ?? 0);
-  const accounts = countsOk ? rows.length : (lastGrowth?.accounts ?? 0);
+  // otto/mamoru#130: prefer the filtered, uncapped fetchInfraCounts read; the live rows (capped at 500 by
+  // fetchChainAccounts) are only a fallback for when that read is unavailable.
+  const users = inputs.counts ? inputs.counts.totalUsers : countsOk ? new Set(rows.map((r) => r.userId)).size : (lastGrowth?.users ?? 0);
+  const accounts = inputs.counts ? inputs.counts.totalAccounts : countsOk ? rows.length : (lastGrowth?.accounts ?? 0);
   const breakdown = filter.group === "none" ? [] : breakdownOf(rows, filter.group);
 
   const value: ValuePoint[] = real
@@ -256,14 +263,15 @@ export async function loadOverview(
   filter: AccountFilter = DEFAULT_FILTER,
 ): Promise<Overview> {
   const today = utcDay(now);
-  if (!db) return buildOverview(snapshot, { daily: null, dailyV2: null, activity: null, signups: null }, now, stale, filter);
+  if (!db) return buildOverview(snapshot, { daily: null, dailyV2: null, activity: null, signups: null, counts: null }, now, stale, filter);
   const legacyView = usesLegacyHistory(filter);
   const scope = { env: filter.env, chainId: filter.chainId };
-  const [daily, dailyV2, activity, signups] = await Promise.all([
+  const [daily, dailyV2, activity, signups, counts] = await Promise.all([
     legacyView ? readDaily(db, addDays(today, -(TVL_DAYS + DELTA_DAYS))) : Promise.resolve(null),
     legacyView ? Promise.resolve(null) : readDailyV2(db, addDays(today, -(TVL_DAYS + DELTA_DAYS))),
     readActivity(db, addDays(today, -(DAU_DAYS - 1)), scope),
     readSignupDays(db, scope),
+    fetchInfraCounts(db, scope).catch(() => null),
   ]);
-  return buildOverview(snapshot, { daily, dailyV2, activity, signups }, now, stale, filter);
+  return buildOverview(snapshot, { daily, dailyV2, activity, signups, counts }, now, stale, filter);
 }

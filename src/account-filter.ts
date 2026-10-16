@@ -35,14 +35,41 @@ export function parseAccountFilter(params: URLSearchParams): AccountFilter {
 }
 
 /**
+ * The accounts.env/chain_id/is_test SQL predicate for a scoped query (otto/mamoru#130), aliased to `alias`.
+ * `filter.env === "test"` means is_test = 1 regardless of env; "prod"/"beta" both require is_test = 0 and a
+ * matching env; "all" adds no predicate at all — every account, test ones included. Empty `sql` means no
+ * WHERE clause is needed.
+ */
+export function accountScopeSql(filter: AccountScopeFilter, alias: string): { sql: string; params: unknown[] } {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (filter.env === "test") {
+    clauses.push(`${alias}.is_test = 1`);
+  } else if (filter.env !== "all") {
+    clauses.push(`${alias}.is_test = 0`);
+    clauses.push(`${alias}.env = ?`);
+    params.push(filter.env);
+  }
+  if (filter.chainId !== "all") {
+    clauses.push(`${alias}.chain_id = ?`);
+    params.push(filter.chainId);
+  }
+  return { sql: clauses.join(" AND "), params };
+}
+
+/**
  * Whether the historical "value held" chart should keep reading `metrics_daily` (otto/mamoru#130).
  * `metrics_daily` was always one global row per day: no account ever carried a chain or an environment, so
  * there is nothing to retroactively split it by. `env: "prod"` (the default view) and `env: "all"` both read
  * it as an approximation that was already almost entirely true before beta or test accounts existed
  * (beta shipped 2026-10-01; there has only ever been one test account) — the alternative is no history at
- * all until `metrics_daily_v2` accumulates its own days. `beta`, `test`, or a specific chain narrow enough
- * that mixing in the rest would be actively misleading, so those read `metrics_daily_v2` only, empty or not.
+ * all until `metrics_daily_v2` accumulates its own days. The chain filter is ignored here on purpose: Base
+ * (8453) is the only chain that has ever existed, so narrowing to it changes nothing about what
+ * `metrics_daily` already was. `beta`, `test`, or a specific chain narrow enough that mixing in the rest
+ * would be actively misleading, so those read `metrics_daily_v2` only, empty or not — once a second chain
+ * is real, a chain-specific filter must stop taking this path, since `metrics_daily` would then be wrong,
+ * not merely approximate.
  */
 export function usesLegacyHistory(filter: Pick<AccountFilter, "env" | "chainId">): boolean {
-  return (filter.env === "prod" || filter.env === "all") && filter.chainId === "all";
+  return filter.env === "prod" || filter.env === "all";
 }

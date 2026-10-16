@@ -16,18 +16,24 @@ import {
   niceCeilInt,
   shortDay,
 } from "../src/metrics-math";
+import { accountScopeSql, DEFAULT_FILTER } from "../src/account-filter";
+import { fetchInfraCounts } from "../src/d1-infra";
+import { matchesFilter } from "../src/infra-snapshot";
 import { buildOverview, loadOverview } from "../src/metrics-overview";
 import {
   BACKFILL_MARK,
   backfillRows,
   captureDaily,
+  collapseDailyV2,
   type DailyRow,
+  type DailyRowV2,
   hasChainData,
   PARTIAL_MARK,
   readActivity,
   readDaily,
   readSignupDays,
   rowFromSnapshot,
+  rowsFromSnapshotByGroup,
   upsertSql,
 } from "../src/metrics-store";
 import { sealSession } from "../src/ops";
@@ -401,6 +407,81 @@ describe("metrics-overview.ts", () => {
     expect(down.relayer).toBeNull();
     expect(down.notes.join(" ")).toContain("last capture");
     expectSoundMarkup(renderOverview({ overview: down, csrf: "c", nonce: "n" }).split('<main id="ops-main"')[1].split("<script")[0].replace(/^[^>]*>/, "").replace("</main>", ""));
+  });
+});
+
+describe("account-filter.ts / otto/mamoru#130", () => {
+  test("matchesFilter: 'all' excludes nothing, test accounts included", () => {
+    const test = acct(9, 1, 1, 1, 1, { isTest: true, env: "beta" });
+    expect(matchesFilter(test, { ...DEFAULT_FILTER, env: "all" })).toBe(true);
+    expect(matchesFilter(test, { ...DEFAULT_FILTER, env: "prod" })).toBe(false);
+    expect(matchesFilter(test, { ...DEFAULT_FILTER, env: "beta" })).toBe(false);
+    expect(matchesFilter(test, { ...DEFAULT_FILTER, env: "test" })).toBe(true);
+    const beta = acct(10, 1, 1, 1, 1, { env: "beta" });
+    expect(matchesFilter(beta, { ...DEFAULT_FILTER, env: "test" })).toBe(false);
+    expect(matchesFilter(beta, { ...DEFAULT_FILTER, env: "beta" })).toBe(true);
+    expect(matchesFilter(beta, { ...DEFAULT_FILTER, env: "prod" })).toBe(false);
+  });
+
+  test("matchesFilter: chain and account narrow further, on top of env", () => {
+    const row = acct(11, 1, 1, 1, 1, { chainId: 8453, key: "key-eleven", address: "0xabc" });
+    expect(matchesFilter(row, { ...DEFAULT_FILTER, chainId: 8453 })).toBe(true);
+    expect(matchesFilter(row, { ...DEFAULT_FILTER, chainId: 1 })).toBe(false);
+    expect(matchesFilter(row, { ...DEFAULT_FILTER, account: "eleven" })).toBe(true);
+    expect(matchesFilter(row, { ...DEFAULT_FILTER, account: "0xABC" })).toBe(true);
+    expect(matchesFilter(row, { ...DEFAULT_FILTER, account: "nope" })).toBe(false);
+  });
+
+  test("accountScopeSql: 'all' adds no predicate; 'test' ignores env; 'prod'/'beta' pin both columns", () => {
+    expect(accountScopeSql({ env: "all", chainId: "all" }, "a")).toEqual({ sql: "", params: [] });
+    expect(accountScopeSql({ env: "test", chainId: "all" }, "a")).toEqual({ sql: "a.is_test = 1", params: [] });
+    expect(accountScopeSql({ env: "prod", chainId: "all" }, "a")).toEqual({ sql: "a.is_test = 0 AND a.env = ?", params: ["prod"] });
+    expect(accountScopeSql({ env: "all", chainId: 8453 }, "a")).toEqual({ sql: "a.chain_id = ?", params: [8453] });
+    expect(accountScopeSql({ env: "beta", chainId: 8453 }, "a")).toEqual({ sql: "a.is_test = 0 AND a.env = ? AND a.chain_id = ?", params: ["beta", 8453] });
+  });
+
+  test("readSignupDays/readActivity fall back to the unfiltered query when is_test is not a column yet", async () => {
+    const { db: scopedDb } = fakeDb({ missing: ["is_test"], tables: { users: SIGNUPS.users, accounts: SIGNUPS.accounts } });
+    expect(await readSignupDays(scopedDb, { env: "prod", chainId: "all" })).toEqual({ users: SIGNUPS.users, accounts: SIGNUPS.accounts });
+    const { db: activityDb } = fakeDb({ missing: ["is_test"], first: () => ({ first_day: "2026-09-26" }) });
+    const activity = await readActivity(activityDb, "2026-09-18", { env: "prod", chainId: "all" });
+    expect(activity?.firstDay).toBe("2026-09-26");
+  });
+
+  test("fetchInfraCounts: filtered reads scope the count; a missing column falls back to the global total for prod, to zero for beta/test", async () => {
+    const { db } = fakeDb({ first: () => ({ total_users: 7, total_accounts: 8, last7d: 1 }) });
+    expect(await fetchInfraCounts(db, { env: "prod", chainId: "all" })).toEqual({ totalUsers: 7, totalAccounts: 8, last7d: 1 });
+    const { db: missing } = fakeDb({ missing: ["is_test"], first: () => ({ total_users: 7, total_accounts: 8, last7d: 1 }) });
+    expect(await fetchInfraCounts(missing, { env: "prod", chainId: "all" })).toEqual({ totalUsers: 7, totalAccounts: 8, last7d: 1 });
+    expect(await fetchInfraCounts(missing, { env: "beta", chainId: "all" })).toEqual({ totalUsers: 0, totalAccounts: 0, last7d: 0 });
+    expect(await fetchInfraCounts(missing, { env: "test", chainId: "all" })).toEqual({ totalUsers: 0, totalAccounts: 0, last7d: 0 });
+  });
+
+  test("rowsFromSnapshotByGroup: one row per (chain, env), test accounts excluded; collapseDailyV2 sums them back by filter", () => {
+    const snapshot = snap({
+      accounts: {
+        totalUsers: 3,
+        totalAccounts: 3,
+        last7d: 0,
+        rows: [acct(1, 2, 0, 0, 0, { env: "prod" }), acct(2, 3, 0, 0, 0, { env: "beta" }), acct(3, 100, 0, 0, 0, { env: "prod", isTest: true })],
+        tvlUsd: 105,
+        idleUsdcUsd: 105,
+        lpUsd: 0,
+        gasReservesEth: 0,
+      },
+    });
+    const rows = rowsFromSnapshotByGroup(snapshot, TODAY, () => 0);
+    expect(rows).toHaveLength(2);
+    const prod = rows.find((r) => r.env === "prod")!;
+    const beta = rows.find((r) => r.env === "beta")!;
+    expect(prod).toMatchObject({ day: TODAY, chain_id: 8453, accounts: 1, idle_usdc_usd: 2 });
+    expect(beta).toMatchObject({ day: TODAY, chain_id: 8453, accounts: 1, idle_usdc_usd: 3 });
+
+    const asV2 = (r: DailyRow, env: string): DailyRowV2 => ({ ...r, chain_id: 8453, env });
+    const both = [asV2(daily("2026-09-30"), "prod"), asV2(daily("2026-09-30", { tvl_usd: 8, users: 2 }), "beta")];
+    expect(collapseDailyV2(both, { env: "all", chainId: "all" })[0]).toMatchObject({ tvl_usd: 48, users: 32 });
+    expect(collapseDailyV2(both, { env: "prod", chainId: "all" })[0]).toMatchObject({ tvl_usd: 40, users: 30 });
+    expect(collapseDailyV2(both, { env: "test", chainId: "all" })).toEqual([]);
   });
 });
 

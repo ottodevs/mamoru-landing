@@ -111,9 +111,9 @@ export interface AccountView {
 export function matchesFilter(row: Pick<AccountView, "env" | "chainId" | "isTest" | "key" | "address">, filter: AccountFilter): boolean {
   if (filter.env === "test") {
     if (!row.isTest) return false;
-  } else {
+  } else if (filter.env !== "all") {
     if (row.isTest) return false;
-    if (filter.env !== "all" && row.env !== filter.env) return false;
+    if (row.env !== filter.env) return false;
   }
   if (filter.chainId !== "all" && row.chainId !== filter.chainId) return false;
   if (filter.account) {

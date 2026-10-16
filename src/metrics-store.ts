@@ -5,7 +5,7 @@
  * not exist yet: every read returns null instead of throwing when they do not.
  */
 
-import type { AccountScopeFilter } from "./account-filter";
+import { accountScopeSql, type AccountScopeFilter } from "./account-filter";
 import type { D1Db, D1PreparedStatement } from "./d1-infra";
 import { type InfraReading, loadInfraReading, type InfraSources } from "./infra-cache";
 import type { AccountView, InfraSnapshot } from "./infra-snapshot";
@@ -85,53 +85,34 @@ export interface ActivityRead {
   firstDay: string | null;
 }
 
-/**
- * The accounts.env/chain_id/is_test predicate for a scoped query (otto/mamoru#130), aliased to `alias`.
- * `filter.env === "test"` means is_test = 1 regardless of env; "prod"/"beta" both require is_test = 0; "all"
- * excludes nothing. Empty `sql` means no WHERE clause is needed at all.
- */
-function scopeWhere(filter: AccountScopeFilter, alias: string): { sql: string; params: unknown[] } {
-  const clauses: string[] = [];
-  const params: unknown[] = [];
-  if (filter.env === "test") {
-    clauses.push(`${alias}.is_test = 1`);
-  } else {
-    clauses.push(`${alias}.is_test = 0`);
-    if (filter.env !== "all") {
-      clauses.push(`${alias}.env = ?`);
-      params.push(filter.env);
-    }
+/** The exact unfiltered query `readActivity` always ran, before otto/mamoru#130. */
+async function readActivityUnfiltered(db: D1Db, since: string): Promise<ActivityRead | null> {
+  try {
+    const first = await db.prepare("SELECT MIN(day) AS first_day FROM account_activity").first<{ first_day: string | null }>();
+    const { results } = await db
+      .prepare("SELECT day, COUNT(*) AS n FROM account_activity WHERE day >= ? GROUP BY day ORDER BY day ASC")
+      .bind(since)
+      .all<{ day: string; n: number }>();
+    return {
+      counts: new Map(results.map((r) => [String(r.day), num(r.n)])),
+      firstDay: first?.first_day ? String(first.first_day) : null,
+    };
+  } catch {
+    return null;
   }
-  if (filter.chainId !== "all") {
-    clauses.push(`${alias}.chain_id = ?`);
-    params.push(filter.chainId);
-  }
-  return { sql: clauses.join(" AND "), params };
 }
 
 /**
  * Daily active accounts from `since` on. null when account_activity is missing or unreadable.
- * Without `filter`: the exact unfiltered query this function has always run. With it: joined against
- * `accounts` and scoped by env/chain_id/is_test (otto/mamoru#130); null if those columns are not on this D1
- * yet, same as any other unreadable table — there is no honest filtered number to fall back to.
+ * Without `filter`: the exact unfiltered query this function has always run. With it (otto/mamoru#130):
+ * joined against `accounts` and scoped by env/chain_id/is_test. If that join fails because the scoping
+ * columns are not on this D1 yet, it falls back to the unfiltered query above — safe only because a D1
+ * without those columns has no beta or test accounts to mislabel yet; once the migration lands, this
+ * fallback never fires again.
  */
 export async function readActivity(db: D1Db, since: string, filter?: AccountScopeFilter): Promise<ActivityRead | null> {
-  if (!filter) {
-    try {
-      const first = await db.prepare("SELECT MIN(day) AS first_day FROM account_activity").first<{ first_day: string | null }>();
-      const { results } = await db
-        .prepare("SELECT day, COUNT(*) AS n FROM account_activity WHERE day >= ? GROUP BY day ORDER BY day ASC")
-        .bind(since)
-        .all<{ day: string; n: number }>();
-      return {
-        counts: new Map(results.map((r) => [String(r.day), num(r.n)])),
-        firstDay: first?.first_day ? String(first.first_day) : null,
-      };
-    } catch {
-      return null;
-    }
-  }
-  const { sql, params } = scopeWhere(filter, "acc");
+  if (!filter) return readActivityUnfiltered(db, since);
+  const { sql, params } = accountScopeSql(filter, "acc");
   const where = sql ? `AND ${sql}` : "";
   try {
     const first = await db
@@ -150,7 +131,7 @@ export async function readActivity(db: D1Db, since: string, filter?: AccountScop
       firstDay: first?.first_day ? String(first.first_day) : null,
     };
   } catch {
-    return null;
+    return readActivityUnfiltered(db, since);
   }
 }
 
@@ -169,38 +150,52 @@ export interface SignupDays {
   accounts: DayCount[];
 }
 
+/** The exact unfiltered query `readSignupDays` always ran, before otto/mamoru#130. */
+async function readSignupDaysUnfiltered(db: D1Db): Promise<SignupDays | null> {
+  const perDay = async (table: "users" | "accounts"): Promise<DayCount[]> => {
+    const { results } = await db
+      .prepare(`SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS n FROM ${table} GROUP BY day ORDER BY day ASC`)
+      .all<{ day: string; n: number }>();
+    return results.map((r) => ({ day: String(r.day), n: num(r.n) }));
+  };
+  try {
+    return { users: await perDay("users"), accounts: await perDay("accounts") };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * New users and new accounts per UTC day, from created_at. null when unreadable.
  * Without `filter`: the exact unfiltered query this function has always run. With it (otto/mamoru#130): both
  * series come from `accounts`, scoped by env/chain_id/is_test — `users` becomes "distinct users with a
- * matching account" per day, since the `users` table carries no environment of its own. null if the scoping
- * columns are not on this D1 yet.
+ * matching account" per day, since the `users` table carries no environment of its own. A user's day is
+ * their *earliest* matching account's created_at: onboarding refuses a second account for a session that
+ * already has one (otto/mamoru#6), so one user has at most one account today, but counting by MIN avoids
+ * ever attributing the same user to two different days if that ever changes. Falls back to the unfiltered
+ * query when the scoping columns are not on this D1 yet — safe only because there is nothing to mislabel
+ * before the migration lands.
  */
 export async function readSignupDays(db: D1Db, filter?: AccountScopeFilter): Promise<SignupDays | null> {
-  if (!filter) {
-    const perDay = async (table: "users" | "accounts"): Promise<DayCount[]> => {
-      const { results } = await db
-        .prepare(`SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS n FROM ${table} GROUP BY day ORDER BY day ASC`)
-        .all<{ day: string; n: number }>();
-      return results.map((r) => ({ day: String(r.day), n: num(r.n) }));
-    };
-    try {
-      return { users: await perDay("users"), accounts: await perDay("accounts") };
-    } catch {
-      return null;
-    }
-  }
-  const { sql, params } = scopeWhere(filter, "accounts");
+  if (!filter) return readSignupDaysUnfiltered(db);
+  const { sql, params } = accountScopeSql(filter, "accounts");
   const where = sql ? `WHERE ${sql}` : "";
   const toDayCounts = (rows: { day: string; n: number }[]) => rows.map((r) => ({ day: String(r.day), n: num(r.n) }));
   try {
     const [accountsRows, usersRows] = await Promise.all([
       db.prepare(`SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS n FROM accounts ${where} GROUP BY day ORDER BY day ASC`).bind(...params).all<{ day: string; n: number }>(),
-      db.prepare(`SELECT substr(created_at, 1, 10) AS day, COUNT(DISTINCT user_id) AS n FROM accounts ${where} GROUP BY day ORDER BY day ASC`).bind(...params).all<{ day: string; n: number }>(),
+      db
+        .prepare(
+          `SELECT substr(first_created_at, 1, 10) AS day, COUNT(*) AS n FROM (
+             SELECT MIN(created_at) AS first_created_at FROM accounts ${where} GROUP BY user_id
+           ) GROUP BY day ORDER BY day ASC`,
+        )
+        .bind(...params)
+        .all<{ day: string; n: number }>(),
     ]);
     return { users: toDayCounts(usersRows.results), accounts: toDayCounts(accountsRows.results) };
   } catch {
-    return null;
+    return readSignupDaysUnfiltered(db);
   }
 }
 
@@ -269,6 +264,13 @@ export async function readDailyV2(db: D1Db, since: string): Promise<DailyRowV2[]
  * Sums `metrics_daily_v2` rows matching an env/chain filter into one `metrics_daily`-shaped point per day
  * (otto/mamoru#130). Nothing is summed for `env: "test"`: test accounts are excluded from `metrics_daily_v2`
  * entirely at write time (see `rowsFromSnapshotByGroup`), so there is no test-only history to show.
+ *
+ * `users` and `accounts` add the matching groups' counts arithmetically, which is exact as long as no real
+ * person holds accounts in two of the groups being summed at once. Two different envs can never collide
+ * (app.mamoru.lol and beta.mamoru.lol mint a fresh user per hostname), but two chains could, once a second
+ * chain exists and `filter.chainId === "all"` sums across them: a user with accounts on two chains would be
+ * counted twice. Not reachable today — Base is the only chain — and left as a known gap rather than fixed
+ * here, since fixing it needs per-user data this table does not carry.
  */
 export function collapseDailyV2(rows: DailyRowV2[], filter: AccountScopeFilter): DailyRow[] {
   if (filter.env === "test") return [];

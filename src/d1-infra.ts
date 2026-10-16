@@ -5,6 +5,8 @@
  * and exp_events (src/exp-store.ts).
  */
 
+import { accountScopeSql, type AccountScopeFilter } from "./account-filter";
+
 export interface D1Result<T> {
   results: T[];
   success: boolean;
@@ -39,20 +41,52 @@ export interface InfraCounts {
   last7d: number;
 }
 
-export async function fetchInfraCounts(db: D1Db): Promise<InfraCounts> {
-  const row = await db
-    .prepare(
-      `SELECT
-        (SELECT COUNT(*) FROM users) AS total_users,
-        (SELECT COUNT(*) FROM accounts) AS total_accounts,
-        (SELECT COUNT(*) FROM accounts WHERE created_at >= datetime('now','-7 days')) AS last7d`,
-    )
-    .first<{ total_users: number; total_accounts: number; last7d: number }>();
-  return {
-    totalUsers: row?.total_users ?? 0,
-    totalAccounts: row?.total_accounts ?? 0,
-    last7d: row?.last7d ?? 0,
-  };
+/**
+ * Without `filter`: the exact unfiltered, uncapped query this function has always run, read by `rowFromSnapshot`
+ * for the legacy `metrics_daily` row and by the Infra page. With a `filter` (otto/mamoru#130): the same shape,
+ * scoped by env/chain_id/is_test — this is what the Overview's headline users/accounts/last7d read, uncapped
+ * (unlike the on-chain `rows`, which `fetchChainAccounts` caps at 500). Falls back to the unfiltered totals
+ * when the scoping columns are not on this D1 yet, except for `env: "beta"` or `"test"`, which have no honest
+ * fallback (there is nothing yet known to be beta or test) and so read as zero instead of guessing.
+ */
+export async function fetchInfraCounts(db: D1Db, filter?: AccountScopeFilter): Promise<InfraCounts> {
+  if (!filter) {
+    const row = await db
+      .prepare(
+        `SELECT
+          (SELECT COUNT(*) FROM users) AS total_users,
+          (SELECT COUNT(*) FROM accounts) AS total_accounts,
+          (SELECT COUNT(*) FROM accounts WHERE created_at >= datetime('now','-7 days')) AS last7d`,
+      )
+      .first<{ total_users: number; total_accounts: number; last7d: number }>();
+    return {
+      totalUsers: row?.total_users ?? 0,
+      totalAccounts: row?.total_accounts ?? 0,
+      last7d: row?.last7d ?? 0,
+    };
+  }
+  const { sql, params } = accountScopeSql(filter, "accounts");
+  const scopeWhere = sql ? `WHERE ${sql}` : "";
+  const scopeAnd = sql ? `${sql} AND ` : "";
+  try {
+    const row = await db
+      .prepare(
+        `SELECT
+          (SELECT COUNT(DISTINCT user_id) FROM accounts ${scopeWhere}) AS total_users,
+          (SELECT COUNT(*) FROM accounts ${scopeWhere}) AS total_accounts,
+          (SELECT COUNT(*) FROM accounts WHERE ${scopeAnd}created_at >= datetime('now','-7 days')) AS last7d`,
+      )
+      .bind(...params, ...params, ...params)
+      .first<{ total_users: number; total_accounts: number; last7d: number }>();
+    return {
+      totalUsers: row?.total_users ?? 0,
+      totalAccounts: row?.total_accounts ?? 0,
+      last7d: row?.last7d ?? 0,
+    };
+  } catch {
+    if (filter.env === "beta" || filter.env === "test") return { totalUsers: 0, totalAccounts: 0, last7d: 0 };
+    return fetchInfraCounts(db);
+  }
 }
 
 /** Accounts on a given chain, oldest first. Capped so one bad run cannot blow the subrequest budget. */
