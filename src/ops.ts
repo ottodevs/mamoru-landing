@@ -184,7 +184,7 @@ export const FLASH_COPY: Record<Exclude<Flash, "">, string> = {
   bad: "That did not go through. Try again.",
 };
 
-export type SectionId = "overview" | "mails" | "infra" | "experiments" | "archive" | "gate";
+export type SectionId = "overview" | "mails" | "infra" | "experiments" | "settings" | "archive" | "gate";
 
 export type OpsSection = { id: string; label: string; href: string; /** Leaves the console: a full navigation in a new tab. */ out?: boolean };
 
@@ -194,6 +194,7 @@ export const OPS_SECTIONS: readonly OpsSection[] = [
   { id: "mails", label: "Mails", href: "/ops/mails" },
   { id: "infra", label: "Infra", href: "/ops/infra" },
   { id: "experiments", label: "Experiments", href: "/ops/experiments" },
+  { id: "settings", label: "Settings", href: "/ops/settings" },
   { id: "archive", label: "Archive", href: "/ops/archive" },
   // The staged site is its own document with its own base URL and CSP, so it opens beside the console.
   { id: "preview", label: "Preview", href: "/ops/preview", out: true },

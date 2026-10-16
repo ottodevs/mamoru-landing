@@ -83,6 +83,9 @@ import { applyExperiments } from "./exp-rewrite";
 import { handleExpEvent, recordWaitlistSubmit } from "./exp-events";
 import { loadExperimentReports } from "./exp-report";
 import { experimentsSection } from "./ops-experiments";
+import { settingsSection, type SettingsPage } from "./ops-settings";
+import { activeOf, appendVersion, listTemplates, listVersions, versionById, type Env as SettingsEnv } from "./engine-settings-store";
+import { DEFAULT_SETTINGS, riskyChanges, settingsFromForm, validateSettings } from "./engine-settings-model";
 import { archiveTarget } from "./archive";
 import { archiveBar, archiveSection } from "./ops-archive";
 import {
@@ -368,7 +371,7 @@ function withNotice(view: SectionView, text: string, tone: "plain" | "bad" = "pl
 }
 
 /** Sections a stranger is sent to Google from, and returned to after signing in. */
-const SECTION_PATHS = new Set(["/ops", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/archive"]);
+const SECTION_PATHS = new Set(["/ops", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/archive"]);
 
 /** Anyone who is not signed in and allowlisted sees the landing. Nothing else. */
 function toRoot(request: Request, cookies: string[] = []): Response {
@@ -643,6 +646,65 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
 
   if (sectionPath === "/ops/experiments" && request.method === "GET") {
     return flashed(await experimentsView());
+  }
+
+  // ---- engine settings (spec 006, otto/mamoru#147) ----
+  const settingsView = async (over: Partial<Pick<SettingsPage, "draft" | "notice" | "confirm">> = {}, status = 200): Promise<SectionView> => {
+    const db = env.MAMORU_DB;
+    const versions = db ? await listVersions(db) : null;
+    const templates = db ? await listTemplates(db) : null;
+    const wantEnv: SettingsEnv = url.searchParams.get("env") === "beta" ? "beta" : "prod";
+    const wantTemplate = url.searchParams.get("template");
+    const fromTemplate = templates?.find((t) => t.name === wantTemplate);
+    const active = versions ? activeOf(versions, wantEnv) : null;
+    const draft = over.draft ?? {
+      env: wantEnv,
+      template: fromTemplate?.name ?? active?.template ?? templates?.[0]?.name ?? "custom",
+      settings: fromTemplate?.settings ?? active?.settings ?? DEFAULT_SETTINGS,
+      canary: "",
+      reason: "",
+    };
+    return { ...settingsSection({ versions, templates, csrf: session.csrf, draft, ...over }), status };
+  };
+
+  if (sectionPath === "/ops/settings" && request.method === "GET") {
+    return flashed(await settingsView());
+  }
+
+  if ((url.pathname === "/ops/settings/apply" || url.pathname === "/ops/settings/rollback") && request.method === "POST") {
+    if (!csrfOk || !form) return respond(await settingsView({ notice: { text: FLASH_COPY.bad, tone: "bad" } }, 403));
+    const db = env.MAMORU_DB;
+    if (!db) return respond(await settingsView({}, 503));
+    const versions = (await listVersions(db)) ?? [];
+    let draft: SettingsPage["draft"];
+    let rollbackOf: number | undefined;
+    if (url.pathname === "/ops/settings/rollback") {
+      const id = Number(form.get("id"));
+      const target = Number.isSafeInteger(id) ? await versionById(db, id) : null;
+      if (!target) return respond(await settingsView({ notice: { text: "That version does not exist or cannot be read.", tone: "bad" } }, 400));
+      rollbackOf = target.id;
+      draft = { env: target.env, template: target.template, settings: target.settings, canary: target.accountKeys?.join("\n") ?? "", reason: String(form.get("reason") ?? "") };
+    } else {
+      const envField: SettingsEnv = form.get("env") === "beta" ? "beta" : "prod";
+      draft = { env: envField, template: String(form.get("template") ?? "custom").slice(0, 120), settings: settingsFromForm(form), canary: String(form.get("canary") ?? ""), reason: String(form.get("reason") ?? "") };
+      const back = Number(form.get("rollback_of"));
+      if (Number.isSafeInteger(back) && back > 0) rollbackOf = back;
+    }
+    const errors = validateSettings(draft.settings);
+    if (errors.length) return respond(await settingsView({ draft, notice: { text: `Not applied: ${errors.join("; ")}.`, tone: "bad" } }, 400));
+    if (!draft.reason.trim()) return respond(await settingsView({ draft, notice: { text: "Not applied: say why.", tone: "bad" } }, 400));
+    const accountKeys = draft.canary.split(/\s+/).map((k) => k.trim()).filter(Boolean);
+    // Risky against what those accounts run now: the environment-wide version (or the defaults).
+    const current = activeOf(versions, draft.env)?.settings ?? DEFAULT_SETTINGS;
+    const risks = riskyChanges(current, draft.settings);
+    if (risks.length && form.get("confirm") !== "1") return respond(await settingsView({ draft, confirm: { risks, draft, ...(rollbackOf ? { rollbackOf } : {}) } }));
+    try {
+      const id = await appendVersion(db, { env: draft.env, accountKeys: accountKeys.length ? accountKeys : null, template: draft.template, settings: draft.settings, author: session.email, reason: draft.reason, rollbackOf: rollbackOf ?? null });
+      const text = `Version ${id} written for ${draft.env}${accountKeys.length ? ` (canary, ${accountKeys.length} account(s))` : ""}. The operator applies it within a minute.`;
+      return respond(await settingsView({ notice: { text } }));
+    } catch (e) {
+      return respond(await settingsView({ draft, notice: { text: `Not applied: ${(e as Error).message}.`, tone: "bad" } }, 400));
+    }
   }
 
   if (sectionPath === "/ops/archive" && request.method === "GET") {
