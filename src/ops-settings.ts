@@ -5,7 +5,7 @@
  */
 
 import { BOUNDS, DEFAULT_CAP_USDC, DEFAULT_SETTINGS, type EngineSettings } from "./engine-settings-model";
-import { activeOf, type Env, type TemplateRow, type VersionRow } from "./engine-settings-store";
+import type { Env, TemplateRow, VersionRow } from "./engine-settings-store";
 import { csrfField, noticeHtml, pageHead, type SectionView } from "./ops";
 import { esc } from "./text";
 
@@ -25,11 +25,13 @@ export function describeSettings(s: EngineSettings): string {
 
 const when = (iso: string) => iso.replace("T", " ").slice(0, 16) + " UTC";
 
-function activeBlock(versions: readonly VersionRow[]): string {
+function activeBlock(versions: readonly VersionRow[], active: Record<Env, VersionRow | null>): string {
   const rows = (["prod", "beta"] as const)
     .map((env) => {
-      const v = activeOf(versions, env);
-      const canaries = versions.filter((x) => x.env === env && x.accountKeys !== null && (!v || x.id > v.id));
+      const v = active[env];
+      // One canary at most is live per environment: the newest, if newer than the environment-wide version.
+      const newest = versions.filter((x) => x.env === env && x.accountKeys !== null && (!v || x.id > v.id)).sort((a, b) => b.id - a.id)[0];
+      const canaries = newest ? [newest] : [];
       const main = v
         ? `<td>v${v.id}</td><td>${esc(v.template)}</td><td>${esc(describeSettings(v.settings))}</td><td>${esc(v.author)}<br><span class="dim">${esc(when(v.createdAt))}</span></td>`
         : `<td>none</td><td>code defaults</td><td>${esc(describeSettings(DEFAULT_SETTINGS))}</td><td></td>`;
@@ -84,7 +86,7 @@ function editForm(csrf: string, templates: readonly TemplateRow[], draft: { env:
     <fieldset><legend>Where</legend>
       <label><input type="radio" name="env" value="prod"${draft.env === "prod" ? " checked" : ""} /> prod</label>
       <label><input type="radio" name="env" value="beta"${draft.env === "beta" ? " checked" : ""} /> beta</label>
-      <label>Canary: only these account keys, one per line <textarea name="canary" rows="2">${esc(draft.canary)}</textarea> <span class="dim">empty: every account of the environment</span></label>
+      <label>Canary: only these account keys, one per line <textarea name="canary" rows="2">${esc(draft.canary)}</textarea> <span class="dim">empty: every account of the environment. One canary at a time: a new one replaces the previous.</span></label>
     </fieldset>
     <fieldset><legend>Cap per account</legend>
       ${num("cap", "USDC", s.capUsdc ?? undefined, BOUNDS.capUsdc, "whole USDC, blank for the default " + DEFAULT_CAP_USDC)}
@@ -122,6 +124,7 @@ function historyBlock(csrf: string, versions: readonly VersionRow[]): string {
 
 export type SettingsPage = {
   versions: readonly VersionRow[] | null;
+  active: Record<Env, VersionRow | null>;
   templates: readonly TemplateRow[] | null;
   csrf: string;
   draft: { env: Env; template: string; settings: EngineSettings; canary: string; reason: string };
@@ -153,7 +156,7 @@ export function settingsSection(p: SettingsPage): SectionView {
     html: `${head}
     <p class="lede">What the engine does with deposits: cap, depth sizing and the fall guard. Bounds are enforced again by the operator, which refuses anything outside them. Settings never change what an account's approval allows.</p>
     ${notice}${confirm}
-    ${activeBlock(p.versions)}
+    ${activeBlock(p.versions, p.active)}
     ${editForm(p.csrf, p.templates, p.draft)}
     ${historyBlock(p.csrf, p.versions)}`,
   };

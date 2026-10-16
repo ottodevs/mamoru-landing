@@ -88,9 +88,23 @@ export async function listVersions(db: D1Db, limit = 50): Promise<VersionRow[] |
   }
 }
 
-/** The environment-wide version in effect for `env`: its newest valid environment-wide row. */
-export function activeOf(versions: readonly VersionRow[], env: Env): VersionRow | null {
-  return versions.filter((v) => v.env === env && v.accountKeys === null).sort((a, b) => b.id - a.id)[0] ?? null;
+/** The environment-wide version in effect for each env, read directly (not from a limited history page). */
+export async function activeByEnv(db: D1Db): Promise<Record<Env, VersionRow | null>> {
+  const one = async (env: Env) => {
+    const r = await db
+      .prepare(
+        "SELECT id, env, account_keys_json, template, settings_json, settings_hash, author, reason, created_at, rollback_of FROM engine_settings_versions WHERE env = ? AND account_keys_json IS NULL ORDER BY id DESC LIMIT 20",
+      )
+      .bind(env)
+      .all<RawVersion>();
+    // The newest readable one: a row the code would refuse is skipped, as the operator skips it.
+    for (const raw of r.results) {
+      const v = toVersion(raw);
+      if (v) return v;
+    }
+    return null;
+  };
+  return { prod: await one("prod"), beta: await one("beta") };
 }
 
 export async function versionById(db: D1Db, id: number): Promise<VersionRow | null> {
@@ -112,13 +126,14 @@ export async function appendVersion(db: D1Db, v: NewVersion, now: Date = new Dat
   if (!v.reason.trim()) throw new Error("a reason is required");
   if (v.env !== "prod" && v.env !== "beta") throw new Error("env must be prod or beta");
   if (v.accountKeys !== null && (!v.accountKeys.length || v.accountKeys.some((k) => !/^[0-9a-f-]{8,64}$/i.test(k)))) throw new Error("canary account keys look wrong");
+  const accountKeys = v.accountKeys === null ? null : [...new Set(v.accountKeys.map((k) => k.toLowerCase()))];
   const stmt = db
     .prepare(
       "INSERT INTO engine_settings_versions (env, account_keys_json, template, settings_json, settings_hash, author, reason, created_at, rollback_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(
       v.env,
-      v.accountKeys === null ? null : JSON.stringify(v.accountKeys),
+      accountKeys === null ? null : JSON.stringify(accountKeys),
       v.template.slice(0, 120),
       canonicalJson(v.settings),
       await settingsHash(v.settings),

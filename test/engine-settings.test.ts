@@ -146,3 +146,35 @@ describe("/ops/settings (spec 006)", () => {
     expect(versions[0]!.settings).toEqual(DEFAULT_SETTINGS);
   });
 });
+
+describe("/ops/settings review fixes (spec 006)", () => {
+  test("dropping the stables value is a risky change; an edited preset is not recorded under the preset's name", async () => {
+    const db = memoryDb();
+    await appendVersion(db, { env: "prod", accountKeys: null, template: "conservador + depth 30/500/5, cap 1000", settings: DEPTH, author: "x", reason: "r" });
+    const { env, cookie } = await opsEnv(db);
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
+    const loose: EngineSettings = { ...DEPTH, depth: { impactBps: 30, shareBps: 500 } };
+    const ask = await (await worker.fetch(post("/ops/settings/apply", formFor(loose, { csrf, template: "conservador + depth 30/500/5, cap 1000" }), cookie), env)).text();
+    expect(ask).toContain("stables entries may move the pool price more");
+    await worker.fetch(post("/ops/settings/apply", formFor(loose, { csrf, template: "conservador + depth 30/500/5, cap 1000", confirm: "1" }), cookie), env);
+    expect((await listVersions(db))![0]!.template).toBe("custom (from conservador + depth 30/500/5, cap 1000)");
+  });
+
+  test("a rollback_of that does not match the submitted settings is not recorded", async () => {
+    const db = memoryDb();
+    await appendVersion(db, { env: "prod", accountKeys: null, template: "a", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    const { env, cookie } = await opsEnv(db);
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
+    await worker.fetch(post("/ops/settings/apply", formFor(DEPTH, { csrf, confirm: "1", rollback_of: "1" }), cookie), env);
+    expect((await listVersions(db))![0]!.rollbackOf).toBeNull();
+  });
+
+  test("the version in effect is found even behind a long history of the other env", async () => {
+    const db = memoryDb();
+    await appendVersion(db, { env: "prod", accountKeys: null, template: "prod-wide", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    for (let i = 0; i < 60; i++) await appendVersion(db, { env: "beta", accountKeys: null, template: `b${i}`, settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    const { env, cookie } = await opsEnv(db);
+    const html = await (await worker.fetch(get("/ops/settings", cookie), env)).text();
+    expect(html).toContain("prod-wide");
+  });
+});

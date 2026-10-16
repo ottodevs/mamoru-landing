@@ -37,6 +37,10 @@ function inRange(errors: string[], field: string, v: unknown, b: { min: number; 
 
 export function validateSettings(s: EngineSettings): string[] {
   const errors: string[] = [];
+  if (!s || typeof s !== "object") return ["settings must be an object"];
+  if (s.depth !== null && (typeof s.depth !== "object" || Array.isArray(s.depth))) errors.push("depth must be an object or null");
+  if (s.capUsdc !== null && typeof s.capUsdc !== "number") errors.push("capUsdc must be a number or null");
+  if (!s.guard || typeof s.guard !== "object" || typeof s.guard.enabled !== "boolean" || !s.guard.btc || !s.guard.eth) return [...errors, "guard must have enabled, btc and eth"];
   if (s.depth) {
     inRange(errors, "depth.impactBps", s.depth.impactBps, BOUNDS.impactBps);
     inRange(errors, "depth.shareBps", s.depth.shareBps, BOUNDS.shareBps);
@@ -69,7 +73,8 @@ export function riskyChanges(from: EngineSettings, to: EngineSettings): string[]
   if (from.depth && to.depth) {
     if (to.depth.impactBps > from.depth.impactBps) out.push("entries may move the pool price more");
     if (to.depth.shareBps > from.depth.shareBps) out.push("entries may take a bigger share of a pool");
-    if ((to.depth.stablesImpactBps ?? 0) > (from.depth.stablesImpactBps ?? 0)) out.push("stables entries may move the pool price more");
+    // Without its own value the stables pool uses the general impact limit: compare what each side really allows.
+    if ((to.depth.stablesImpactBps ?? to.depth.impactBps) > (from.depth.stablesImpactBps ?? from.depth.impactBps)) out.push("stables entries may move the pool price more");
   }
   return out;
 }

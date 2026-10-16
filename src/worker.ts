@@ -84,8 +84,8 @@ import { handleExpEvent, recordWaitlistSubmit } from "./exp-events";
 import { loadExperimentReports } from "./exp-report";
 import { experimentsSection } from "./ops-experiments";
 import { settingsSection, type SettingsPage } from "./ops-settings";
-import { activeOf, appendVersion, listTemplates, listVersions, versionById, type Env as SettingsEnv } from "./engine-settings-store";
-import { DEFAULT_SETTINGS, riskyChanges, settingsFromForm, validateSettings } from "./engine-settings-model";
+import { activeByEnv, appendVersion, listTemplates, listVersions, versionById, type Env as SettingsEnv } from "./engine-settings-store";
+import { DEFAULT_SETTINGS, canonicalJson, riskyChanges, settingsFromForm, validateSettings } from "./engine-settings-model";
 import { archiveTarget } from "./archive";
 import { archiveBar, archiveSection } from "./ops-archive";
 import {
@@ -656,7 +656,8 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     const wantEnv: SettingsEnv = url.searchParams.get("env") === "beta" ? "beta" : "prod";
     const wantTemplate = url.searchParams.get("template");
     const fromTemplate = templates?.find((t) => t.name === wantTemplate);
-    const active = versions ? activeOf(versions, wantEnv) : null;
+    const activeAll = db && versions ? await activeByEnv(db) : { prod: null, beta: null };
+    const active = activeAll[wantEnv];
     const draft = over.draft ?? {
       env: wantEnv,
       template: fromTemplate?.name ?? active?.template ?? templates?.[0]?.name ?? "custom",
@@ -664,7 +665,7 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
       canary: "",
       reason: "",
     };
-    return { ...settingsSection({ versions, templates, csrf: session.csrf, draft, ...over }), status };
+    return { ...settingsSection({ versions, templates, active: activeAll, csrf: session.csrf, draft, ...over }), status };
   };
 
   if (sectionPath === "/ops/settings" && request.method === "GET") {
@@ -675,7 +676,7 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     if (!csrfOk || !form) return respond(await settingsView({ notice: { text: FLASH_COPY.bad, tone: "bad" } }, 403));
     const db = env.MAMORU_DB;
     if (!db) return respond(await settingsView({}, 503));
-    const versions = (await listVersions(db)) ?? [];
+    const templates = (await listTemplates(db)) ?? [];
     let draft: SettingsPage["draft"];
     let rollbackOf: number | undefined;
     if (url.pathname === "/ops/settings/rollback") {
@@ -687,15 +688,20 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     } else {
       const envField: SettingsEnv = form.get("env") === "beta" ? "beta" : "prod";
       draft = { env: envField, template: String(form.get("template") ?? "custom").slice(0, 120), settings: settingsFromForm(form), canary: String(form.get("canary") ?? ""), reason: String(form.get("reason") ?? "") };
+      // A rollback confirmed through this form keeps its link only if it is still exactly that version.
       const back = Number(form.get("rollback_of"));
-      if (Number.isSafeInteger(back) && back > 0) rollbackOf = back;
+      const target = Number.isSafeInteger(back) && back > 0 ? await versionById(db, back) : null;
+      if (target && target.env === draft.env && canonicalJson(target.settings) === canonicalJson(draft.settings)) rollbackOf = back;
+      // An edited template is recorded as such, never under the name of a preset it no longer matches.
+      const named = templates.find((t) => t.name === draft.template);
+      if (!rollbackOf && (!named || canonicalJson(named.settings) !== canonicalJson(draft.settings))) draft = { ...draft, template: named ? `custom (from ${named.name})`.slice(0, 120) : "custom" };
     }
     const errors = validateSettings(draft.settings);
     if (errors.length) return respond(await settingsView({ draft, notice: { text: `Not applied: ${errors.join("; ")}.`, tone: "bad" } }, 400));
     if (!draft.reason.trim()) return respond(await settingsView({ draft, notice: { text: "Not applied: say why.", tone: "bad" } }, 400));
     const accountKeys = draft.canary.split(/\s+/).map((k) => k.trim()).filter(Boolean);
     // Risky against what those accounts run now: the environment-wide version (or the defaults).
-    const current = activeOf(versions, draft.env)?.settings ?? DEFAULT_SETTINGS;
+    const current = (await activeByEnv(db))[draft.env]?.settings ?? DEFAULT_SETTINGS;
     const risks = riskyChanges(current, draft.settings);
     if (risks.length && form.get("confirm") !== "1") return respond(await settingsView({ draft, confirm: { risks, draft, ...(rollbackOf ? { rollbackOf } : {}) } }));
     try {
