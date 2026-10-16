@@ -5,8 +5,8 @@
  * not exist yet: every read returns null instead of throwing when they do not.
  */
 
-import { accountScopeSql, type AccountScopeFilter } from "./account-filter";
-import type { D1Db, D1PreparedStatement } from "./d1-infra";
+import { accountScopeSql, isFullyUnscoped, type AccountScopeFilter } from "./account-filter";
+import { fetchGroupCounts, type D1Db, type D1PreparedStatement, type GroupCount } from "./d1-infra";
 import { type InfraReading, loadInfraReading, type InfraSources } from "./infra-cache";
 import type { AccountView, InfraSnapshot } from "./infra-snapshot";
 import { addDays, cumulativeGrowth, type DayCount, utcDay } from "./metrics-math";
@@ -167,17 +167,20 @@ async function readSignupDaysUnfiltered(db: D1Db): Promise<SignupDays | null> {
 
 /**
  * New users and new accounts per UTC day, from created_at. null when unreadable.
- * Without `filter`: the exact unfiltered query this function has always run. With it (otto/mamoru#130): both
- * series come from `accounts`, scoped by env/chain_id/is_test — `users` becomes "distinct users with a
- * matching account" per day, since the `users` table carries no environment of its own. A user's day is
- * their *earliest* matching account's created_at: onboarding refuses a second account for a session that
- * already has one (otto/mamoru#6), so one user has at most one account today, but counting by MIN avoids
- * ever attributing the same user to two different days if that ever changes. Falls back to the unfiltered
- * query when the scoping columns are not on this D1 yet — safe only because there is nothing to mislabel
- * before the migration lands.
+ * Without `filter`, or with a fully unscoped one (otto/mamoru#130's `isFullyUnscoped`): the exact unfiltered
+ * query this function has always run, from `users` — so a user who has not yet created an account still has
+ * a signup day, the documented meaning of `env=all`/`chain=all` together. With a narrower `filter`
+ * (otto/mamoru#130): both series come from `accounts`, scoped by env/chain_id/is_test — `users` becomes
+ * "distinct users with a matching account" per day, since the `users` table carries no environment or chain
+ * of its own, and a narrower scope is by definition about accounts that exist in it. A user's day is their
+ * *earliest* matching account's created_at: onboarding refuses a second account for a session that already
+ * has one (otto/mamoru#6), so one user has at most one account today, but counting by MIN avoids ever
+ * attributing the same user to two different days if that ever changes. Falls back to the unfiltered query
+ * when the scoping columns are not on this D1 yet — safe only because there is nothing to mislabel before the
+ * migration lands.
  */
 export async function readSignupDays(db: D1Db, filter?: AccountScopeFilter): Promise<SignupDays | null> {
-  if (!filter) return readSignupDaysUnfiltered(db);
+  if (!filter || isFullyUnscoped(filter)) return readSignupDaysUnfiltered(db);
   const { sql, params } = accountScopeSql(filter, "accounts");
   const where = sql ? `WHERE ${sql}` : "";
   const toDayCounts = (rows: { day: string; n: number }[]) => rows.map((r) => ({ day: String(r.day), n: num(r.n) }));
@@ -237,14 +240,20 @@ export function rowFromSnapshot(snapshot: InfraSnapshot, day: string, dau: numbe
   };
 }
 
-/** One `metrics_daily_v2` row: `metrics_daily`'s fields, keyed additionally by chain and environment (otto/mamoru#130). */
-export interface DailyRowV2 extends DailyRow {
+/**
+ * One `metrics_daily_v2` row: `metrics_daily`'s fields minus `relayer_eth`/`eth_usd`, keyed additionally by
+ * chain and environment (otto/mamoru#130). The relayer wallet and the ETH/USD price are chain-level, not
+ * per-env, so they are not duplicated onto every env's row here — they live once per (day, chain_id) in
+ * `metrics_daily_chain` (see `chainRowFromSnapshot`), which nothing can double count by summing across env.
+ */
+export interface DailyRowV2 extends Omit<DailyRow, "relayer_eth" | "eth_usd"> {
   chain_id: number;
   env: string;
 }
 
 function cleanRowV2(raw: Record<string, unknown>): DailyRowV2 {
-  return { ...cleanRow(raw), chain_id: num(raw.chain_id), env: String(raw.env ?? "") };
+  const { relayer_eth: _relayerEth, eth_usd: _ethUsd, ...rest } = cleanRow(raw);
+  return { ...rest, chain_id: num(raw.chain_id), env: String(raw.env ?? "") };
 }
 
 /** Rows from `since` on, oldest first. null when the table is missing or unreadable (otto/mamoru#130). */
@@ -265,12 +274,18 @@ export async function readDailyV2(db: D1Db, since: string): Promise<DailyRowV2[]
  * (otto/mamoru#130). Nothing is summed for `env: "test"`: test accounts are excluded from `metrics_daily_v2`
  * entirely at write time (see `rowsFromSnapshotByGroup`), so there is no test-only history to show.
  *
+ * `relayer_eth`/`eth_usd` are not part of `DailyRowV2` at all (see its doc comment) — they are set to 0 here
+ * purely to satisfy `DailyRow`'s shape; nothing in `buildOverview` reads them from this collapsed history
+ * (the live relayer figure comes from the snapshot, not from a historical row). The true, uncapped,
+ * never-double-countable chain-level values live in `metrics_daily_chain`.
+ *
  * `users` and `accounts` add the matching groups' counts arithmetically, which is exact as long as no real
- * person holds accounts in two of the groups being summed at once. Two different envs can never collide
- * (app.mamoru.lol and beta.mamoru.lol mint a fresh user per hostname), but two chains could, once a second
- * chain exists and `filter.chainId === "all"` sums across them: a user with accounts on two chains would be
- * counted twice. Not reachable today — Base is the only chain — and left as a known gap rather than fixed
- * here, since fixing it needs per-user data this table does not carry.
+ * person holds accounts in two of the groups being summed at once. Two different envs can never collide:
+ * the session cookie that mints a `user_id` is a `__Host-` cookie, strictly scoped to the exact host that
+ * set it, so a person who uses both app.mamoru.lol and beta.mamoru.lol gets two distinct `user_id`s, never
+ * one shared across the sum. Two chains could collide, once a second chain exists and `filter.chainId ===
+ * "all"` sums across them — not reachable today, since Base is the only chain that has ever existed, and
+ * left as a known gap rather than fixed here, since fixing it needs per-user data this table does not carry.
  */
 export function collapseDailyV2(rows: DailyRowV2[], filter: AccountScopeFilter): DailyRow[] {
   if (filter.env === "test") return [];
@@ -281,7 +296,7 @@ export function collapseDailyV2(rows: DailyRowV2[], filter: AccountScopeFilter):
   for (const r of matches) {
     const acc = byDay.get(r.day);
     if (!acc) {
-      byDay.set(r.day, { ...r });
+      byDay.set(r.day, { ...r, relayer_eth: 0, eth_usd: 0 });
       continue;
     }
     acc.users += r.users;
@@ -294,19 +309,30 @@ export function collapseDailyV2(rows: DailyRowV2[], filter: AccountScopeFilter):
     acc.lp_usd += r.lp_usd;
     acc.positions += r.positions;
     acc.in_range += r.in_range;
-    // The relayer is one wallet shared by every group: summing it would double count, so the last group wins.
-    acc.relayer_eth = r.relayer_eth;
-    acc.eth_usd = r.eth_usd;
     if (!hasChainData(acc) || !hasChainData(r)) acc.captured_at = PARTIAL_MARK;
   }
   return [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
 }
 
 /**
- * One `metrics_daily_v2` row per (chain, env) present among the snapshot's accounts, same day, excluding
- * test accounts entirely (otto/mamoru#130). `dauOf` supplies each group's DAU (see `countDauByGroup`).
+ * One `metrics_daily_v2` row per (chain, env), same day, excluding test accounts entirely (otto/mamoru#130).
+ * `dauOf` supplies each group's DAU (see `countDauByGroup`). `groupCounts` (see `fetchGroupCounts`), when
+ * given, supplies each group's `users`/`accounts` from one uncapped grouped D1 query; without it (the column
+ * is missing, or the read failed), those two fields fall back to deriving from the snapshot's on-chain row
+ * list, which `fetchChainAccounts` caps at 500 — the same degrade `rowFromSnapshot` never needed because it
+ * always had the uncapped `fetchInfraCounts` total to use instead.
+ *
+ * The group key set is the union of what `groupCounts` knows and what the (possibly capped) on-chain rows
+ * contain: a group `fetchChainAccounts`'s cap left out entirely still gets a row, with an honest `users`/
+ * `accounts` and its money/position figures at 0 — the same convention a chain-unreachable day already uses
+ * for every group, not a silent gap in the written history.
  */
-export function rowsFromSnapshotByGroup(snapshot: InfraSnapshot, day: string, dauOf: (chainId: number, env: string) => number): DailyRowV2[] {
+export function rowsFromSnapshotByGroup(
+  snapshot: InfraSnapshot,
+  day: string,
+  dauOf: (chainId: number, env: string) => number,
+  groupCounts?: Map<string, GroupCount> | null,
+): DailyRowV2[] {
   const a = snapshot.accounts;
   const chain = snapshotHasChain(snapshot);
   const groups = new Map<string, AccountView[]>();
@@ -317,16 +343,19 @@ export function rowsFromSnapshotByGroup(snapshot: InfraSnapshot, day: string, da
     if (list) list.push(r);
     else groups.set(key, [r]);
   }
+  const keys = new Set<string>([...groups.keys(), ...(groupCounts?.keys() ?? [])]);
   const out: DailyRowV2[] = [];
-  for (const [key, groupRows] of groups) {
+  for (const key of keys) {
     const [chainIdPart, env] = key.split(":") as [string, string];
     const chainId = Number(chainIdPart);
+    const groupRows = groups.get(key) ?? [];
+    const counts = groupCounts?.get(key);
     out.push({
       day,
       chain_id: chainId,
       env,
-      users: new Set(groupRows.map((r) => r.userId)).size,
-      accounts: groupRows.length,
+      users: counts?.users ?? new Set(groupRows.map((r) => r.userId)).size,
+      accounts: counts?.accounts ?? groupRows.length,
       funded_accounts: groupRows.filter((r) => r.usdcIdle > 0 || r.lpUsd > 0).length,
       active_accounts: groupRows.filter((r) => r.positions >= 1).length,
       dau: dauOf(chainId, env),
@@ -335,12 +364,46 @@ export function rowsFromSnapshotByGroup(snapshot: InfraSnapshot, day: string, da
       lp_usd: chain ? groupRows.reduce((s, r) => s + r.lpUsd, 0) : 0,
       positions: groupRows.reduce((s, r) => s + r.positions, 0),
       in_range: groupRows.reduce((s, r) => s + r.inRange, 0),
-      relayer_eth: snapshot.relayer?.ethBalance ?? 0,
-      eth_usd: snapshot.ethUsd ?? 0,
       captured_at: chain ? snapshot.asOf : PARTIAL_MARK,
     });
   }
   return out;
+}
+
+/**
+ * The single (day, chain_id) row for `metrics_daily_chain`: the relayer balance and the ETH/USD price,
+ * which are chain-level facts with no env of their own (otto/mamoru#130). One row per chain per day,
+ * never duplicated per env, so nothing that reads this table can double count it.
+ */
+export interface DailyRowChain {
+  day: string;
+  chain_id: number;
+  relayer_eth: number;
+  eth_usd: number | null;
+  captured_at: string;
+}
+
+export function chainRowFromSnapshot(snapshot: InfraSnapshot, day: string, chainId: number): DailyRowChain {
+  const chain = snapshotHasChain(snapshot);
+  return {
+    day,
+    chain_id: chainId,
+    relayer_eth: snapshot.relayer?.ethBalance ?? 0,
+    eth_usd: snapshot.ethUsd ?? null,
+    captured_at: chain ? snapshot.asOf : PARTIAL_MARK,
+  };
+}
+
+/** Best-effort: a D1 without `metrics_daily_chain` yet fails silently, same as `upsertDailyV2`. */
+export async function upsertDailyChain(db: D1Db, row: DailyRowChain): Promise<void> {
+  try {
+    const sql =
+      "INSERT INTO metrics_daily_chain (day, chain_id, relayer_eth, eth_usd, captured_at) VALUES (?, ?, ?, ?, ?)" +
+      " ON CONFLICT(day, chain_id) DO UPDATE SET relayer_eth = excluded.relayer_eth, eth_usd = excluded.eth_usd, captured_at = excluded.captured_at";
+    await (db.prepare(sql).bind(row.day, row.chain_id, row.relayer_eth, row.eth_usd, row.captured_at) as WriteStatement).run();
+  } catch {
+    // Not created on this D1 yet; nothing else depends on this write succeeding today.
+  }
 }
 
 /** Each (chain, env) group's active-account count for one day, from `account_activity` joined to `accounts`,
@@ -362,15 +425,15 @@ export async function countDauByGroup(db: D1Db, day: string): Promise<Map<string
 }
 
 const COLUMNS_V2 =
-  "day, chain_id, env, users, accounts, funded_accounts, active_accounts, dau, tvl_usd, idle_usdc_usd, lp_usd, positions, in_range, relayer_eth, eth_usd, captured_at";
+  "day, chain_id, env, users, accounts, funded_accounts, active_accounts, dau, tvl_usd, idle_usdc_usd, lp_usd, positions, in_range, captured_at";
 
 /** Same replace-vs-refresh split as `upsertSql`, keyed by (day, chain_id, env). */
 export function upsertSqlV2(row: Pick<DailyRowV2, "captured_at">): string {
-  const insert = `INSERT INTO metrics_daily_v2 (${COLUMNS_V2}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  const insert = `INSERT INTO metrics_daily_v2 (${COLUMNS_V2}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
   if (!hasChainData(row)) {
     return `${insert} ON CONFLICT(day, chain_id, env) DO UPDATE SET users = excluded.users, accounts = excluded.accounts, dau = excluded.dau`;
   }
-  return `${insert} ON CONFLICT(day, chain_id, env) DO UPDATE SET users = excluded.users, accounts = excluded.accounts, funded_accounts = excluded.funded_accounts, active_accounts = excluded.active_accounts, dau = excluded.dau, tvl_usd = excluded.tvl_usd, idle_usdc_usd = excluded.idle_usdc_usd, lp_usd = excluded.lp_usd, positions = excluded.positions, in_range = excluded.in_range, relayer_eth = excluded.relayer_eth, eth_usd = excluded.eth_usd, captured_at = excluded.captured_at`;
+  return `${insert} ON CONFLICT(day, chain_id, env) DO UPDATE SET users = excluded.users, accounts = excluded.accounts, funded_accounts = excluded.funded_accounts, active_accounts = excluded.active_accounts, dau = excluded.dau, tvl_usd = excluded.tvl_usd, idle_usdc_usd = excluded.idle_usdc_usd, lp_usd = excluded.lp_usd, positions = excluded.positions, in_range = excluded.in_range, captured_at = excluded.captured_at`;
 }
 
 function rowValuesV2(row: DailyRowV2): unknown[] {
@@ -388,10 +451,22 @@ function rowValuesV2(row: DailyRowV2): unknown[] {
     row.lp_usd,
     row.positions,
     row.in_range,
-    row.relayer_eth,
-    row.eth_usd,
     row.captured_at,
   ];
+}
+
+/** Best-effort: settles one (chain, env) group's DAU for a past day, same gap `settleYesterday` already
+ * closed for the legacy `metrics_daily` row (otto/mamoru#130). Swallows a missing table/columns so it can
+ * never turn an otherwise-successful capture into `write-failed`. */
+export async function settleDauV2(db: D1Db, day: string, chainId: number, env: string, dau: number): Promise<void> {
+  try {
+    const stmt = db
+      .prepare("UPDATE metrics_daily_v2 SET dau = ? WHERE day = ? AND chain_id = ? AND env = ?")
+      .bind(dau, day, chainId, env) as WriteStatement;
+    await stmt.run();
+  } catch {
+    // Not created on this D1 yet, or the row for that day/group does not exist: nothing to settle.
+  }
 }
 
 /** Best-effort: a D1 without `metrics_daily_v2` yet (the coordinator has not applied otto/mamoru#130's
@@ -506,10 +581,17 @@ export async function captureDaily(
     await upsertDaily(db, row);
     // otto/mamoru#130: the same capture, broken down by (chain, env), excluding test accounts. Best-effort
     // (upsertDailyV2 swallows a missing table) so a D1 without the migration applied yet still gets its
-    // metrics_daily row above. Does not settle yesterday's DAU per group; see rowsFromSnapshotByGroup's caller.
-    const dauMap = await countDauByGroup(db, today);
-    for (const groupRow of rowsFromSnapshotByGroup(snapshot, today, (chainId, env) => dauMap.get(`${chainId}:${env}`) ?? 0)) {
+    // metrics_daily row above. `groupCounts` is the uncapped users/accounts read; null (missing columns) or
+    // an error falls back to the row-derived, possibly-capped count inside rowsFromSnapshotByGroup itself.
+    const [dauMap, groupCounts] = await Promise.all([countDauByGroup(db, today), fetchGroupCounts(db)]);
+    const groupRows = rowsFromSnapshotByGroup(snapshot, today, (chainId, env) => dauMap.get(`${chainId}:${env}`) ?? 0, groupCounts);
+    for (const groupRow of groupRows) {
       await upsertDailyV2(db, groupRow);
+    }
+    // relayer_eth/eth_usd are chain-level, not per-env (see DailyRowV2's doc comment): one row per chain
+    // actually present today, never duplicated per env.
+    for (const chainId of new Set(groupRows.map((r) => r.chain_id))) {
+      await upsertDailyChain(db, chainRowFromSnapshot(snapshot, today, chainId));
     }
     if (opts.settleYesterday) {
       const yesterday = addDays(today, -1);
@@ -517,6 +599,16 @@ export async function captureDaily(
         .prepare("UPDATE metrics_daily SET dau = ? WHERE day = ?")
         .bind(await countDau(db, yesterday), yesterday) as WriteStatement;
       await stmt.run();
+      // otto/mamoru#130: the same settle, per (chain, env) group — metrics_daily_v2's dau was otherwise
+      // stuck at whatever intra-day snapshot last captured it. Settles every group known either from
+      // today's capture (the same groups almost always existed yesterday too) or from yesterday's own
+      // activity, defaulting to 0 for a group that went quiet.
+      const yesterdayDauMap = await countDauByGroup(db, yesterday);
+      const yesterdayGroups = new Set<string>([...groupRows.map((r) => `${r.chain_id}:${r.env}`), ...yesterdayDauMap.keys()]);
+      for (const key of yesterdayGroups) {
+        const [chainIdPart, env] = key.split(":") as [string, string];
+        await settleDauV2(db, yesterday, Number(chainIdPart), env, yesterdayDauMap.get(key) ?? 0);
+      }
     }
     return { ok: true, row, backfilled, snapshot };
   } catch {

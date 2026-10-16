@@ -23,6 +23,32 @@ export type AccountScopeFilter = Pick<AccountFilter, "env" | "chainId">;
 /** otto/mamoru#130's default view: real production accounts only. */
 export const DEFAULT_FILTER: AccountFilter = { env: "prod", chainId: "all", account: null, group: "none" };
 
+/**
+ * True only for the one scope `AccountFilter.env`'s doc above describes as "the pre-#130 global numbers":
+ * no env, chain or account narrowing at all. Only here does "users" mean every row in `users`, including
+ * one who has not yet created an account — any narrower scope (a specific env, or a specific chain with
+ * env: "all") is necessarily read from `accounts`, which by definition excludes a user with none.
+ */
+export function isFullyUnscoped(filter: AccountScopeFilter): boolean {
+  return filter.env === "all" && filter.chainId === "all";
+}
+
+/**
+ * The query string `parseAccountFilter` would read back to the same filter (otto/mamoru#130), for a link
+ * or a form action that must carry the reader's current env/chain/account/group selection forward instead
+ * of silently resetting it to `DEFAULT_FILTER` — e.g. the Overview's "Refresh" button, which posts to a
+ * fixed action URL that otherwise carries no query string of its own.
+ */
+export function filterQuery(filter: AccountFilter): string {
+  const params = new URLSearchParams();
+  if (filter.env !== "prod") params.set("env", filter.env);
+  if (filter.chainId !== "all") params.set("chain", String(filter.chainId));
+  if (filter.account) params.set("account", filter.account);
+  if (filter.group !== "none") params.set("group", filter.group);
+  const s = params.toString();
+  return s ? `?${s}` : "";
+}
+
 export function parseAccountFilter(params: URLSearchParams): AccountFilter {
   const envRaw = params.get("env");
   const env: EnvFilter = envRaw === "beta" || envRaw === "test" || envRaw === "all" ? envRaw : "prod";

@@ -1,6 +1,7 @@
 /** Renders /ops, the metrics overview. Pure string building over an Overview model. */
 
 import { CHAIN_ID } from "./chain-addresses";
+import { filterQuery } from "./account-filter";
 import { renderBars, renderFunnel, renderTally, renderTimeChart } from "./metrics-charts";
 import { dauSlots, fmtInt, fmtUsd, shortDay } from "./metrics-math";
 import { DAU_DAYS, type Change, type Overview } from "./metrics-overview";
@@ -255,10 +256,14 @@ export function overviewSection(o: Overview, csrf: string): SectionView {
   const notes = o.notes.length
     ? `<div class="notes soft">${o.notes.map((note) => `<p>${esc(note)}</p>`).join("")}</div>`
     : "";
+  // otto/mamoru#130: the refresh form posts to a fixed action with no query string of its own (it is not
+  // the page's own URL) — carrying the current filter on the action itself is what keeps a refresh from
+  // silently repainting the default prod/all view out from under a reader looking at env=beta or similar.
+  const refreshAction = `/ops/metrics/snapshot${filterQuery(o.filter)}`;
   return {
     section: "overview",
     title: "Overview",
-    html: `${pageHead({ title: "Overview", asOf: o.asOf, refresh: { action: "/ops/metrics/snapshot", csrf } })}
+    html: `${pageHead({ title: "Overview", asOf: o.asOf, refresh: { action: refreshAction, csrf } })}
     ${filterBar(o)}
     ${notes}
     ${figures(o)}

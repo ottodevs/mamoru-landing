@@ -106,8 +106,9 @@ export interface OverviewInputs {
   signups: SignupDays | null;
   /** otto/mamoru#130: the filtered, uncapped users/accounts/last7d count (`fetchInfraCounts`), fetched fresh
    * on every request — never part of the cached Infra snapshot, which is shared unfiltered across every
-   * filter a reader might pick. Missing (undefined) falls back to the live, on-chain `rows`, which are
-   * capped at 500 by `fetchChainAccounts`. */
+   * filter a reader might pick. Missing (undefined or null) falls back to the uncapped growth series
+   * instead of the live, on-chain `rows` (`fetchChainAccounts` caps those at 500) — except when `?account=`
+   * is set, where `rows` is what the reader is actually asking to see. */
   counts?: InfraCounts | null;
 }
 
@@ -173,10 +174,18 @@ export function buildOverview(snapshot: InfraSnapshot, inputs: OverviewInputs, n
 
   const growth = inputs.signups ? cumulativeGrowth(inputs.signups.users, inputs.signups.accounts, today) : [];
   const lastGrowth = growth[growth.length - 1];
-  // otto/mamoru#130: prefer the filtered, uncapped fetchInfraCounts read; the live rows (capped at 500 by
-  // fetchChainAccounts) are only a fallback for when that read is unavailable.
-  const users = inputs.counts ? inputs.counts.totalUsers : countsOk ? new Set(rows.map((r) => r.userId)).size : (lastGrowth?.users ?? 0);
-  const accounts = inputs.counts ? inputs.counts.totalAccounts : countsOk ? rows.length : (lastGrowth?.accounts ?? 0);
+  // otto/mamoru#130: a free-text ?account= narrows everything else below (funded/activated/tvl/breakdown)
+  // to the matching rows, so the headline users/accounts and the funnel's "Signed up" step (which reuses
+  // `users`) must scope the same way, or the funnel reads as a contradiction (fewer funded than signed up
+  // looks impossible once "signed up" silently means the whole environment instead of the match). `rows`
+  // is on-chain and capped at 500, but a free-text lookup is inherently narrow — it is meant to find one
+  // account, not to stand in for a cohort — so the cap is not the concern here that it is below.
+  const users = filter.account
+    ? new Set(rows.map((r) => r.userId)).size
+    : inputs.counts
+      ? inputs.counts.totalUsers
+      : (lastGrowth?.users ?? 0);
+  const accounts = filter.account ? rows.length : inputs.counts ? inputs.counts.totalAccounts : (lastGrowth?.accounts ?? 0);
   const breakdown = filter.group === "none" ? [] : breakdownOf(rows, filter.group);
 
   const value: ValuePoint[] = real

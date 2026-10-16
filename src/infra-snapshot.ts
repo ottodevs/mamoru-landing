@@ -100,7 +100,8 @@ export interface AccountView {
   inRange: number;
   /** True when a read this account's value depends on failed. Its numbers are then a floor, not a total. */
   unread?: boolean;
-  /** 'prod' | 'beta' (otto/mamoru#130). */
+  /** 'prod' | 'beta' (otto/mamoru#130): the host the account was *created* on, not where it is used now —
+   * see `AccountRow.env` in d1-infra.ts. */
   env: string;
   chainId: number;
   isTest: boolean;

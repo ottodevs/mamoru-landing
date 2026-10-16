@@ -16,7 +16,7 @@ import {
   niceCeilInt,
   shortDay,
 } from "../src/metrics-math";
-import { accountScopeSql, DEFAULT_FILTER } from "../src/account-filter";
+import { accountScopeSql, DEFAULT_FILTER, filterQuery, isFullyUnscoped, parseAccountFilter } from "../src/account-filter";
 import { fetchInfraCounts } from "../src/d1-infra";
 import { matchesFilter } from "../src/infra-snapshot";
 import { buildOverview, loadOverview } from "../src/metrics-overview";
@@ -326,9 +326,9 @@ describe("metrics-store.ts", () => {
     expect(outcome.row).toMatchObject({ day: TODAY, dau: 2, active_accounts: 3 });
     const writes = calls.filter((c) => c.kind === "run");
     // 5 backfill rows, the metrics_daily upsert, one metrics_daily_v2 row (every ROWS account is 8453/prod),
-    // then settleYesterday's metrics_daily UPDATE.
-    expect(writes).toHaveLength(8);
-    expect(writes.every((c) => /^(INSERT( OR IGNORE)? INTO|UPDATE) metrics_daily(_v2)?\b/.test(c.sql))).toBe(true);
+    // one metrics_daily_chain row, then settleYesterday's metrics_daily UPDATE and its metrics_daily_v2 sibling.
+    expect(writes).toHaveLength(10);
+    expect(writes.every((c) => /^(INSERT( OR IGNORE)? INTO|UPDATE) metrics_daily(_v2|_chain)?\b/.test(c.sql))).toBe(true);
     const upsert = writes[5];
     expect(upsert.sql).toContain("ON CONFLICT(day) DO UPDATE");
     expect(upsert.args[0]).toBe(TODAY);
@@ -337,14 +337,23 @@ describe("metrics-store.ts", () => {
     expect(upsertV2.sql).toContain("metrics_daily_v2");
     expect(upsertV2.sql).toContain("ON CONFLICT(day, chain_id, env) DO UPDATE");
     expect(upsertV2.args.slice(0, 3)).toEqual([TODAY, 8453, "prod"]);
-    expect(writes[7].args).toEqual([2, "2026-09-30"]);
+    // relayer_eth/eth_usd are not on this row at all (otto/mamoru#130): chain-level, written once below instead.
+    expect(upsertV2.sql).not.toContain("relayer_eth");
+    const upsertChain = writes[7];
+    expect(upsertChain.sql).toContain("metrics_daily_chain");
+    expect(upsertChain.args.slice(0, 2)).toEqual([TODAY, 8453]);
+    expect(writes[8].args).toEqual([2, "2026-09-30"]);
+    const settleV2 = writes[9];
+    expect(settleV2.sql).toContain("UPDATE metrics_daily_v2 SET dau");
+    expect(settleV2.args).toEqual([0, "2026-09-30", 8453, "prod"]);
   });
 
   test("captureDaily: a table with rows is not backfilled again", async () => {
     const { db, calls } = fakeDb({ first: (sql) => (sql.includes("FROM metrics_daily") ? { n: 12 } : { n: 0 }) });
     const outcome = await captureDaily({ db }, { now: NOW, load: async () => ({ snapshot: snap() }) });
     expect(outcome.ok && outcome.backfilled).toBe(0);
-    expect(calls.filter((c) => c.kind === "run")).toHaveLength(2);
+    // the metrics_daily upsert, one metrics_daily_v2 row, one metrics_daily_chain row; no settle (not asked for).
+    expect(calls.filter((c) => c.kind === "run")).toHaveLength(3);
   });
 
   test("captureDaily reports instead of throwing: no D1, unreadable counts, missing table", async () => {
@@ -371,10 +380,11 @@ describe("metrics-overview.ts", () => {
     expect(overview.changes.tvl?.delta.abs).toBeCloseTo(22.18, 6);
     expect(overview.changes.activated?.delta.abs).toBe(2);
     expect(overview.changes.users).toMatchObject({ since: "2026-09-24", exact: true });
-    // otto/mamoru#130: "users" is now the live, filtered account set (5 in ROWS), not the unfiltered
-    // historical growth curve this fixture's signups describe — hence the drop rather than a rise.
-    expect(overview.changes.users?.delta.abs).toBe(-25);
-    expect(changeLine(overview.changes.users, "int")).toBe("−25 in 7 days");
+    // otto/mamoru#130: without `inputs.counts`, "users" falls back to the uncapped growth series (39 today,
+    // the same series its 7-days-ago comparison already read) — not the live, on-chain `rows` (5 in ROWS),
+    // which would mix a capped/filtered snapshot into a delta computed against an unrelated, unfiltered history.
+    expect(overview.changes.users?.delta.abs).toBe(9);
+    expect(changeLine(overview.changes.users, "int")).toBe("+9 in 7 days");
     expect(changeLine(overview.changes.tvl, "usd")).toBe("+$22.18 (+74%) since 22 Sep");
     expect(changeLine(null, "int")).toBe("");
   });
@@ -391,8 +401,9 @@ describe("metrics-overview.ts", () => {
 
   test("funnel counts accounts, and Base being down falls back to the last capture", () => {
     const live = buildOverview(snap(), { daily: null, activity: null, signups: SIGNUPS }, NOW);
-    // otto/mamoru#130: "signed up" is now the live, filtered row count (5 in ROWS), not a.totalUsers.
-    expect(live.funnel.map((s) => s.count)).toEqual([5, 4, 3, 2]);
+    // otto/mamoru#130: without `inputs.counts`, "signed up" (= `users`) falls back to the uncapped growth
+    // series (39, from SIGNUPS), not the live, on-chain row count (5 in ROWS).
+    expect(live.funnel.map((s) => s.count)).toEqual([39, 4, 3, 2]);
     expect(live.positionsInRange).toBe(3);
     expect(live.positions).toBe(4);
 
@@ -407,6 +418,20 @@ describe("metrics-overview.ts", () => {
     expect(down.relayer).toBeNull();
     expect(down.notes.join(" ")).toContain("last capture");
     expectSoundMarkup(renderOverview({ overview: down, csrf: "c", nonce: "n" }).split('<main id="ops-main"')[1].split("<script")[0].replace(/^[^>]*>/, "").replace("</main>", ""));
+  });
+
+  test("?account= scopes the headline users/accounts and the funnel's 'Signed up' step the same way it scopes everything else (otto/mamoru#130)", () => {
+    const overview = buildOverview(
+      snap(),
+      { daily: null, activity: null, signups: SIGNUPS, counts: { totalUsers: 999, totalAccounts: 999, last7d: 999 } },
+      NOW,
+      undefined,
+      { ...DEFAULT_FILTER, account: "key-2" },
+    );
+    // Without the account filter, `inputs.counts` (999) would win; with it, the match (one account) does.
+    expect(overview.users).toBe(1);
+    expect(overview.accounts).toBe(1);
+    expect(overview.funnel[0]).toMatchObject({ label: "Signed up", count: 1 });
   });
 });
 
@@ -440,6 +465,21 @@ describe("account-filter.ts / otto/mamoru#130", () => {
     expect(accountScopeSql({ env: "beta", chainId: 8453 }, "a")).toEqual({ sql: "a.is_test = 0 AND a.env = ? AND a.chain_id = ?", params: ["beta", 8453] });
   });
 
+  test("isFullyUnscoped: true only for env=all with chain=all", () => {
+    expect(isFullyUnscoped({ env: "all", chainId: "all" })).toBe(true);
+    expect(isFullyUnscoped({ env: "all", chainId: 8453 })).toBe(false);
+    expect(isFullyUnscoped({ env: "prod", chainId: "all" })).toBe(false);
+    expect(isFullyUnscoped({ env: "test", chainId: "all" })).toBe(false);
+  });
+
+  test("filterQuery round-trips through parseAccountFilter; the default filter needs no query at all", () => {
+    expect(filterQuery(DEFAULT_FILTER)).toBe("");
+    const filter = { env: "beta" as const, chainId: 8453, account: "0xabc", group: "env" as const };
+    const query = filterQuery(filter);
+    expect(query).toBe("?env=beta&chain=8453&account=0xabc&group=env");
+    expect(parseAccountFilter(new URLSearchParams(query.slice(1)))).toEqual(filter);
+  });
+
   test("readSignupDays/readActivity fall back to the unfiltered query when is_test is not a column yet", async () => {
     const { db: scopedDb } = fakeDb({ missing: ["is_test"], tables: { users: SIGNUPS.users, accounts: SIGNUPS.accounts } });
     expect(await readSignupDays(scopedDb, { env: "prod", chainId: "all" })).toEqual({ users: SIGNUPS.users, accounts: SIGNUPS.accounts });
@@ -455,6 +495,25 @@ describe("account-filter.ts / otto/mamoru#130", () => {
     expect(await fetchInfraCounts(missing, { env: "prod", chainId: "all" })).toEqual({ totalUsers: 7, totalAccounts: 8, last7d: 1 });
     expect(await fetchInfraCounts(missing, { env: "beta", chainId: "all" })).toEqual({ totalUsers: 0, totalAccounts: 0, last7d: 0 });
     expect(await fetchInfraCounts(missing, { env: "test", chainId: "all" })).toEqual({ totalUsers: 0, totalAccounts: 0, last7d: 0 });
+  });
+
+  test("fetchInfraCounts: env=all with chain=all reads from `users` (a user without an account still counts); any narrower scope reads `accounts` instead", async () => {
+    const { db } = fakeDb({
+      first: (sql) => (sql.includes("FROM users") ? { total_users: 10, total_accounts: 9, last7d: 2 } : { total_users: 999, total_accounts: 999, last7d: 999 }),
+    });
+    expect(await fetchInfraCounts(db, { env: "all", chainId: "all" })).toEqual({ totalUsers: 10, totalAccounts: 9, last7d: 2 });
+    expect(await fetchInfraCounts(db, { env: "all", chainId: 8453 })).toEqual({ totalUsers: 999, totalAccounts: 999, last7d: 999 });
+    expect(await fetchInfraCounts(db, { env: "prod", chainId: "all" })).toEqual({ totalUsers: 999, totalAccounts: 999, last7d: 999 });
+  });
+
+  test("readSignupDays: env=all with chain=all reads the unfiltered users/accounts series; a narrower scope reads accounts only", async () => {
+    const UNFILTERED = { users: [{ day: "2026-09-01", n: 5 }], accounts: [{ day: "2026-09-01", n: 4 }] };
+    const { db } = fakeDb({ tables: { users: UNFILTERED.users, accounts: UNFILTERED.accounts } });
+    expect(await readSignupDays(db, { env: "all", chainId: "all" })).toEqual(UNFILTERED);
+    // A specific chain with env: "all" is necessarily accounts-based: both series come back as the `accounts`
+    // fixture (readSignupDays' scoped query reads only one table), unlike the fully unscoped case above.
+    const scoped = await readSignupDays(db, { env: "all", chainId: 8453 });
+    expect(scoped?.accounts).toEqual(UNFILTERED.accounts);
   });
 
   test("rowsFromSnapshotByGroup: one row per (chain, env), test accounts excluded; collapseDailyV2 sums them back by filter", () => {
@@ -477,11 +536,42 @@ describe("account-filter.ts / otto/mamoru#130", () => {
     expect(prod).toMatchObject({ day: TODAY, chain_id: 8453, accounts: 1, idle_usdc_usd: 2 });
     expect(beta).toMatchObject({ day: TODAY, chain_id: 8453, accounts: 1, idle_usdc_usd: 3 });
 
-    const asV2 = (r: DailyRow, env: string): DailyRowV2 => ({ ...r, chain_id: 8453, env });
+    // DailyRowV2 carries no relayer_eth/eth_usd (otto/mamoru#130: those are chain-level, in metrics_daily_chain).
+    const asV2 = (r: DailyRow, env: string): DailyRowV2 => {
+      const { relayer_eth: _relayerEth, eth_usd: _ethUsd, ...rest } = r;
+      return { ...rest, chain_id: 8453, env };
+    };
     const both = [asV2(daily("2026-09-30"), "prod"), asV2(daily("2026-09-30", { tvl_usd: 8, users: 2 }), "beta")];
-    expect(collapseDailyV2(both, { env: "all", chainId: "all" })[0]).toMatchObject({ tvl_usd: 48, users: 32 });
+    expect(collapseDailyV2(both, { env: "all", chainId: "all" })[0]).toMatchObject({ tvl_usd: 48, users: 32, relayer_eth: 0, eth_usd: 0 });
     expect(collapseDailyV2(both, { env: "prod", chainId: "all" })[0]).toMatchObject({ tvl_usd: 40, users: 30 });
     expect(collapseDailyV2(both, { env: "test", chainId: "all" })).toEqual([]);
+  });
+
+  test("rowsFromSnapshotByGroup: groupCounts (otto/mamoru#130) overrides the capped on-chain users/accounts, and adds a group the on-chain cap left out entirely", () => {
+    const snapshot = snap({
+      accounts: {
+        totalUsers: 1,
+        totalAccounts: 1,
+        last7d: 0,
+        rows: [acct(1, 2, 0, 0, 0, { env: "prod" })],
+        tvlUsd: 2,
+        idleUsdcUsd: 2,
+        lpUsd: 0,
+        gasReservesEth: 0,
+      },
+    });
+    const groupCounts = new Map([
+      ["8453:prod", { users: 900, accounts: 900 }],
+      ["8453:beta", { users: 40, accounts: 40 }],
+    ]);
+    const rows = rowsFromSnapshotByGroup(snapshot, TODAY, () => 0, groupCounts);
+    expect(rows).toHaveLength(2);
+    const prod = rows.find((r) => r.env === "prod")!;
+    const beta = rows.find((r) => r.env === "beta")!;
+    // The capped on-chain sample only had 1 prod row, but the uncapped grouped count wins.
+    expect(prod).toMatchObject({ accounts: 900, users: 900, idle_usdc_usd: 2 });
+    // A group fetchChainAccounts' cap left out of the on-chain sample entirely still gets a row.
+    expect(beta).toMatchObject({ accounts: 40, users: 40, idle_usdc_usd: 0, funded_accounts: 0 });
   });
 });
 
@@ -597,6 +687,17 @@ describe("ops-metrics.ts render", () => {
     expect(html.match(/<script/g)?.length).toBe(2);
     expect(html).toContain("prefers-reduced-motion");
     expect(html).not.toMatch(/https?:\/\/(?!www\.w3\.org|basescan\.org)/);
+  });
+
+  test("the refresh form carries the current filter on its action, so refreshing a non-default view does not silently repaint the default one (otto/mamoru#130)", () => {
+    const overview = buildOverview(snap(), { daily: null, activity: null, signups: SIGNUPS }, NOW, undefined, {
+      env: "beta",
+      chainId: 8453,
+      account: "key-2",
+      group: "env",
+    });
+    const html = renderOverview({ overview, csrf: "c", nonce: "n" });
+    expect(html).toContain('action="/ops/metrics/snapshot?env=beta&amp;chain=8453&amp;account=key-2&amp;group=env"');
   });
 });
 
