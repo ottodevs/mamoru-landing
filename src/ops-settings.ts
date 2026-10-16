@@ -129,7 +129,7 @@ export type SettingsPage = {
   draft: { env: Env; template: string; settings: EngineSettings; canary: string; reason: string };
   notice?: { text: string; tone?: "plain" | "bad" };
   /** A risky change waiting for a second yes: the lines to show and the exact set to confirm. */
-  confirm?: { risks: string[]; draft: SettingsPage["draft"]; rollbackOf?: number };
+  confirm?: { risks: string[]; draft: SettingsPage["draft"]; token: string; rollbackOf?: number };
 };
 
 export function settingsSection(p: SettingsPage): SectionView {
@@ -147,7 +147,7 @@ export function settingsSection(p: SettingsPage): SectionView {
       <p>This change, to ${esc(p.confirm.draft.env)}${p.confirm.draft.canary ? " (canary)" : ""}:</p>
       <ul>${p.confirm.risks.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
       <p class="soft">${esc(describeSettings(p.confirm.draft.settings))}</p>
-      <form method="post" action="/ops/settings/apply" data-ops-form>${csrfField(p.csrf)}${hiddenFields(p.confirm.draft.env, p.confirm.draft.template, p.confirm.draft.settings, p.confirm.draft.canary, p.confirm.draft.reason)}<input type="hidden" name="confirm" value="1" />${p.confirm.rollbackOf ? `<input type="hidden" name="rollback_of" value="${p.confirm.rollbackOf}" />` : ""}<button type="submit">Yes, apply it</button> <a href="/ops/settings">Cancel</a></form></section>`
+      <form method="post" action="/ops/settings/apply" data-ops-form>${csrfField(p.csrf)}${hiddenFields(p.confirm.draft.env, p.confirm.draft.template, p.confirm.draft.settings, p.confirm.draft.canary, p.confirm.draft.reason)}<input type="hidden" name="confirm_token" value="${esc(p.confirm.token)}" />${p.confirm.rollbackOf ? `<input type="hidden" name="rollback_of" value="${p.confirm.rollbackOf}" />` : ""}<button type="submit">Yes, apply it</button> <a href="/ops/settings">Cancel</a></form></section>`
     : "";
   return {
     section: "settings",

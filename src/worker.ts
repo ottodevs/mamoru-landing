@@ -84,8 +84,9 @@ import { handleExpEvent, recordWaitlistSubmit } from "./exp-events";
 import { loadExperimentReports } from "./exp-report";
 import { experimentsSection } from "./ops-experiments";
 import { settingsSection, type SettingsPage } from "./ops-settings";
+import { checkConfirmToken, issueConfirmToken, risksOf } from "./engine-settings-confirm";
 import { inEffect, appendVersion, listTemplates, listVersions, versionById, type Env as SettingsEnv } from "./engine-settings-store";
-import { DEFAULT_SETTINGS, canonicalJson, riskyChanges, settingsFromForm, validateSettings } from "./engine-settings-model";
+import { DEFAULT_SETTINGS, canonicalJson, settingsFromForm, validateSettings } from "./engine-settings-model";
 import { archiveTarget } from "./archive";
 import { archiveBar, archiveSection } from "./ops-archive";
 import {
@@ -704,10 +705,19 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     if (errors.length) return respond(await settingsView({ draft, notice: { text: `Not applied: ${errors.join("; ")}.`, tone: "bad" } }, 400));
     if (!draft.reason.trim()) return respond(await settingsView({ draft, notice: { text: "Not applied: say why.", tone: "bad" } }, 400));
     const accountKeys = draft.canary.split(/\s+/).map((k) => k.trim()).filter(Boolean);
-    // Risky against what those accounts run now: the environment-wide version (or the defaults).
-    const current = (await inEffect(db))[draft.env].wide?.settings ?? DEFAULT_SETTINGS;
-    const risks = riskyChanges(current, draft.settings);
-    if (risks.length && form.get("confirm") !== "1") return respond(await settingsView({ draft, confirm: { risks, draft, ...(rollbackOf ? { rollbackOf } : {}) } }));
+    // Risky against what each affected account runs now; a risky change needs the token the confirm screen issued
+    // for exactly this change, this session and the versions in effect then.
+    const now = (await inEffect(db))[draft.env];
+    const change = { env: draft.env, accountKeys: accountKeys.length ? accountKeys : null, template: draft.template, settings: draft.settings, rollbackOf: rollbackOf ?? null };
+    const risks = risksOf(change, now, DEFAULT_SETTINGS);
+    if (risks.length) {
+      const secret = env.OPS_SESSION_SECRET ?? "";
+      const token = String(form.get("confirm_token") ?? "");
+      if (!token || !(await checkConfirmToken(secret, session.csrf, token, change, now))) {
+        const issued = await issueConfirmToken(secret, session.csrf, change, now);
+        return respond(await settingsView({ draft, confirm: { risks, draft, token: issued, ...(rollbackOf ? { rollbackOf } : {}) } }));
+      }
+    }
     try {
       const id = await appendVersion(db, { env: draft.env, accountKeys: accountKeys.length ? accountKeys : null, template: draft.template, settings: draft.settings, author: session.email, reason: draft.reason, rollbackOf: rollbackOf ?? null });
       const text = `Version ${id} written for ${draft.env}${accountKeys.length ? ` (canary, ${accountKeys.length} account(s))` : ""}. The operator applies it within a minute.`;

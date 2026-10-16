@@ -61,6 +61,11 @@ function formFor(s: EngineSettings, extra: Record<string, string>): URLSearchPar
   });
 }
 
+/** Submits the confirm screen exactly as the browser would: every hidden field it rendered. */
+function confirmBodyOf(html: string): URLSearchParams {
+  return new URLSearchParams([...html.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)" \/>/g)].map((m) => [m[1]!, m[2]!.replace(/&amp;/g, "&").replace(/&quot;/g, '"')]));
+}
+
 const DEPTH: EngineSettings = { ...DEFAULT_SETTINGS, depth: { impactBps: 30, shareBps: 500, stablesImpactBps: 5 }, capUsdc: 1000 };
 
 describe("engine settings model (copy of packages/policy/src/engine-settings.ts)", () => {
@@ -112,7 +117,7 @@ describe("/ops/settings (spec 006)", () => {
     expect(first).toContain("Confirm this change");
     expect(first).toContain("cap per account rises from 100 to 1000 USDC");
     expect(await listVersions(db)).toEqual([]);
-    const done = await (await worker.fetch(post("/ops/settings/apply", formFor(DEPTH, { csrf, confirm: "1" }), cookie), env)).text();
+    const done = await (await worker.fetch(post("/ops/settings/apply", confirmBodyOf(first), cookie), env)).text();
     expect(done).toContain("Version 1 written for prod");
     const [v] = (await listVersions(db))!;
     expect(v!.settings).toEqual(DEPTH);
@@ -156,7 +161,7 @@ describe("/ops/settings review fixes (spec 006)", () => {
     const loose: EngineSettings = { ...DEPTH, depth: { impactBps: 30, shareBps: 500 } };
     const ask = await (await worker.fetch(post("/ops/settings/apply", formFor(loose, { csrf, template: "conservador + depth 30/500/5, cap 1000" }), cookie), env)).text();
     expect(ask).toContain("stables entries may move the pool price more");
-    await worker.fetch(post("/ops/settings/apply", formFor(loose, { csrf, template: "conservador + depth 30/500/5, cap 1000", confirm: "1" }), cookie), env);
+    await worker.fetch(post("/ops/settings/apply", confirmBodyOf(ask), cookie), env);
     expect((await listVersions(db))![0]!.template).toBe("custom (from conservador + depth 30/500/5, cap 1000)");
   });
 
@@ -224,3 +229,51 @@ describe("/ops/settings review round 2 (spec 006)", () => {
     expect(res.status).not.toBe(500);
   });
 });
+
+describe('/ops/settings confirm token (spec 006, Sol review)', () => {
+  const KEY_A = '11111111-aaaa-4bbb-8ccc-000000000001'
+  const KEY_B = '11111111-aaaa-4bbb-8ccc-000000000002'
+
+  test('confirm=1 on the first POST never writes a risky change', async () => {
+    const db = memoryDb()
+    const { env, cookie } = await opsEnv(db)
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/settings', cookie), env)).text())
+    const html = await (await worker.fetch(post('/ops/settings/apply', formFor(DEPTH, { csrf, confirm: '1' }), cookie), env)).text()
+    expect(html).toContain('Confirm this change')
+    expect(await listVersions(db)).toEqual([])
+  })
+
+  test('a token issued for one change does not confirm another, nor survives a change in what is in effect', async () => {
+    const db = memoryDb()
+    const { env, cookie } = await opsEnv(db)
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/settings', cookie), env)).text())
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor(DEPTH, { csrf }), cookie), env)).text()
+    const body = confirmBodyOf(ask)
+    const bigger = new URLSearchParams(body)
+    bigger.set('cap', '5000')
+    await worker.fetch(post('/ops/settings/apply', bigger, cookie), env)
+    expect(await listVersions(db)).toEqual([])
+    await appendVersion(db, { env: 'prod', accountKeys: null, template: 'meanwhile', settings: DEFAULT_SETTINGS, author: 'y', reason: 'r' })
+    const res = await (await worker.fetch(post('/ops/settings/apply', body, cookie), env)).text()
+    expect(res).toContain('Confirm this change')
+    expect((await listVersions(db))!.map((v) => v.template)).toEqual(['meanwhile'])
+  })
+
+  test('a canary is compared with what its accounts run now, and accounts leaving the old canary are counted', async () => {
+    const db = memoryDb()
+    await appendVersion(db, { env: 'prod', accountKeys: null, template: 'wide', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    await appendVersion(db, { env: 'prod', accountKeys: [KEY_A, KEY_B], template: 'old canary', settings: DEPTH, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/settings', cookie), env)).text())
+    // New canary on A only, with today's defaults: A turns depth sizing off (it ran the old canary), and B leaves the
+    // old canary for the wide version, which turns depth sizing off for B too. Both are named; nothing is written yet.
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, canary: KEY_A }), cookie), env)).text()
+    expect(ask).toContain('depth sizing turns off (canary accounts already in the current canary)')
+    expect(ask).toContain('depth sizing turns off (accounts leaving the current canary)')
+    expect((await listVersions(db))!.map((v) => v.template)).toEqual(['old canary', 'wide'])
+    // A cap raise on an account outside every canary is compared with the wide version.
+    const KEY_C = '11111111-aaaa-4bbb-8ccc-000000000003'
+    const ask2 = await (await worker.fetch(post('/ops/settings/apply', formFor(DEPTH, { csrf, canary: KEY_C }), cookie), env)).text()
+    expect(ask2).toContain('cap per account rises from 100 to 1000 USDC (canary accounts)')
+  })
+})
