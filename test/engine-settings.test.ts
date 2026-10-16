@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import type { D1Db } from "../src/d1-infra";
 import { BOUNDS, DEFAULT_SETTINGS, canonicalJson, riskyChanges, settingsFromForm, validateSettings, type EngineSettings } from "../src/engine-settings-model";
-import { appendVersion, listVersions } from "../src/engine-settings-store";
+import { appendVersion, listVersions, maxIdOf, SettingsConflict, type NewVersion } from "../src/engine-settings-store";
 import { sealSession } from "../src/ops";
 import worker, { type Env } from "../src/worker";
 
@@ -24,6 +24,11 @@ function memoryDb(withSchema = true): D1Db & { raw: Database } {
     run: async () => db.query(sql).run(...(values as never[])),
   });
   return { raw: db, prepare: (sql: string) => stmt(sql) };
+}
+
+/** A version written as another writer would: against the env's newest id at that moment. */
+async function seed(db: D1Db, v: NewVersion): Promise<number> {
+  return appendVersion(db, { ...v, expectedMaxId: await maxIdOf(db, v.env) });
 }
 
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
@@ -137,8 +142,8 @@ describe("/ops/settings (spec 006)", () => {
 
   test("rollback writes a new, higher version that copies the old one; turning the guard off needs a confirm", async () => {
     const db = memoryDb();
-    await appendVersion(db, { env: "prod", accountKeys: null, template: "a", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
-    await appendVersion(db, { env: "prod", accountKeys: null, template: "b", settings: { ...DEFAULT_SETTINGS, guard: { ...DEFAULT_SETTINGS.guard, enabled: true } }, author: "x", reason: "r" });
+    await seed(db, { env: "prod", accountKeys: null, template: "a", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    await seed(db, { env: "prod", accountKeys: null, template: "b", settings: { ...DEFAULT_SETTINGS, guard: { ...DEFAULT_SETTINGS.guard, enabled: true } }, author: "x", reason: "r" });
     const { env, cookie } = await opsEnv(db);
     const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
     const ask = await (await worker.fetch(post("/ops/settings/rollback", new URLSearchParams({ csrf, id: "1", reason: "back" }), cookie), env)).text();
@@ -155,7 +160,7 @@ describe("/ops/settings (spec 006)", () => {
 describe("/ops/settings review fixes (spec 006)", () => {
   test("dropping the stables value is a risky change; an edited preset is not recorded under the preset's name", async () => {
     const db = memoryDb();
-    await appendVersion(db, { env: "prod", accountKeys: null, template: "conservador + depth 30/500/5, cap 1000", settings: DEPTH, author: "x", reason: "r" });
+    await seed(db, { env: "prod", accountKeys: null, template: "conservador + depth 30/500/5, cap 1000", settings: DEPTH, author: "x", reason: "r" });
     const { env, cookie } = await opsEnv(db);
     const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
     const loose: EngineSettings = { ...DEPTH, depth: { impactBps: 30, shareBps: 500 } };
@@ -167,7 +172,7 @@ describe("/ops/settings review fixes (spec 006)", () => {
 
   test("a rollback_of that does not match the submitted settings is not recorded", async () => {
     const db = memoryDb();
-    await appendVersion(db, { env: "prod", accountKeys: null, template: "a", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    await seed(db, { env: "prod", accountKeys: null, template: "a", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
     const { env, cookie } = await opsEnv(db);
     const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
     await worker.fetch(post("/ops/settings/apply", formFor(DEPTH, { csrf, confirm: "1", rollback_of: "1" }), cookie), env);
@@ -176,8 +181,8 @@ describe("/ops/settings review fixes (spec 006)", () => {
 
   test("the version in effect is found even behind a long history of the other env", async () => {
     const db = memoryDb();
-    await appendVersion(db, { env: "prod", accountKeys: null, template: "prod-wide", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
-    for (let i = 0; i < 60; i++) await appendVersion(db, { env: "beta", accountKeys: null, template: `b${i}`, settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    await seed(db, { env: "prod", accountKeys: null, template: "prod-wide", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    for (let i = 0; i < 60; i++) await seed(db, { env: "beta", accountKeys: null, template: `b${i}`, settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
     const { env, cookie } = await opsEnv(db);
     const html = await (await worker.fetch(get("/ops/settings", cookie), env)).text();
     expect(html).toContain("prod-wide");
@@ -200,7 +205,7 @@ describe("/ops/settings review round 2 (spec 006)", () => {
 
   test("a rollback link is kept only for the same scope", async () => {
     const db = memoryDb();
-    await appendVersion(db, { env: "prod", accountKeys: [KEY_A], template: "c", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    await seed(db, { env: "prod", accountKeys: [KEY_A], template: "c", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
     const { env, cookie } = await opsEnv(db);
     const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
     await worker.fetch(post("/ops/settings/apply", formFor(DEFAULT_SETTINGS, { csrf, confirm: "1", rollback_of: "1" }), cookie), env);
@@ -211,10 +216,10 @@ describe("/ops/settings review round 2 (spec 006)", () => {
 
   test("the live canary is shown even behind a long history, and only the newest one", async () => {
     const db = memoryDb();
-    await appendVersion(db, { env: "prod", accountKeys: null, template: "wide", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
-    await appendVersion(db, { env: "prod", accountKeys: [KEY_A], template: "old-canary", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
-    await appendVersion(db, { env: "prod", accountKeys: [KEY_A], template: "live-canary", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
-    for (let i = 0; i < 60; i++) await appendVersion(db, { env: "beta", accountKeys: null, template: `b${i}`, settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    await seed(db, { env: "prod", accountKeys: null, template: "wide", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    await seed(db, { env: "prod", accountKeys: [KEY_A], template: "old-canary", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    await seed(db, { env: "prod", accountKeys: [KEY_A], template: "live-canary", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
+    for (let i = 0; i < 60; i++) await seed(db, { env: "beta", accountKeys: null, template: `b${i}`, settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
     const { env, cookie } = await opsEnv(db);
     const html = await (await worker.fetch(get("/ops/settings", cookie), env)).text();
     const inEffect = html.slice(html.indexOf('id="set-active"'), html.indexOf('id="set-edit"'));
@@ -253,7 +258,7 @@ describe('/ops/settings confirm token (spec 006, Sol review)', () => {
     bigger.set('cap', '5000')
     await worker.fetch(post('/ops/settings/apply', bigger, cookie), env)
     expect(await listVersions(db)).toEqual([])
-    await appendVersion(db, { env: 'prod', accountKeys: null, template: 'meanwhile', settings: DEFAULT_SETTINGS, author: 'y', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: null, template: 'meanwhile', settings: DEFAULT_SETTINGS, author: 'y', reason: 'r' })
     const res = await (await worker.fetch(post('/ops/settings/apply', body, cookie), env)).text()
     expect(res).toContain('Confirm this change')
     expect((await listVersions(db))!.map((v) => v.template)).toEqual(['meanwhile'])
@@ -261,8 +266,8 @@ describe('/ops/settings confirm token (spec 006, Sol review)', () => {
 
   test('a canary is compared with what its accounts run now, and accounts leaving the old canary are counted', async () => {
     const db = memoryDb()
-    await appendVersion(db, { env: 'prod', accountKeys: null, template: 'wide', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
-    await appendVersion(db, { env: 'prod', accountKeys: [KEY_A, KEY_B], template: 'old canary', settings: DEPTH, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: null, template: 'wide', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: [KEY_A, KEY_B], template: 'old canary', settings: DEPTH, author: 'x', reason: 'r' })
     const { env, cookie } = await opsEnv(db)
     const csrf = csrfOf(await (await worker.fetch(get('/ops/settings', cookie), env)).text())
     // New canary on A only, with today's defaults: A turns depth sizing off (it ran the old canary), and B leaves the
@@ -275,5 +280,40 @@ describe('/ops/settings confirm token (spec 006, Sol review)', () => {
     const KEY_C = '11111111-aaaa-4bbb-8ccc-000000000003'
     const ask2 = await (await worker.fetch(post('/ops/settings/apply', formFor(DEPTH, { csrf, canary: KEY_C }), cookie), env)).text()
     expect(ask2).toContain('cap per account rises from 100 to 1000 USDC (canary accounts)')
+  })
+})
+
+describe('/ops/settings writes are atomic against what was checked (spec 006, Sol round 3)', () => {
+  test('the guarded insert refuses when the env moved after the check', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'a', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    const checked = await maxIdOf(db, 'prod')
+    await seed(db, { env: 'prod', accountKeys: null, template: 'other writer', settings: DEFAULT_SETTINGS, author: 'y', reason: 'r' })
+    await expect(appendVersion(db, { env: 'prod', accountKeys: null, template: 'late', settings: DEPTH, author: 'x', reason: 'r', expectedMaxId: checked })).rejects.toBeInstanceOf(SettingsConflict)
+    expect((await listVersions(db))!.map((v) => v.template)).toEqual(['other writer', 'a'])
+    // A write in the other env does not block this one.
+    await seed(db, { env: 'beta', accountKeys: null, template: 'beta', settings: DEFAULT_SETTINGS, author: 'z', reason: 'r' })
+    expect(await appendVersion(db, { env: 'prod', accountKeys: null, template: 'now', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r', expectedMaxId: await maxIdOf(db, 'prod') })).toBeGreaterThan(0)
+  })
+
+  test('a non-risky change raced by another writer is not written and asks for review (409)', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'cap 1000', settings: DEPTH, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/settings', cookie), env)).text())
+    // 1000 -> 500 needs no confirm; another writer lowers it to 50 between our check and our insert.
+    const orig = db.prepare.bind(db)
+    let raced = false
+    db.prepare = ((sql: string) => {
+      if (!raced && sql.startsWith('INSERT INTO engine_settings_versions')) {
+        raced = true
+        db.raw.query(`INSERT INTO engine_settings_versions (env, account_keys_json, template, settings_json, settings_hash, author, reason, created_at, rollback_of) VALUES ('prod', NULL, 'cap 50', ?, 'h', 'y', 'r', '2026-10-17T00:00:00Z', NULL)`).run(JSON.stringify({ ...DEPTH, capUsdc: 50 }))
+      }
+      return orig(sql)
+    }) as typeof db.prepare
+    const res = await worker.fetch(post('/ops/settings/apply', formFor({ ...DEPTH, capUsdc: 500 }, { csrf }), cookie), env)
+    expect(res.status).toBe(409)
+    expect(await res.text()).toContain('changed the settings of this environment meanwhile')
+    expect((await listVersions(db))!.map((v) => v.template)).toEqual(['cap 50', 'cap 1000'])
   })
 })

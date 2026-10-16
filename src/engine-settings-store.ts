@@ -131,32 +131,60 @@ export async function versionById(db: D1Db, id: number): Promise<VersionRow | nu
   return r ? toVersion(r) : null;
 }
 
+/** The newest version id of an env (any scope), 0 when none: what a write is checked against. */
+export async function maxIdOf(db: D1Db, env: Env): Promise<number> {
+  try {
+    const r = await db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM engine_settings_versions WHERE env = ?").bind(env).first<{ id: number }>();
+    return r?.id ?? 0;
+  } catch (e) {
+    if (missingTable(e)) return 0;
+    throw e;
+  }
+}
+
+/** Thrown when another version of the env was written after the one the change was checked against. */
+export class SettingsConflict extends Error {}
+
 export type NewVersion = { env: Env; accountKeys: string[] | null; template: string; settings: EngineSettings; author: string; reason: string; rollbackOf?: number | null };
 
 /** Appends one version. Refuses settings out of bounds and an empty reason; returns the new id. */
-export async function appendVersion(db: D1Db, v: NewVersion, now: Date = new Date()): Promise<number> {
+/**
+ * Appends one version, only if the env has not moved since `expectedMaxId` (the newest id of the env when its risks
+ * were checked and confirmed). The check and the insert are one SQL statement, so no other writer can land between
+ * them; when the env moved, nothing is written and SettingsConflict is thrown, so the change is checked again.
+ */
+export async function appendVersion(db: D1Db, v: NewVersion & { expectedMaxId: number }, now: Date = new Date()): Promise<number> {
   const errors = validateSettings(v.settings);
   if (errors.length) throw new Error(errors.join("; "));
   if (!v.reason.trim()) throw new Error("a reason is required");
   if (v.env !== "prod" && v.env !== "beta") throw new Error("env must be prod or beta");
   if (v.accountKeys !== null && (!v.accountKeys.length || v.accountKeys.some((k) => !/^[0-9a-f-]{8,64}$/i.test(k)))) throw new Error("canary account keys look wrong");
   const accountKeys = v.accountKeys === null ? null : [...new Set(v.accountKeys.map((k) => k.toLowerCase()))];
+  const hash = await settingsHash(v.settings);
+  const createdAt = now.toISOString();
   const stmt = db
     .prepare(
-      "INSERT INTO engine_settings_versions (env, account_keys_json, template, settings_json, settings_hash, author, reason, created_at, rollback_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO engine_settings_versions (env, account_keys_json, template, settings_json, settings_hash, author, reason, created_at, rollback_of) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COALESCE(MAX(id), 0) FROM engine_settings_versions WHERE env = ?) = ?",
     )
     .bind(
       v.env,
       accountKeys === null ? null : JSON.stringify(accountKeys),
       v.template.slice(0, 120),
       canonicalJson(v.settings),
-      await settingsHash(v.settings),
+      hash,
       v.author,
       v.reason.trim().slice(0, 500),
-      now.toISOString(),
+      createdAt,
       v.rollbackOf ?? null,
+      v.env,
+      v.expectedMaxId,
     ) as WriteStatement;
   await stmt.run();
-  const row = await db.prepare("SELECT MAX(id) AS id FROM engine_settings_versions").first<{ id: number }>();
-  return row?.id ?? 0;
+  // The first row of the env after the expected id is ours exactly when the guarded insert ran.
+  const row = await db
+    .prepare("SELECT id, settings_hash, author, created_at FROM engine_settings_versions WHERE env = ? AND id > ? ORDER BY id LIMIT 1")
+    .bind(v.env, v.expectedMaxId)
+    .first<{ id: number; settings_hash: string; author: string; created_at: string }>();
+  if (!row || row.settings_hash !== hash || row.author !== v.author || row.created_at !== createdAt) throw new SettingsConflict("the settings of this environment changed meanwhile");
+  return row.id;
 }
