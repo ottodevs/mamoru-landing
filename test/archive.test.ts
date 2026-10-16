@@ -49,7 +49,7 @@ describe("archive manifest", () => {
       expect(html).not.toContain("/_astro/");
       const refs = [...html.matchAll(/(?:href|src)="(\/[^"]*\.(?:png|webp|svg|ttf|woff2?|jpe?g))"|url\((\/[^)]+)\)/g)].map((m) => m[1] ?? m[2]);
       for (const ref of refs) {
-        expect(ref.startsWith("/ops/archive/assets/")).toBe(true);
+        expect(archiveTarget(ref)).toEqual({ kind: "asset", asset: ref });
         expect(existsSync(`public${ref}`)).toBe(true);
       }
       if (s.static) expect(html).not.toContain("<script");

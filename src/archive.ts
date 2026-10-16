@@ -89,7 +89,7 @@ export const LIVE: readonly { kind: ArchiveKind; title: string; href: string; si
 
 export const ARCHIVE_PREFIX = "/ops/archive";
 
-const ASSET_NAME = /^[a-z0-9][a-z0-9._-]*\.(css|png|webp|jpe?g|svg|ttf|woff2?)$/i;
+export const ASSET_NAME = /^[a-z0-9][a-z0-9._-]*\.(css|png|webp|jpe?g|svg|ttf|woff2?)$/i;
 
 export type ArchiveTarget = { kind: "list" } | { kind: "missing" } | { kind: "page"; snapshot: ArchiveSnapshot; asset: string } | { kind: "asset"; asset: string };
 

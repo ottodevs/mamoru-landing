@@ -13,7 +13,7 @@ import { $ } from "bun";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, rmSync, symlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
-import { ARCHIVE, ARCHIVE_PREFIX, type ArchiveSnapshot } from "../src/archive";
+import { ARCHIVE, ARCHIVE_PREFIX, ASSET_NAME, type ArchiveSnapshot } from "../src/archive";
 
 const root = (await $`git rev-parse --show-toplevel`.text()).trim();
 const outRoot = join(root, "public", "ops", "archive");
@@ -47,6 +47,8 @@ function keepAsset(dist: string, ref: string): string {
   const source = join(dist, clean);
   if (!existsSync(source)) throw new Error(`missing asset ${clean}`);
   const name = basename(clean);
+  // The Worker serves only names it can match (src/archive.ts); anything else would 404 at runtime.
+  if (!ASSET_NAME.test(name)) throw new Error(`asset name the archive cannot serve: ${name}`);
   const target = join(assetsDir, name);
   if (existsSync(target) && !readFileSync(target).equals(readFileSync(source))) {
     throw new Error(`asset name clash: ${name} differs from the one already archived`);
@@ -81,7 +83,6 @@ async function snapshot(entry: ArchiveSnapshot): Promise<void> {
     const css = readFileSync(join(dist, href), "utf8");
     return `<style>${css}</style>`;
   });
-  if (/\/_astro\//.test(html)) throw new Error(`${entry.id}: a /_astro reference is left after inlining`);
 
   if (entry.static) {
     html = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
@@ -90,6 +91,8 @@ async function snapshot(entry: ArchiveSnapshot): Promise<void> {
   }
 
   html = relink(html, dist);
+  // Checked after relink: an inlined stylesheet may point at a bundled file that relink has just copied.
+  if (/\/_astro\//.test(html)) throw new Error(`${entry.id}: a /_astro reference is left after inlining`);
   html = html.replace(/<head>/i, '<head><meta name="robots" content="noindex, nofollow">');
 
   mkdirSync(join(outRoot, entry.id), { recursive: true });
