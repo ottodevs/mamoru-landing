@@ -45,6 +45,7 @@ import {
 } from "./cost";
 import { type PoolState, priceOfBaseInQuote, sameAddress, valuePosition } from "./uniswap-math";
 import { type AccountRow, type D1Db, fetchChainAccounts, fetchInfraCounts } from "./d1-infra";
+import type { AccountFilter } from "./account-filter";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
@@ -85,7 +86,11 @@ export interface CostView {
 }
 
 export interface AccountView {
+  /** Display-truncated (otto/mamoru#130's filter matches on the full `key` below instead). */
   accountKey: string;
+  /** The full account_key, for matching ?account= (otto/mamoru#130). Never shown as-is. */
+  key: string;
+  userId: string;
   address: string;
   basescanUrl: string;
   ethBalance: number;
@@ -95,6 +100,28 @@ export interface AccountView {
   inRange: number;
   /** True when a read this account's value depends on failed. Its numbers are then a floor, not a total. */
   unread?: boolean;
+  /** 'prod' | 'beta' (otto/mamoru#130): the host the account was *created* on, not where it is used now —
+   * see `AccountRow.env` in d1-infra.ts. */
+  env: string;
+  chainId: number;
+  isTest: boolean;
+}
+
+/** Whether an account belongs in a filtered view (otto/mamoru#130). `env: 'test'` matches is_test regardless
+ * of the account's prod/beta env; 'prod'/'beta' both exclude test accounts; 'all' excludes nothing. */
+export function matchesFilter(row: Pick<AccountView, "env" | "chainId" | "isTest" | "key" | "address">, filter: AccountFilter): boolean {
+  if (filter.env === "test") {
+    if (!row.isTest) return false;
+  } else if (filter.env !== "all") {
+    if (row.isTest) return false;
+    if (row.env !== filter.env) return false;
+  }
+  if (filter.chainId !== "all" && row.chainId !== filter.chainId) return false;
+  if (filter.account) {
+    const needle = filter.account.toLowerCase();
+    if (!row.key.toLowerCase().includes(needle) && !row.address.toLowerCase().includes(needle)) return false;
+  }
+  return true;
 }
 
 export type UnreadPart = "prices" | "balances" | "positions" | "pools";
@@ -381,6 +408,8 @@ async function valueAccounts(
     const lp = perAccountLp.get(i) ?? { usd: 0, count: 0, inRange: 0 };
     const row: AccountView = {
       accountKey: shortKey(acc.account_key),
+      key: acc.account_key,
+      userId: acc.user_id,
       address: acc.address,
       basescanUrl: basescanAddress(acc.address),
       ethBalance: weiToEth(b.ethWei),
@@ -388,6 +417,9 @@ async function valueAccounts(
       lpUsd: lp.usd,
       positions: lp.count,
       inRange: lp.inRange,
+      env: acc.env,
+      chainId: acc.chain_id,
+      isTest: acc.is_test === 1,
     };
     if (unread.has(i)) row.unread = true;
     return row;

@@ -1,5 +1,7 @@
 /** Renders /ops, the metrics overview. Pure string building over an Overview model. */
 
+import { CHAIN_ID } from "./chain-addresses";
+import { filterQuery } from "./account-filter";
 import { renderBars, renderFunnel, renderTally, renderTimeChart } from "./metrics-charts";
 import { dauSlots, fmtInt, fmtUsd, shortDay } from "./metrics-math";
 import { DAU_DAYS, type Change, type Overview } from "./metrics-overview";
@@ -82,6 +84,51 @@ function table(summary: string, head: string[], rows: string[][]): string {
   const th = head.map((h) => `<th>${esc(h)}</th>`).join("");
   const body = rows.map((row) => `<tr>${row.map((cell) => `<td>${esc(cell)}</td>`).join("")}</tr>`).join("");
   return `<details class="tbl"><summary>${esc(summary)}</summary><table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></details>`;
+}
+
+const sel = (value: string, current: string): string => (value === current ? " selected" : "");
+
+/**
+ * otto/mamoru#130: env/chain/account filters plus the group-by toggle, as a plain GET form against /ops.
+ * No `data-ops-form` (that attribute is for POSTs the router fragment-swaps): a GET here is an ordinary
+ * navigation, which the router's own link-click handling already fragment-swaps once it lands.
+ */
+function filterBar(o: Overview): string {
+  const f = o.filter;
+  const chainVal = f.chainId === "all" ? "all" : String(f.chainId);
+  return `<form class="ops-filter" method="get" action="/ops" aria-label="Filter the figures below">
+    <label>Environment<select name="env">
+      <option value="prod"${sel("prod", f.env)}>Production</option>
+      <option value="beta"${sel("beta", f.env)}>Beta</option>
+      <option value="test"${sel("test", f.env)}>Test</option>
+      <option value="all"${sel("all", f.env)}>All</option>
+    </select></label>
+    <label>Chain<select name="chain">
+      <option value="all"${sel("all", chainVal)}>All chains</option>
+      <option value="${CHAIN_ID}"${sel(String(CHAIN_ID), chainVal)}>Base (${CHAIN_ID})</option>
+    </select></label>
+    <label>Account<input type="text" name="account" value="${esc(f.account ?? "")}" placeholder="key or address" /></label>
+    <label>Group by<select name="group">
+      <option value="none"${sel("none", f.group)}>&mdash;</option>
+      <option value="chain"${sel("chain", f.group)}>Chain</option>
+      <option value="env"${sel("env", f.group)}>Environment</option>
+    </select></label>
+    <button type="submit">Apply</button>
+  </form>`;
+}
+
+/** otto/mamoru#130: today's filtered accounts split by chain or by environment. Empty when ungrouped. */
+function breakdownSection(o: Overview): string {
+  if (!o.breakdown.length) return "";
+  const by = o.filter.group === "chain" ? "Chain" : "Environment";
+  return `<section class="sec full" style="--s:0ms">
+    <div class="sec-head"><h2>By ${esc(by.toLowerCase())}</h2></div>
+    ${table(
+      by,
+      [by, "Accounts", "Users", "Funded", "Activated", "Value held"],
+      o.breakdown.map((g) => [g.label, fmtInt(g.accounts), fmtInt(g.users), fmtInt(g.funded), fmtInt(g.activated), fmtUsd(g.tvl)]),
+    )}
+  </section>`;
 }
 
 function valueSection(o: Overview): string {
@@ -209,10 +256,15 @@ export function overviewSection(o: Overview, csrf: string): SectionView {
   const notes = o.notes.length
     ? `<div class="notes soft">${o.notes.map((note) => `<p>${esc(note)}</p>`).join("")}</div>`
     : "";
+  // otto/mamoru#130: the refresh form posts to a fixed action with no query string of its own (it is not
+  // the page's own URL) — carrying the current filter on the action itself is what keeps a refresh from
+  // silently repainting the default prod/all view out from under a reader looking at env=beta or similar.
+  const refreshAction = `/ops/metrics/snapshot${filterQuery(o.filter)}`;
   return {
     section: "overview",
     title: "Overview",
-    html: `${pageHead({ title: "Overview", asOf: o.asOf, refresh: { action: "/ops/metrics/snapshot", csrf } })}
+    html: `${pageHead({ title: "Overview", asOf: o.asOf, refresh: { action: refreshAction, csrf } })}
+    ${filterBar(o)}
     ${notes}
     ${figures(o)}
     <div class="cols">
@@ -221,6 +273,7 @@ export function overviewSection(o: Overview, csrf: string): SectionView {
       ${growthSection(o)}
       ${dauSection(o)}
       ${runwaySection(o)}
+      ${breakdownSection(o)}
     </div>`,
   };
 }

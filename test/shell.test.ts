@@ -111,6 +111,11 @@ for (const [name, R] of [["module", opsRouterLogic()], ["shipped inline script",
       expect(R.routeKey("https://mamoru.lol/ops/infra?fresh=1", ORIGIN)).toBe("/ops/infra");
       expect(R.routeKey("/ops/mails/", ORIGIN)).toBe("/ops/mails");
       expect(R.routeKey("https://mamoru.lol/deck", ORIGIN)).toBeNull();
+      // otto/mamoru#130: every filter param is part of the key, so env=beta never paints from env=prod's
+      // cache entry; fresh=1 alone still collapses onto the plain page.
+      expect(R.routeKey("https://mamoru.lol/ops?env=beta", ORIGIN)).toBe("/ops?env=beta");
+      expect(R.routeKey("https://mamoru.lol/ops?env=beta&fresh=1", ORIGIN)).toBe("/ops?env=beta");
+      expect(R.routeKey("https://mamoru.lol/ops?env=beta", ORIGIN)).not.toBe(R.routeKey("https://mamoru.lol/ops", ORIGIN));
       expect(R.wantsFresh("/ops/infra?fresh=1", ORIGIN)).toBe(true);
       expect(R.wantsFresh("/ops/infra", ORIGIN)).toBe(false);
     });
@@ -383,11 +388,18 @@ describe("forms posted by fetch", () => {
     for (const s of SECTIONS) {
       const view = (await (await worker.fetch(get(s.path, { cookie, "x-ops-fragment": "1" }), env)).json()) as { html: string };
       const forms = view.html.match(/<form [^>]*>/g) ?? [];
-      for (const form of forms) {
+      // otto/mamoru#130's filter bar is a plain GET: a real navigation the router never fragment-posts, so it
+      // carries no csrf token and no data-ops-form. Every other form keeps the original invariant.
+      const [getForms, postForms] = [forms.filter((f) => f.includes('method="get"')), forms.filter((f) => !f.includes('method="get"'))];
+      for (const form of getForms) {
+        expect(form).not.toContain("data-ops-form");
+        expect(form).not.toContain("csrf");
+      }
+      for (const form of postForms) {
         expect(form).toContain('method="post"');
         expect(form).toContain("data-ops-form");
       }
-      expect(view.html.match(/name="csrf"/g)?.length ?? 0).toBe(forms.length);
+      expect(view.html.match(/name="csrf"/g)?.length ?? 0).toBe(postForms.length);
     }
   });
 });

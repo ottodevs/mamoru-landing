@@ -72,6 +72,7 @@ import {
   type Flash,
 } from "./ops";
 import { infraSection } from "./ops-infra";
+import { parseAccountFilter } from "./account-filter";
 import { loadInfraReading } from "./infra-cache";
 import { captureDaily } from "./metrics-store";
 import { loadOverview } from "./metrics-overview";
@@ -586,9 +587,12 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
       flashCookie("", secure),
     ]);
   };
+  // otto/mamoru#130: the filter is read fresh from the query string on every call, never cached — it is cheap
+  // (it narrows D1 queries and filters the already-fetched snapshot) and must never serve one reader's
+  // env=beta selection to another's default view.
   const overviewView = async (fresh: boolean): Promise<SectionView> => {
     const reading = await loadInfraReading(sources, fresh, undefined, behind);
-    const overview = await loadOverview(env.MAMORU_DB, reading.snapshot, new Date(), reading.stale);
+    const overview = await loadOverview(env.MAMORU_DB, reading.snapshot, new Date(), reading.stale, parseAccountFilter(url.searchParams));
     return { ...overviewSection(overview, session.csrf), ...(reading.refreshing ? { refreshing: true } : {}) };
   };
   const infraView = async (fresh: boolean): Promise<SectionView> =>
