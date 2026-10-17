@@ -83,6 +83,10 @@ import { applyExperiments } from "./exp-rewrite";
 import { handleExpEvent, recordWaitlistSubmit } from "./exp-events";
 import { loadExperimentReports } from "./exp-report";
 import { experimentsSection } from "./ops-experiments";
+import { settingsSection, type SettingsPage } from "./ops-settings";
+import { checkConfirmToken, issueConfirmToken, risksOf } from "./engine-settings-confirm";
+import { inEffect, appendVersion, maxIdOf, SettingsConflict, SettingsOutcomeUnknown, listTemplates, listVersions, versionById, type Env as SettingsEnv } from "./engine-settings-store";
+import { DEFAULT_SETTINGS, canonicalJson, settingsFromForm, validateSettings } from "./engine-settings-model";
 import { archiveTarget } from "./archive";
 import { archiveBar, archiveSection } from "./ops-archive";
 import {
@@ -368,7 +372,7 @@ function withNotice(view: SectionView, text: string, tone: "plain" | "bad" = "pl
 }
 
 /** Sections a stranger is sent to Google from, and returned to after signing in. */
-const SECTION_PATHS = new Set(["/ops", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/archive"]);
+const SECTION_PATHS = new Set(["/ops", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/archive"]);
 
 /** Anyone who is not signed in and allowlisted sees the landing. Nothing else. */
 function toRoot(request: Request, cookies: string[] = []): Response {
@@ -643,6 +647,95 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
 
   if (sectionPath === "/ops/experiments" && request.method === "GET") {
     return flashed(await experimentsView());
+  }
+
+  // ---- engine settings (spec 006, otto/mamoru#147) ----
+  const settingsView = async (over: Partial<Pick<SettingsPage, "draft" | "notice" | "confirm">> = {}, status = 200): Promise<SectionView> => {
+    const db = env.MAMORU_DB;
+    const versions = db ? await listVersions(db) : null;
+    const templates = db ? await listTemplates(db) : null;
+    const wantEnv: SettingsEnv = url.searchParams.get("env") === "beta" ? "beta" : "prod";
+    const wantTemplate = url.searchParams.get("template");
+    const fromTemplate = templates?.find((t) => t.name === wantTemplate);
+    const activeAll = db && versions ? await inEffect(db) : { prod: { wide: null, canary: null }, beta: { wide: null, canary: null } };
+    const active = activeAll[wantEnv].wide;
+    const draft = over.draft ?? {
+      env: wantEnv,
+      template: fromTemplate?.name ?? active?.template ?? templates?.[0]?.name ?? "custom",
+      settings: fromTemplate?.settings ?? active?.settings ?? DEFAULT_SETTINGS,
+      canary: "",
+      reason: "",
+    };
+    return { ...settingsSection({ versions, templates, active: activeAll, csrf: session.csrf, draft, ...over }), status };
+  };
+
+  if (sectionPath === "/ops/settings" && request.method === "GET") {
+    return flashed(await settingsView());
+  }
+
+  if ((url.pathname === "/ops/settings/apply" || url.pathname === "/ops/settings/rollback") && request.method === "POST") {
+    if (!csrfOk || !form) return respond(await settingsView({ notice: { text: FLASH_COPY.bad, tone: "bad" } }, 403));
+    const db = env.MAMORU_DB;
+    if (!db) return respond(await settingsView({}, 503));
+    const templates = (await listTemplates(db)) ?? [];
+    let draft: SettingsPage["draft"];
+    let rollbackOf: number | undefined;
+    if (url.pathname === "/ops/settings/rollback") {
+      const id = Number(form.get("id"));
+      const target = Number.isSafeInteger(id) ? await versionById(db, id) : null;
+      if (!target) return respond(await settingsView({ notice: { text: "That version does not exist or cannot be read.", tone: "bad" } }, 400));
+      rollbackOf = target.id;
+      draft = { env: target.env, template: target.template, settings: target.settings, canary: target.accountKeys?.join("\n") ?? "", reason: String(form.get("reason") ?? "") };
+    } else {
+      const envField: SettingsEnv = form.get("env") === "beta" ? "beta" : "prod";
+      draft = { env: envField, template: String(form.get("template") ?? "custom").slice(0, 120), settings: settingsFromForm(form), canary: String(form.get("canary") ?? ""), reason: String(form.get("reason") ?? "") };
+      // A rollback confirmed through this form keeps its link only if it is still exactly that version.
+      const back = Number(form.get("rollback_of"));
+      const target = Number.isSafeInteger(back) && back > 0 ? await versionById(db, back) : null;
+      const scope = (keys: readonly string[] | null) => JSON.stringify(keys && keys.length ? [...new Set(keys.map((k) => k.toLowerCase()))].sort() : null);
+      const draftKeys = draft.canary.split(/\s+/).map((k) => k.trim()).filter(Boolean);
+      if (target && target.env === draft.env && scope(target.accountKeys) === scope(draftKeys) && canonicalJson(target.settings) === canonicalJson(draft.settings)) rollbackOf = back;
+      // An edited template is recorded as such, never under the name of a preset it no longer matches. A name this
+      // code already wrote ("custom (from X)") comes back from the confirm screen and is kept as it is.
+      const named = templates.find((t) => t.name === draft.template);
+      const alreadyCustom = draft.template === "custom" || draft.template.startsWith("custom (from ");
+      if (!rollbackOf && !alreadyCustom && (!named || canonicalJson(named.settings) !== canonicalJson(draft.settings))) draft = { ...draft, template: named ? `custom (from ${named.name})`.slice(0, 120) : "custom" };
+    }
+    const errors = validateSettings(draft.settings);
+    if (errors.length) return respond(await settingsView({ draft, notice: { text: `Not applied: ${errors.join("; ")}.`, tone: "bad" } }, 400));
+    if (!draft.reason.trim()) return respond(await settingsView({ draft, notice: { text: "Not applied: say why.", tone: "bad" } }, 400));
+    const accountKeys = draft.canary.split(/\s+/).map((k) => k.trim()).filter(Boolean);
+    // Risky against what each affected account runs now; a risky change needs the token the confirm screen issued
+    // for exactly this change, this session and the versions in effect then.
+    // Read before the versions in effect: if anything is written after this, the guarded insert refuses.
+    const expectedMaxId = await maxIdOf(db, draft.env);
+    const now = (await inEffect(db))[draft.env];
+    const change = { env: draft.env, accountKeys: accountKeys.length ? accountKeys : null, template: draft.template, settings: draft.settings, rollbackOf: rollbackOf ?? null };
+    const risks = risksOf(change, now, DEFAULT_SETTINGS);
+    if (risks.length) {
+      const secret = env.OPS_SESSION_SECRET ?? "";
+      const token = String(form.get("confirm_token") ?? "");
+      if (!token || !(await checkConfirmToken(secret, session.csrf, token, change, now))) {
+        const issued = await issueConfirmToken(secret, session.csrf, change, now);
+        return respond(await settingsView({ draft, confirm: { risks, draft, token: issued, ...(rollbackOf ? { rollbackOf } : {}) } }));
+      }
+    }
+    // The write decides the message; the page around it is read afterwards and can never turn a committed write
+    // into "Not applied".
+    let outcome: { status: number; text: string; tone: "plain" | "bad"; keepDraft: boolean };
+    try {
+      const id = await appendVersion(db, { env: draft.env, accountKeys: accountKeys.length ? accountKeys : null, template: draft.template, settings: draft.settings, author: session.email, reason: draft.reason, rollbackOf: rollbackOf ?? null, expectedMaxId });
+      outcome = { status: 200, tone: "plain", keepDraft: false, text: `Version ${id} written for ${draft.env}${accountKeys.length ? ` (canary, ${accountKeys.length} account(s))` : ""}. The operator applies it within a minute.` };
+    } catch (e) {
+      if (e instanceof SettingsConflict) outcome = { status: 409, tone: "bad", keepDraft: true, text: "Not applied: someone changed the settings of this environment meanwhile. Review the change again against what is in effect now." };
+      else if (e instanceof SettingsOutcomeUnknown) outcome = { status: 503, tone: "bad", keepDraft: false, text: "Unknown whether this was written: the database did not say. Check the history below before submitting anything again." };
+      else outcome = { status: 400, tone: "bad", keepDraft: true, text: `Not applied: ${(e as Error).message}.` };
+    }
+    try {
+      return respond(await settingsView({ ...(outcome.keepDraft ? { draft } : {}), notice: { text: outcome.text, tone: outcome.tone } }, outcome.status));
+    } catch {
+      return respond({ section: "settings", title: "Engine settings", html: noticeHtml(`${outcome.text} (The page could not be read; reload it.)`, { tone: outcome.tone }), status: outcome.status });
+    }
   }
 
   if (sectionPath === "/ops/archive" && request.method === "GET") {

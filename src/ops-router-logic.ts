@@ -40,6 +40,7 @@ export function opsRouterLogic() {
     { id: "mails", path: "/ops/mails" },
     { id: "infra", path: "/ops/infra" },
     { id: "experiments", path: "/ops/experiments" },
+    { id: "settings", path: "/ops/settings" },
     { id: "archive", path: "/ops/archive" },
   ];
   /** A section this recent is painted without asking the server again. */
@@ -132,7 +133,9 @@ export function opsRouterLogic() {
     if (res.opaque || res.redirected) return "full";
     if (res.status === 401 && res.auth === "required") return "login";
     if (res.type.indexOf("application/json") === -1) return "full";
-    if (res.status === 200 || res.status === 403 || res.status === 503) return "render";
+    // 400 and 409 carry a section with the reason (a refused value, a change that raced another): painted in place,
+    // so the reader keeps the draft and sees why.
+    if (res.status === 200 || res.status === 400 || res.status === 403 || res.status === 409 || res.status === 503) return "render";
     return "full";
   };
 
