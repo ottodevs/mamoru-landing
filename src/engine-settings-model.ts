@@ -29,6 +29,24 @@ export const DEFAULT_SETTINGS: EngineSettings = {
   guard: { enabled: false, btc: { fallBps: 700, volBps: 8000 }, eth: { fallBps: 900, volBps: 10_000 } },
 };
 
+/**
+ * The opinionated starting point when an environment has no version yet: Ot's decision of 17 Oct (otto/mamoru#127),
+ * cap lifted to the bound with depth sizing 30/500/5 doing the limiting. The fall guard stays as it ran: no decision
+ * turned it on. A code preset, not a D1 template, so the form has it even before any template row exists.
+ */
+export const RECOMMENDED_TEMPLATE = "recommended: cap 1,000,000, depth 30/500/5";
+export const RECOMMENDED_SETTINGS: EngineSettings = {
+  depth: { impactBps: 30, shareBps: 500, stablesImpactBps: 5 },
+  capUsdc: 1_000_000,
+  guard: DEFAULT_SETTINGS.guard,
+};
+
+/** Basis points as the percent a person reads and types: 30 → "0.3", 500 → "5", 8000 → "80". */
+export const pctOf = (bps: number): string => String(bps / 100);
+
+/** Whole USDC grouped for reading: 1000000 → "1,000,000". */
+export const usdcOf = (n: number): string => n.toLocaleString("en-US");
+
 const isInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n);
 
 function inRange(errors: string[], field: string, v: unknown, b: { min: number; max: number }): void {
@@ -92,26 +110,42 @@ export async function settingsHash(s: EngineSettings): Promise<string> {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Reads a whole number from a form field; blank is null. Anything else that is not a whole number is NaN (refused by validate). */
-function int(form: FormData, name: string): number | null {
-  const raw = String(form.get(name) ?? "").trim();
+/**
+ * Reads whole USDC from a form field, grouped or not ("1000000", "1,000,000", "1 000 000", "1.000.000"); blank is
+ * null. A decimal or anything else is NaN (refused by validate).
+ */
+function usdc(form: FormData, name: string): number | null {
+  let raw = String(form.get(name) ?? "").trim().replace(/[\s,_']/g, "");
   if (raw === "") return null;
-  return /^-?[0-9]+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (/^[0-9]{1,3}(\.[0-9]{3})+$/.test(raw)) raw = raw.replace(/\./g, "");
+  return /^[0-9]+$/.test(raw) ? Number(raw) : Number.NaN;
 }
 
-/** The settings a submitted form describes. Field names match ops-settings.ts. */
+/**
+ * Reads a percent and returns basis points: "0.3" → 30, "0,05 %" → 5. Blank is null. More than two decimals (finer
+ * than one basis point) or anything that is not a number is NaN (refused by validate).
+ */
+function pct(form: FormData, name: string): number | null {
+  const raw = String(form.get(name) ?? "").trim().replace(/\s*%$/, "").replace(",", ".");
+  if (raw === "") return null;
+  if (!/^[0-9]+(\.[0-9]{1,2})?$/.test(raw)) return Number.NaN;
+  const [whole, frac = ""] = raw.split(".");
+  return Number(whole) * 100 + Number(frac.padEnd(2, "0"));
+}
+
+/** The settings a submitted form describes. Field names match ops-settings.ts; percents arrive in `*_pct` fields. */
 export function settingsFromForm(form: FormData): EngineSettings {
   const depthOn = form.get("depth_on") === "1";
-  const stables = int(form, "depth_stables");
+  const stables = pct(form, "depth_stables_pct");
   return {
     depth: depthOn
-      ? { impactBps: int(form, "depth_impact") ?? Number.NaN, shareBps: int(form, "depth_share") ?? Number.NaN, ...(stables === null ? {} : { stablesImpactBps: stables }) }
+      ? { impactBps: pct(form, "depth_impact_pct") ?? Number.NaN, shareBps: pct(form, "depth_share_pct") ?? Number.NaN, ...(stables === null ? {} : { stablesImpactBps: stables }) }
       : null,
-    capUsdc: int(form, "cap"),
+    capUsdc: usdc(form, "cap"),
     guard: {
       enabled: form.get("guard_on") === "1",
-      btc: { fallBps: int(form, "btc_fall") ?? Number.NaN, volBps: int(form, "btc_vol") ?? Number.NaN },
-      eth: { fallBps: int(form, "eth_fall") ?? Number.NaN, volBps: int(form, "eth_vol") ?? Number.NaN },
+      btc: { fallBps: pct(form, "btc_fall_pct") ?? Number.NaN, volBps: pct(form, "btc_vol_pct") ?? Number.NaN },
+      eth: { fallBps: pct(form, "eth_fall_pct") ?? Number.NaN, volBps: pct(form, "eth_vol_pct") ?? Number.NaN },
     },
   };
 }

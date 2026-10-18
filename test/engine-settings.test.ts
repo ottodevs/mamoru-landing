@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import type { D1Db } from "../src/d1-infra";
-import { BOUNDS, DEFAULT_SETTINGS, canonicalJson, riskyChanges, settingsFromForm, validateSettings, type EngineSettings } from "../src/engine-settings-model";
+import { BOUNDS, DEFAULT_SETTINGS, RECOMMENDED_SETTINGS, RECOMMENDED_TEMPLATE, canonicalJson, pctOf, riskyChanges, settingsFromForm, validateSettings, type EngineSettings } from "../src/engine-settings-model";
 import { appendVersion, listVersions, maxIdOf, SettingsConflict, type NewVersion } from "../src/engine-settings-store";
 import { sealSession } from "../src/ops";
 import worker, { type Env } from "../src/worker";
@@ -54,13 +54,13 @@ function formFor(s: EngineSettings, extra: Record<string, string>): URLSearchPar
   return new URLSearchParams({
     env: "prod",
     template: "t",
-    ...(s.depth ? { depth_on: "1", depth_impact: String(s.depth.impactBps), depth_share: String(s.depth.shareBps), depth_stables: String(s.depth.stablesImpactBps ?? "") } : {}),
+    ...(s.depth ? { depth_on: "1", depth_impact_pct: pctOf(s.depth.impactBps), depth_share_pct: pctOf(s.depth.shareBps), depth_stables_pct: s.depth.stablesImpactBps === undefined ? "" : pctOf(s.depth.stablesImpactBps) } : {}),
     cap: s.capUsdc === null ? "" : String(s.capUsdc),
     ...(s.guard.enabled ? { guard_on: "1" } : {}),
-    btc_fall: String(s.guard.btc.fallBps),
-    btc_vol: String(s.guard.btc.volBps),
-    eth_fall: String(s.guard.eth.fallBps),
-    eth_vol: String(s.guard.eth.volBps),
+    btc_fall_pct: pctOf(s.guard.btc.fallBps),
+    btc_vol_pct: pctOf(s.guard.btc.volBps),
+    eth_fall_pct: pctOf(s.guard.eth.fallBps),
+    eth_vol_pct: pctOf(s.guard.eth.volBps),
     reason: "test",
     ...extra,
   });
@@ -96,6 +96,27 @@ describe("engine settings model (copy of packages/policy/src/engine-settings.ts)
     f.set("cap", "12.5");
     expect(validateSettings(settingsFromForm(f)).join()).toContain("capUsdc must be a whole number");
   });
+
+  test("percent and USDC fields read the way a person types them", () => {
+    const read = (fields: Record<string, string>) => {
+      const f = new FormData();
+      for (const [k, v] of formFor(RECOMMENDED_SETTINGS, {})) f.set(k, v);
+      for (const [k, v] of Object.entries(fields)) f.set(k, v);
+      return settingsFromForm(f);
+    };
+    expect(read({})).toEqual(RECOMMENDED_SETTINGS);
+    expect(read({ depth_impact_pct: "0,3 %" }).depth!.impactBps).toBe(30);
+    expect(read({ depth_impact_pct: "0.05" }).depth!.impactBps).toBe(5);
+    expect(read({ btc_vol_pct: "80" }).guard.btc.volBps).toBe(8000);
+    expect(read({ depth_impact_pct: "0.005" }).depth!.impactBps).toBeNaN();
+    expect(read({ depth_impact_pct: "30bps" }).depth!.impactBps).toBeNaN();
+    expect(read({ depth_stables_pct: "" }).depth!.stablesImpactBps).toBeUndefined();
+    for (const cap of ["1000000", "1,000,000", "1 000 000", "1.000.000"]) expect(read({ cap }).capUsdc).toBe(1_000_000);
+    expect(read({ cap: "" }).capUsdc).toBeNull();
+    expect(read({ cap: "1.5" }).capUsdc).toBeNaN();
+    expect(validateSettings(RECOMMENDED_SETTINGS)).toEqual([]);
+    expect(RECOMMENDED_SETTINGS).toEqual({ ...DEFAULT_SETTINGS, depth: { impactBps: 30, shareBps: 500, stablesImpactBps: 5 }, capUsdc: 1_000_000 });
+  });
 });
 
 describe("/ops/settings (spec 006)", () => {
@@ -103,6 +124,32 @@ describe("/ops/settings (spec 006)", () => {
     const { env, cookie } = await opsEnv(memoryDb(false));
     const html = await (await worker.fetch(get("/ops/settings", cookie), env)).text();
     expect(html).toContain("not set up in D1 yet");
+  });
+
+  test("with nothing written the form starts from the recommended set, in percent and USDC", async () => {
+    const db = memoryDb();
+    const { env, cookie } = await opsEnv(db);
+    const html = await (await worker.fetch(get("/ops/settings", cookie), env)).text();
+    expect(html).toContain(`<option value="${RECOMMENDED_TEMPLATE}" selected>`);
+    expect(html).toContain('name="cap" inputmode="decimal" autocomplete="off" spellcheck="false" value="1,000,000"');
+    expect(html).toContain('name="depth_impact_pct" inputmode="decimal" autocomplete="off" spellcheck="false" value="0.3"');
+    expect(html).toContain('name="depth_share_pct" inputmode="decimal" autocomplete="off" spellcheck="false" value="5"');
+    expect(html).toContain('name="depth_stables_pct" inputmode="decimal" autocomplete="off" spellcheck="false" value="0.05"');
+    expect(html).not.toMatch(/\bbps\b/);
+    // Applying it untouched records it under its own name, with the cap raise confirmed first.
+    const csrf = csrfOf(html);
+    const ask = await (await worker.fetch(post("/ops/settings/apply", formFor(RECOMMENDED_SETTINGS, { csrf, template: RECOMMENDED_TEMPLATE }), cookie), env)).text();
+    expect(ask).toContain("cap per account rises from 100 to 1000000 USDC");
+    expect(ask).toContain("<th scope=\"row\">Cap per account</th><td class=\"dim\">100 USDC (default)</td><td>1,000,000 USDC</td>");
+    const done = await (await worker.fetch(post("/ops/settings/apply", confirmBodyOf(ask), cookie), env)).text();
+    expect(done).toContain("Version 1 written for prod");
+    const [v] = (await listVersions(db))!;
+    expect(v!.template).toBe(RECOMMENDED_TEMPLATE);
+    expect(canonicalJson(v!.settings)).toBe(canonicalJson(RECOMMENDED_SETTINGS));
+    // Once it runs, the form starts from it and flags nothing as changed.
+    const after = await (await worker.fetch(get("/ops/settings", cookie), env)).text();
+    expect(after).toContain('<option value="">what runs now (v1)</option>');
+    expect(after).not.toContain('class="set-was"');
   });
 
   test("a wrong CSRF token never writes", async () => {
