@@ -114,6 +114,8 @@ describe("engine settings model (copy of packages/policy/src/engine-settings.ts)
     for (const cap of ["1000000", "1,000,000", "1 000 000", "1.000.000"]) expect(read({ cap }).capUsdc).toBe(1_000_000);
     expect(read({ cap: "" }).capUsdc).toBeNull();
     expect(read({ cap: "1.5" }).capUsdc).toBeNaN();
+    for (const cap of ["1,00,000", "1,000.000", "10,00", "1,0000", ",000", "1 000,000"]) expect(read({ cap }).capUsdc).toBeNaN();
+    expect(read({ cap: "5,000" }).capUsdc).toBe(5000);
     expect(validateSettings(RECOMMENDED_SETTINGS)).toEqual([]);
     expect(RECOMMENDED_SETTINGS).toEqual({ ...DEFAULT_SETTINGS, depth: { impactBps: 30, shareBps: 500, stablesImpactBps: 5 }, capUsdc: 1_000_000 });
   });
@@ -150,6 +152,19 @@ describe("/ops/settings (spec 006)", () => {
     const after = await (await worker.fetch(get("/ops/settings", cookie), env)).text();
     expect(after).toContain('<option value="">what runs now (v1)</option>');
     expect(after).not.toContain('class="set-was"');
+  });
+
+  test("the recommended name is the code's, and an edited copy is recorded as custom", async () => {
+    const db = memoryDb();
+    db.raw.query("INSERT INTO engine_settings_templates VALUES (?, ?, 'seed', null, 'migration', '2026-10-16T00:00:00Z')").run(RECOMMENDED_TEMPLATE, canonicalJson(DEFAULT_SETTINGS));
+    const { env, cookie } = await opsEnv(db);
+    const html = await (await worker.fetch(get(`/ops/settings?template=${encodeURIComponent(RECOMMENDED_TEMPLATE)}`, cookie), env)).text();
+    expect(html).toContain('spellcheck="false" value="1,000,000"');
+    const csrf = csrfOf(html);
+    const edited = { ...RECOMMENDED_SETTINGS, capUsdc: 5000 };
+    const ask = await (await worker.fetch(post("/ops/settings/apply", formFor(edited, { csrf, template: RECOMMENDED_TEMPLATE }), cookie), env)).text();
+    await worker.fetch(post("/ops/settings/apply", confirmBodyOf(ask), cookie), env);
+    expect((await listVersions(db))![0]!.template).toBe(`custom (from ${RECOMMENDED_TEMPLATE})`);
   });
 
   test("a wrong CSRF token never writes", async () => {

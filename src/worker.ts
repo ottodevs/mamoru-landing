@@ -102,11 +102,11 @@ import {
 import { yieldSection } from "./ops-yield";
 import { loadYieldOverview, parseYieldPeriod } from "./yield-overview";
 
-/** The D1 templates with the code's recommended set first (unless a D1 row already carries that name). */
-const withPresets = (rows: readonly TemplateRow[]): TemplateRow[] =>
-  rows.some((t) => t.name === RECOMMENDED_TEMPLATE)
-    ? [...rows]
-    : [{ name: RECOMMENDED_TEMPLATE, settings: RECOMMENDED_SETTINGS, source: "code", note: "Decision of 17 Oct (otto/mamoru#127)." }, ...rows];
+/** The D1 templates with the code's recommended set first. The name is the code's: a D1 row carrying it is dropped. */
+const withPresets = (rows: readonly TemplateRow[]): TemplateRow[] => [
+  { name: RECOMMENDED_TEMPLATE, settings: RECOMMENDED_SETTINGS, source: "code", note: "Decision of 17 Oct (otto/mamoru#127)." },
+  ...rows.filter((t) => t.name !== RECOMMENDED_TEMPLATE),
+];
 import { archiveTarget } from "./archive";
 import { archiveBar, archiveSection } from "./ops-archive";
 import {

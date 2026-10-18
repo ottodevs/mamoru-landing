@@ -111,14 +111,15 @@ export async function settingsHash(s: EngineSettings): Promise<string> {
 }
 
 /**
- * Reads whole USDC from a form field, grouped or not ("1000000", "1,000,000", "1 000 000", "1.000.000"); blank is
- * null. A decimal or anything else is NaN (refused by validate).
+ * Reads whole USDC from a form field, plain or grouped in threes with one separator ("1000000", "1,000,000",
+ * "1 000 000", "1.000.000"); blank is null. A decimal, a mixed or misplaced separator ("1,00,000", "1,000.000") or
+ * anything else is NaN (refused by validate): a typo in the cap is never read as some other cap.
  */
 function usdc(form: FormData, name: string): number | null {
-  let raw = String(form.get(name) ?? "").trim().replace(/[\s,_']/g, "");
+  const raw = String(form.get(name) ?? "").trim();
   if (raw === "") return null;
-  if (/^[0-9]{1,3}(\.[0-9]{3})+$/.test(raw)) raw = raw.replace(/\./g, "");
-  return /^[0-9]+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (/^[0-9]+$/.test(raw)) return Number(raw);
+  return /^[0-9]{1,3}(?:([,. '_])[0-9]{3})(?:\1[0-9]{3})*$/.test(raw) ? Number(raw.replace(/[^0-9]/g, "")) : Number.NaN;
 }
 
 /**
