@@ -1,8 +1,9 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import type { D1Db } from "../src/d1-infra";
-import { BOUNDS, DEFAULT_SETTINGS, canonicalJson, riskyChanges, settingsFromForm, validateSettings, type EngineSettings } from "../src/engine-settings-model";
+import { BOUNDS, DEFAULT_SETTINGS, canonicalJson, riskyChanges, settingsFromForm, settingsHash, validateSettings, type EngineSettings } from "../src/engine-settings-model";
 import { appendVersion, listVersions, maxIdOf, SettingsConflict, type NewVersion } from "../src/engine-settings-store";
+import { describeSettings } from "../src/ops-settings";
 import { sealSession } from "../src/ops";
 import worker, { type Env } from "../src/worker";
 
@@ -61,6 +62,15 @@ function formFor(s: EngineSettings, extra: Record<string, string>): URLSearchPar
     btc_vol: String(s.guard.btc.volBps),
     eth_fall: String(s.guard.eth.fallBps),
     eth_vol: String(s.guard.eth.volBps),
+    ...(s.rerange?.mode === "lazy"
+      ? {
+          rerange_mode: "lazy",
+          rerange_buffer: String(s.rerange.edgeBufferTicks),
+          rerange_dwell: String(s.rerange.minDwellSeconds),
+          rerange_horizon: String(s.rerange.horizonSeconds),
+          rerange_lvr: String(s.rerange.lvrWeightBps),
+        }
+      : {}),
     reason: "test",
     ...extra,
   });
@@ -73,6 +83,9 @@ function confirmBodyOf(html: string): URLSearchParams {
 
 const DEPTH: EngineSettings = { ...DEFAULT_SETTINGS, depth: { impactBps: 30, shareBps: 500, stablesImpactBps: 5 }, capUsdc: 1000 };
 
+// otto/mamoru#172: the TRAIN/TEST candidate the app side seeds as `conservador-live-v2 + lazy-h24h-b100-d30`.
+const LAZY: EngineSettings = { ...DEFAULT_SETTINGS, rerange: { mode: "lazy", edgeBufferTicks: 100, minDwellSeconds: 1800, horizonSeconds: 86_400, lvrWeightBps: 10_000 } };
+
 describe("engine settings model (copy of packages/policy/src/engine-settings.ts)", () => {
   test("bounds and defaults are pinned to the operator's", () => {
     expect(BOUNDS).toEqual({
@@ -82,6 +95,11 @@ describe("engine settings model (copy of packages/policy/src/engine-settings.ts)
       capUsdc: { min: 1, max: 1_000_000 },
       fallBps: { min: 100, max: 3000 },
       volBps: { min: 1000, max: 50_000 },
+      // #172
+      edgeBufferTicks: { min: 0, max: 1000 },
+      minDwellSeconds: { min: 0, max: 86_400 },
+      horizonSeconds: { min: 3_600, max: 604_800 },
+      lvrWeightBps: { min: 0, max: 20_000 },
     });
     expect(canonicalJson(DEFAULT_SETTINGS)).toBe('{"capUsdc":null,"depth":null,"guard":{"btc":{"fallBps":700,"volBps":8000},"enabled":false,"eth":{"fallBps":900,"volBps":10000}}}');
   });
@@ -95,6 +113,124 @@ describe("engine settings model (copy of packages/policy/src/engine-settings.ts)
     expect(settingsFromForm(f)).toEqual(DEPTH);
     f.set("cap", "12.5");
     expect(validateSettings(settingsFromForm(f)).join()).toContain("capUsdc must be a whole number");
+  });
+});
+
+describe("rerange (otto/mamoru#172)", () => {
+  test("lazy validates clean; a missing number is refused; an out-of-bounds eager number is refused too", () => {
+    expect(validateSettings(LAZY)).toEqual([]);
+    const missingDwell: EngineSettings = { ...DEFAULT_SETTINGS, rerange: { mode: "lazy", edgeBufferTicks: 100, horizonSeconds: 86_400, lvrWeightBps: 10_000 } };
+    expect(validateSettings(missingDwell).join()).toContain("rerange.minDwellSeconds must be a whole number from 0 to 86400");
+    // Eager may still carry the four numbers (a form flipping back and forth); they are checked if present.
+    const eagerWithBadNumber: EngineSettings = { ...DEFAULT_SETTINGS, rerange: { mode: "eager", edgeBufferTicks: 5000 } };
+    expect(validateSettings(eagerWithBadNumber).join()).toContain("rerange.edgeBufferTicks must be a whole number from 0 to 1000");
+  });
+
+  test("settingsFromForm omits rerange entirely for eager, even with numbers left in the fields, and round-trips lazy", () => {
+    const eagerForm = new FormData();
+    for (const [k, v] of formFor(DEFAULT_SETTINGS, {})) eagerForm.set(k, v);
+    eagerForm.set("rerange_mode", "eager");
+    eagerForm.set("rerange_buffer", "100");
+    eagerForm.set("rerange_dwell", "1800");
+    const eagerSettings = settingsFromForm(eagerForm);
+    expect(eagerSettings.rerange).toBeUndefined();
+    expect(canonicalJson(eagerSettings)).toBe(canonicalJson(DEFAULT_SETTINGS));
+
+    const lazyForm = new FormData();
+    for (const [k, v] of formFor(LAZY, {})) lazyForm.set(k, v);
+    expect(settingsFromForm(lazyForm)).toEqual(LAZY);
+  });
+
+  test("the hash changes with rerange present, and writing {mode:'eager'} explicitly would not match the omitted form", () => {
+    expect(canonicalJson(LAZY)).not.toBe(canonicalJson(DEFAULT_SETTINGS));
+    const explicitEager: EngineSettings = { ...DEFAULT_SETTINGS, rerange: { mode: "eager" } };
+    expect(canonicalJson(explicitEager)).not.toBe(canonicalJson(DEFAULT_SETTINGS));
+  });
+
+  test("riskyChanges: eager to lazy is risky, lazy to eager is not, and only the 'lazier' direction is risky", () => {
+    expect(riskyChanges(DEFAULT_SETTINGS, LAZY)).toEqual(["re-ranges become lazy: an out-of-range position waits for the buffer, the dwell and the cost test, and may stay out of range"]);
+    expect(riskyChanges(LAZY, DEFAULT_SETTINGS)).toEqual([]);
+    expect(riskyChanges(LAZY, LAZY)).toEqual([]);
+    const biggerBuffer: EngineSettings = { ...LAZY, rerange: { ...LAZY.rerange!, edgeBufferTicks: 200 } };
+    expect(riskyChanges(LAZY, biggerBuffer)).toEqual(["a position must be further out of range before it is re-ranged"]);
+    const longerDwell: EngineSettings = { ...LAZY, rerange: { ...LAZY.rerange!, minDwellSeconds: 3600 } };
+    expect(riskyChanges(LAZY, longerDwell)).toEqual(["a position waits longer out of range before it is re-ranged"]);
+    const shorterHorizon: EngineSettings = { ...LAZY, rerange: { ...LAZY.rerange!, horizonSeconds: 7200 } };
+    expect(riskyChanges(LAZY, shorterHorizon)).toEqual(["the cost test counts fewer hours of fees, so it lets fewer re-ranges through"]);
+    const moreLvr: EngineSettings = { ...LAZY, rerange: { ...LAZY.rerange!, lvrWeightBps: 20_000 } };
+    expect(riskyChanges(LAZY, moreLvr)).toEqual(["the cost test weighs LVR more, so it lets fewer re-ranges through"]);
+    // The opposite direction on each number is not risky.
+    const smallerBuffer: EngineSettings = { ...LAZY, rerange: { ...LAZY.rerange!, edgeBufferTicks: 0 } };
+    expect(riskyChanges(LAZY, smallerBuffer)).toEqual([]);
+  });
+
+  test("describeSettings shows eager plainly and lazy with its numbers, in the active/history views", () => {
+    expect(describeSettings(DEFAULT_SETTINGS)).toContain("re-range eager");
+    expect(describeSettings(LAZY)).toContain("re-range lazy (buffer 100 ticks, dwell 1800s, horizon 86400s, LVR weight 100%)");
+  });
+});
+
+describe("/ops/settings rerange through the form (otto/mamoru#172)", () => {
+  test("eager to lazy asks for confirm with the lazy message; confirmed, it is written and shown in effect and history", async () => {
+    const db = memoryDb();
+    const { env, cookie } = await opsEnv(db);
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
+    const ask = await (await worker.fetch(post("/ops/settings/apply", formFor(LAZY, { csrf }), cookie), env)).text();
+    expect(ask).toContain("Confirm this change");
+    expect(ask).toContain("re-ranges become lazy");
+    expect(await listVersions(db)).toEqual([]);
+    const done = await (await worker.fetch(post("/ops/settings/apply", confirmBodyOf(ask), cookie), env)).text();
+    expect(done).toContain("Version 1 written for prod");
+    const [v] = (await listVersions(db))!;
+    expect(v!.settings).toEqual(LAZY);
+    const page = await (await worker.fetch(get("/ops/settings", cookie), env)).text();
+    const active = page.slice(page.indexOf('id="set-active"'), page.indexOf('id="set-edit"'));
+    expect(active).toContain("re-range lazy (buffer 100 ticks, dwell 1800s, horizon 86400s, LVR weight 100%)");
+    const history = page.slice(page.indexOf('id="set-hist"'));
+    expect(history).toContain("re-range lazy (buffer 100 ticks, dwell 1800s, horizon 86400s, LVR weight 100%)");
+  });
+
+  test("lazy back to eager is not risky and writes without a confirm step; the written settings carry no rerange key", async () => {
+    const db = memoryDb();
+    await seed(db, { env: "prod", accountKeys: null, template: "lazy", settings: LAZY, author: "x", reason: "r" });
+    const { env, cookie } = await opsEnv(db);
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
+    const done = await (await worker.fetch(post("/ops/settings/apply", formFor(DEFAULT_SETTINGS, { csrf }), cookie), env)).text();
+    expect(done).toContain("Version 2 written for prod");
+    expect(done).not.toContain("Confirm this change");
+    const [v] = (await listVersions(db))!;
+    expect(v!.settings.rerange).toBeUndefined();
+    expect(v!.hash).toBe(await settingsHash(DEFAULT_SETTINGS));
+  });
+
+  test("a lazier change (bigger buffer) after an existing lazy version is risky; a non-lazier edit (shorter dwell) is not", async () => {
+    const db = memoryDb();
+    await seed(db, { env: "prod", accountKeys: null, template: "lazy", settings: LAZY, author: "x", reason: "r" });
+    const { env, cookie } = await opsEnv(db);
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
+    const bigger: EngineSettings = { ...LAZY, rerange: { ...LAZY.rerange!, edgeBufferTicks: 500 } };
+    const askBigger = await (await worker.fetch(post("/ops/settings/apply", formFor(bigger, { csrf }), cookie), env)).text();
+    expect(askBigger).toContain("a position must be further out of range before it is re-ranged");
+    const shorterDwell: EngineSettings = { ...LAZY, rerange: { ...LAZY.rerange!, minDwellSeconds: 0 } };
+    const doneShorter = await (await worker.fetch(post("/ops/settings/apply", formFor(shorterDwell, { csrf }), cookie), env)).text();
+    expect(doneShorter).toContain("Version 2 written for prod");
+    expect(doneShorter).not.toContain("Confirm this change");
+  });
+
+  test("an out-of-bounds rerange number, or a lazy form missing one of the four, is refused before anything is written", async () => {
+    const db = memoryDb();
+    const { env, cookie } = await opsEnv(db);
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
+    const tooMuchBuffer: EngineSettings = { ...LAZY, rerange: { ...LAZY.rerange!, edgeBufferTicks: 5000 } };
+    const res1 = await worker.fetch(post("/ops/settings/apply", formFor(tooMuchBuffer, { csrf, confirm: "1" }), cookie), env);
+    expect(res1.status).toBe(400);
+    expect(await res1.text()).toContain("Not applied");
+    const missingHorizon = formFor(LAZY, { csrf, confirm: "1" });
+    missingHorizon.delete("rerange_horizon");
+    const res2 = await worker.fetch(post("/ops/settings/apply", missingHorizon, cookie), env);
+    expect(res2.status).toBe(400);
+    expect(await res2.text()).toContain("rerange.horizonSeconds must be a whole number");
+    expect(await listVersions(db)).toEqual([]);
   });
 });
 
