@@ -20,7 +20,8 @@ export function describeSettings(s: EngineSettings): string {
   const guard = s.guard.enabled
     ? `fall guard on (BTC ${pct(s.guard.btc.fallBps)} fall with ${pct(s.guard.btc.volBps)} vol, ETH ${pct(s.guard.eth.fallBps)} with ${pct(s.guard.eth.volBps)})`
     : "fall guard off";
-  return `${cap}; ${depth}; ${guard}.`;
+  const bridge = s.bridgeOut?.enabled ? "; move from Ethereum on" : "";
+  return `${cap}; ${depth}; ${guard}${bridge}.`;
 }
 
 const when = (iso: string) => iso.replace("T", " ").slice(0, 16) + " UTC";
@@ -63,6 +64,7 @@ function hiddenFields(env: Env, template: string, s: EngineSettings, canary: str
     h("btc_vol", String(s.guard.btc.volBps)),
     h("eth_fall", String(s.guard.eth.fallBps)),
     h("eth_vol", String(s.guard.eth.volBps)),
+    h("bridge_out_on", s.bridgeOut?.enabled ? "1" : "0"),
     h("canary", canary),
     h("reason", reason),
   ].join("");
@@ -102,6 +104,9 @@ function editForm(csrf: string, templates: readonly TemplateRow[], draft: { env:
       ${num("btc_vol", "BTC volatility", s.guard.btc.volBps, BOUNDS.volBps, "bps annualized")}
       ${num("eth_fall", "ETH 24 h fall", s.guard.eth.fallBps, BOUNDS.fallBps, "bps")}
       ${num("eth_vol", "ETH volatility", s.guard.eth.volBps, BOUNDS.volBps, "bps annualized")}
+    </fieldset>
+    <fieldset><legend>Move from Ethereum</legend>
+      <label><input type="checkbox" name="bridge_out_on" value="1"${s.bridgeOut?.enabled ? " checked" : ""} /> on: an owner with USDC at their address on Ethereum can move it to the same account on Base (Across, one passkey approval). The relayer pays the Ethereum gas, within its daily budget.</label>
     </fieldset>
     <label>Why <input name="reason" required maxlength="500" value="${esc(draft.reason)}" /></label>
     <button type="submit">Apply</button>
