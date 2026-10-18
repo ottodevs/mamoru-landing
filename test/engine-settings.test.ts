@@ -61,6 +61,7 @@ function formFor(s: EngineSettings, extra: Record<string, string>): URLSearchPar
     btc_vol: String(s.guard.btc.volBps),
     eth_fall: String(s.guard.eth.fallBps),
     eth_vol: String(s.guard.eth.volBps),
+    ...(s.bridgeOut?.enabled ? { bridge_out_on: "1" } : {}),
     reason: "test",
     ...extra,
   });
@@ -95,6 +96,23 @@ describe("engine settings model (copy of packages/policy/src/engine-settings.ts)
     expect(settingsFromForm(f)).toEqual(DEPTH);
     f.set("cap", "12.5");
     expect(validateSettings(settingsFromForm(f)).join()).toContain("capUsdc must be a whole number");
+  });
+
+  test("move from Ethereum (otto/mamoru#133): off writes no key, on writes { enabled: true }, turning it on is risky", () => {
+    const on: EngineSettings = { ...DEFAULT_SETTINGS, bridgeOut: { enabled: true } };
+    expect(validateSettings(on)).toEqual([]);
+    expect(validateSettings({ ...DEFAULT_SETTINGS, bridgeOut: { enabled: "yes" } } as unknown as EngineSettings)).toContain("bridgeOut must be { enabled: true | false }");
+    const f = new FormData();
+    for (const [k, v] of formFor(DEFAULT_SETTINGS, {})) f.set(k, v);
+    expect(settingsFromForm(f)).toEqual(DEFAULT_SETTINGS);
+    expect(canonicalJson(settingsFromForm(f))).toBe(canonicalJson(DEFAULT_SETTINGS));
+    f.set("bridge_out_on", "1");
+    expect(settingsFromForm(f)).toEqual(on);
+    const g = new FormData();
+    for (const [k, v] of formFor(on, {})) g.set(k, v);
+    expect(settingsFromForm(g)).toEqual(on);
+    expect(riskyChanges(DEFAULT_SETTINGS, on)).toEqual(["owners can move USDC from Ethereum to Base, and the relayer pays the Ethereum gas"]);
+    expect(riskyChanges(on, DEFAULT_SETTINGS)).toEqual([]);
   });
 });
 

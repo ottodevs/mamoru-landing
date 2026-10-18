@@ -10,6 +10,8 @@ export type EngineSettings = {
   depth: { impactBps: number; shareBps: number; stablesImpactBps?: number } | null;
   capUsdc: number | null;
   guard: { enabled: boolean; btc: { fallBps: number; volBps: number }; eth: { fallBps: number; volBps: number } };
+  /** Move to Base for USDC found on Ethereum (otto/mamoru#133). Absent = off, so versions stored before it keep their hash. */
+  bridgeOut?: { enabled: boolean };
 };
 
 export const DEFAULT_CAP_USDC = 100;
@@ -41,6 +43,7 @@ export function validateSettings(s: EngineSettings): string[] {
   if (s.depth !== null && (typeof s.depth !== "object" || Array.isArray(s.depth))) errors.push("depth must be an object or null");
   if (s.capUsdc !== null && typeof s.capUsdc !== "number") errors.push("capUsdc must be a number or null");
   if (!s.guard || typeof s.guard !== "object" || typeof s.guard.enabled !== "boolean" || !s.guard.btc || !s.guard.eth) return [...errors, "guard must have enabled, btc and eth"];
+  if (s.bridgeOut !== undefined && (!s.bridgeOut || typeof s.bridgeOut !== "object" || typeof s.bridgeOut.enabled !== "boolean" || Object.keys(s.bridgeOut).some((k) => k !== "enabled"))) errors.push("bridgeOut must be { enabled: true | false }");
   if (s.depth) {
     inRange(errors, "depth.impactBps", s.depth.impactBps, BOUNDS.impactBps);
     inRange(errors, "depth.shareBps", s.depth.shareBps, BOUNDS.shareBps);
@@ -70,6 +73,7 @@ export function riskyChanges(from: EngineSettings, to: EngineSettings): string[]
     }
   }
   if (from.depth && !to.depth) out.push("depth sizing turns off");
+  if (!from.bridgeOut?.enabled && to.bridgeOut?.enabled) out.push("owners can move USDC from Ethereum to Base, and the relayer pays the Ethereum gas");
   if (from.depth && to.depth) {
     if (to.depth.impactBps > from.depth.impactBps) out.push("entries may move the pool price more");
     if (to.depth.shareBps > from.depth.shareBps) out.push("entries may take a bigger share of a pool");
@@ -113,6 +117,8 @@ export function settingsFromForm(form: FormData): EngineSettings {
       btc: { fallBps: int(form, "btc_fall") ?? Number.NaN, volBps: int(form, "btc_vol") ?? Number.NaN },
       eth: { fallBps: int(form, "eth_fall") ?? Number.NaN, volBps: int(form, "eth_vol") ?? Number.NaN },
     },
+    // Off is written as no key at all: a set saved before this field existed hashes the same.
+    ...(form.get("bridge_out_on") === "1" ? { bridgeOut: { enabled: true } } : {}),
   };
 }
 
