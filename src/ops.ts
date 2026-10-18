@@ -2,6 +2,8 @@ import type { AccountFilter } from "./account-filter";
 import { CHAIN_ID } from "./chain-addresses";
 import { b64url, b64urlDecode } from "./google";
 import type { Entry } from "./list";
+import { consoleClientScript, themeHeadScript } from "./console-client";
+import { CONSOLE_STYLE } from "./console-style";
 import { motionHeadScript, opsClientScript } from "./ops-client";
 import { esc, sameSecret } from "./text";
 
@@ -186,24 +188,36 @@ export const FLASH_COPY: Record<Exclude<Flash, "">, string> = {
   bad: "That did not go through. Try again.",
 };
 
-export type SectionId = "overview" | "yield" | "mails" | "infra" | "experiments" | "settings" | "functions" | "archive" | "gate";
+export type SectionId = "overview" | "yield" | "accounts" | "engine" | "costs" | "more" | "mails" | "infra" | "experiments" | "settings" | "functions" | "archive" | "gate";
 
-export type OpsSection = { id: string; label: string; href: string; /** Leaves the console: a full navigation in a new tab. */ out?: boolean };
+export type OpsSection = {
+  id: string;
+  label: string;
+  href: string;
+  /** Leaves the console: a full navigation in a new tab. */
+  out?: boolean;
+  /** otto/mamoru-astro#24: the rail heading this entry sits under; primary views have none. */
+  group?: "Grow" | "Control" | "More";
+  /** Short label for the phone tab bar; only the primary views carry one. */
+  tab?: string;
+};
 
 /** Extensible on purpose: new /ops sections are one more entry, not a rewrite. */
 export const OPS_SECTIONS: readonly OpsSection[] = [
-  { id: "overview", label: "Overview", href: "/ops" },
-  // otto/mamoru-astro#20: right after Overview, since it reads the same account filter.
-  { id: "yield", label: "Yield", href: "/ops/yield" },
-  { id: "mails", label: "Mails", href: "/ops/mails" },
-  { id: "infra", label: "Infra", href: "/ops/infra" },
-  { id: "experiments", label: "Experiments", href: "/ops/experiments" },
-  { id: "settings", label: "Settings", href: "/ops/settings" },
-  // otto/mamoru-astro#20: right after Settings, another switch over what the engine does.
-  { id: "functions", label: "Functions", href: "/ops/functions" },
-  { id: "archive", label: "Archive", href: "/ops/archive" },
+  // otto/mamoru-astro#24: five views that answer what the operators open the console for, in this order.
+  { id: "overview", label: "Pulse", href: "/ops", tab: "Pulse" },
+  { id: "yield", label: "Yield", href: "/ops/yield", tab: "Yield" },
+  { id: "accounts", label: "Accounts", href: "/ops/accounts", tab: "Accounts" },
+  { id: "engine", label: "Engine", href: "/ops/engine", tab: "Engine" },
+  { id: "costs", label: "Costs", href: "/ops/costs", tab: "Costs" },
+  { id: "mails", label: "Waitlist and mail", href: "/ops/mails", group: "Grow" },
+  { id: "experiments", label: "Experiments", href: "/ops/experiments", group: "Grow" },
+  { id: "settings", label: "Engine settings", href: "/ops/settings", group: "Control" },
+  { id: "functions", label: "Functions", href: "/ops/functions", group: "Control" },
+  { id: "infra", label: "Relayer top-up", href: "/ops/infra", group: "Control" },
+  { id: "archive", label: "Archive", href: "/ops/archive", group: "More" },
   // The staged site is its own document with its own base URL and CSP, so it opens beside the console.
-  { id: "preview", label: "Preview", href: "/ops/preview", out: true },
+  { id: "preview", label: "Preview", href: "/ops/preview", out: true, group: "More" },
 ];
 
 /** What a section hands to the frame: the same object becomes a full document or a JSON fragment. */
@@ -590,14 +604,28 @@ td.mail:hover .full, td.mail:focus-within .full, .reveal-box:checked ~ table td.
 `;
 
 export function renderNav(active: string): string {
+  let group: string | undefined;
   const links = OPS_SECTIONS.map((section) => {
+    const heading = section.group && section.group !== group ? `<span class="c-group">${esc(section.group)}</span>` : "";
+    group = section.group;
+    const minor = section.group ? ' class="minor"' : "";
     if (section.out) {
-      return `<a class="out" href="${esc(section.href)}" target="_blank" rel="noopener" data-ops-full title="Opens the staged site in a new tab">${esc(section.label)}</a>`;
+      return `${heading}<a class="minor out" href="${esc(section.href)}" target="_blank" rel="noopener" data-ops-full title="Opens the staged site in a new tab">${esc(section.label)}</a>`;
     }
     const current = section.id === active ? ' aria-current="page"' : "";
-    return `<a href="${esc(section.href)}" data-section="${esc(section.id)}"${current}>${esc(section.label)}</a>`;
+    return `${heading}<a${minor} href="${esc(section.href)}" data-section="${esc(section.id)}"${current}>${esc(section.label)}</a>`;
   }).join("");
   return `<nav class="ops-nav" aria-label="Sections">${links}</nav>`;
+}
+
+/** otto/mamoru-astro#24: the phone tab bar, the five primary views plus a way into the rest. */
+export function renderTabs(active: string): string {
+  const primary = OPS_SECTIONS.filter((s) => s.tab);
+  const isPrimary = primary.some((s) => s.id === active);
+  const links = primary
+    .map((s) => `<a href="${esc(s.href)}" data-section="${esc(s.id)}"${s.id === active ? ' aria-current="page"' : ""}>${esc(s.tab ?? s.label)}</a>`)
+    .join("");
+  return `<nav class="ops-nav c-tabs" aria-label="Sections">${links}<a href="/ops/more" data-section="more"${!isPrimary && active !== "gate" ? ' aria-current="page"' : ""}>More</a></nav>`;
 }
 
 /** UTC, to the minute: "2026-10-01 14:05 UTC". */
@@ -688,22 +716,28 @@ export function renderDocument(
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="robots" content="noindex, nofollow" />
   <meta name="theme-color" content="#F8F5EF" />
   <link rel="icon" href="/mark-two-stones.png" type="image/png" />
   <title>${esc(view.title)}${TITLE_SUFFIX}</title>
-  <style>${OPS_STYLE}</style>
+  ${themeHeadScript(opts.nonce)}
+  <style>${OPS_STYLE}${CONSOLE_STYLE}</style>
   ${motionHeadScript(opts.nonce)}
 </head>
 <body>
   <div id="ops-progress" aria-hidden="true"></div>
-  <header class="ops-top"><div class="ops-bar">${brand}${chrome ? renderNav(view.section) : ""}${who}</div></header>
-  <main id="ops-main" class="ops-page" data-section="${esc(view.section)}"${view.refreshing ? " data-refreshing" : ""}>
+  <div class="c-app">
+    ${chrome ? `<aside class="c-rail" aria-label="Console">${brand}${renderNav(view.section)}<div class="c-rail-foot">${who}<button type="button" class="c-theme" id="c-theme">Night</button></div></aside>` : `<aside class="c-rail" aria-label="Console">${brand}</aside>`}
+    <main id="ops-main" class="ops-page" data-section="${esc(view.section)}"${view.refreshing ? " data-refreshing" : ""}>
 ${view.html}
-  </main>
+    </main>
+  </div>
+  ${chrome ? renderTabs(view.section) : ""}
+  <div class="c-scrim" id="c-scrim"></div>
+  <aside class="c-drawer" id="c-drawer" aria-label="Account" aria-hidden="true"><button type="button" class="c-close">Close</button><div class="c-drawer-body"></div></aside>
   <div id="ops-live" class="sr-only" aria-live="polite"></div>
-  ${chrome ? opsClientScript(opts.nonce) : ""}
+  ${chrome ? opsClientScript(opts.nonce) + consoleClientScript(opts.nonce) : ""}
 </body>
 </html>`;
 }

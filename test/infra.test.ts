@@ -174,8 +174,9 @@ describe("uniswap-math.ts", () => {
 });
 
 describe("ops.ts nav", () => {
-  test("OPS_SECTIONS is extensible and includes Overview + Mails + Infra", () => {
-    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["overview", "yield", "mails", "infra", "experiments", "settings", "functions", "archive", "preview"]);
+  test("OPS_SECTIONS: the five console views first (otto/mamoru-astro#24), then Grow, Control and More", () => {
+    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["overview", "yield", "accounts", "engine", "costs", "mails", "experiments", "settings", "functions", "infra", "archive", "preview"]);
+    expect(OPS_SECTIONS.filter((s) => s.tab).map((s) => s.id)).toEqual(["overview", "yield", "accounts", "engine", "costs"]);
     expect(OPS_SECTIONS.find((s) => s.id === "overview")?.href).toBe("/ops");
     expect(OPS_SECTIONS.find((s) => s.id === "yield")?.href).toBe("/ops/yield");
     expect(OPS_SECTIONS.find((s) => s.id === "mails")?.href).toBe("/ops/mails");
@@ -185,12 +186,13 @@ describe("ops.ts nav", () => {
 
   test("renderNav marks the active section, links every section, and sends Preview out", () => {
     const nav = renderNav("infra");
-    expect(nav).toContain('<a href="/ops/infra" data-section="infra" aria-current="page">Infra</a>');
-    expect(nav).toContain('<a href="/ops" data-section="overview">Overview</a>');
-    expect(nav).toContain('<a href="/ops/mails" data-section="mails">Mails</a>');
+    expect(nav).toContain('<a class="minor" href="/ops/infra" data-section="infra" aria-current="page">Relayer top-up</a>');
+    expect(nav).toContain('<a href="/ops" data-section="overview">Pulse</a>');
+    expect(nav).toContain('<a class="minor" href="/ops/mails" data-section="mails">Waitlist and mail</a>');
+    expect(nav).toContain('<span class="c-group">Control</span>');
     expect(nav.match(/aria-current/g)?.length).toBe(1);
     // Preview is the staged site: it leaves the console, so the router must not take it.
-    expect(nav).toMatch(/<a class="out" href="\/ops\/preview" target="_blank" rel="noopener" data-ops-full/);
+    expect(nav).toMatch(/<a class="minor out" href="\/ops\/preview" target="_blank" rel="noopener" data-ops-full/);
   });
 });
 
@@ -598,14 +600,15 @@ describe("ops-infra.ts render", () => {
     expect(html).toContain("Healthy");
     expect(html).toContain("More accounts at today");
     expect(html).toContain("The reserve is not burned.");
-    expect(html).toContain('data-section="infra" aria-current="page">Infra</a>');
+    expect(html).toContain('data-section="infra" aria-current="page">Relayer top-up</a>');
     expect(html).toContain("39 users");
     expect(html).toContain("1 more account has never been funded.");
     expect(html).not.toContain('class="notice"');
     expect(html).not.toContain("Coming next");
     expect(html).not.toContain(">The list<");
-    expect(html.match(/<script nonce="nonce-abc">/g)?.length).toBe(2);
-    expect(html.match(/<script/g)?.length).toBe(2);
+    // Theme, motion, router and console client (otto/mamoru-astro#24), all under the page nonce.
+    expect(html.match(/<script nonce="nonce-abc">/g)?.length).toBe(4);
+    expect(html.match(/<script/g)?.length).toBe(4);
     expect(noticeFor({ snapshot: HEALTHY })).toBeNull();
   });
 

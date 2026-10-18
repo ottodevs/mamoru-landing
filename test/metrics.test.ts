@@ -264,7 +264,7 @@ describe("metrics-store.ts", () => {
     expect(overview.value).toEqual([{ day: TODAY, idle: 7.5, lp: expect.closeTo(44.68, 5) }]);
     expect(overview.growth).toHaveLength(6);
     expect(overview.changes.tvl).toBeNull();
-    expectSoundMarkup(renderOverview({ overview, csrf: "c", nonce: "n" }).split('<main id="ops-main"')[1].split("<script")[0].replace(/^[^>]*>/, "").replace("</main>", ""));
+    expectSoundMarkup(renderOverview({ overview, csrf: "c", nonce: "n" }).split('<main id="ops-main"')[1].split("</main>")[0].replace(/^[^>]*>/, ""));
   });
 
   test("rowFromSnapshot: funded, active, positions and totals", () => {
@@ -417,7 +417,7 @@ describe("metrics-overview.ts", () => {
     expect(down.activated).toBe(3);
     expect(down.relayer).toBeNull();
     expect(down.notes.join(" ")).toContain("last capture");
-    expectSoundMarkup(renderOverview({ overview: down, csrf: "c", nonce: "n" }).split('<main id="ops-main"')[1].split("<script")[0].replace(/^[^>]*>/, "").replace("</main>", ""));
+    expectSoundMarkup(renderOverview({ overview: down, csrf: "c", nonce: "n" }).split('<main id="ops-main"')[1].split("</main>")[0].replace(/^[^>]*>/, ""));
   });
 
   test("?account= scopes the headline users/accounts and the funnel's 'Signed up' step the same way it scopes everything else (otto/mamoru#130)", () => {
@@ -675,16 +675,16 @@ describe("ops-metrics.ts render", () => {
   test("the page carries real text values, the nonce on both scripts, and the CSRF token", () => {
     const overview = buildOverview(snap(), { daily: null, activity: null, signups: SIGNUPS }, NOW);
     const html = renderOverview({ overview, csrf: "tok<en", nonce: "abc123", who: "ot@example.com" });
-    expect(html).toContain('data-section="overview" aria-current="page">Overview</a>');
-    expect(html).toContain('<a href="/ops/mails" data-section="mails">Mails</a>');
+    expect(html).toContain('data-section="overview" aria-current="page">Pulse</a>');
+    expect(html).toContain('<a class="minor" href="/ops/mails" data-section="mails">Waitlist and mail</a>');
     expect(html).toContain(">$52.18<");
     expect(html).toContain("History starts today");
     expect(html).toContain("Activity is not being recorded yet.");
     expect(html).toContain('action="/ops/metrics/snapshot"');
     expect(html).toContain('value="tok&lt;en"');
     expect(html).toContain('href="/ops/infra"');
-    expect(html.match(/<script nonce="abc123">/g)?.length).toBe(2);
-    expect(html.match(/<script/g)?.length).toBe(2);
+    expect(html.match(/<script nonce="abc123">/g)?.length).toBe(4);
+    expect(html.match(/<script/g)?.length).toBe(4);
     expect(html).toContain("prefers-reduced-motion");
     expect(html).not.toMatch(/https?:\/\/(?!www\.w3\.org|basescan\.org)/);
   });
@@ -766,7 +766,7 @@ describe("worker.ts gate for the overview", () => {
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain("On the list");
-    expect(html).toContain('data-section="mails" aria-current="page">Mails</a>');
+    expect(html).toContain('data-section="mails" aria-current="page">Waitlist and mail</a>');
     const csrf = html.match(/name="csrf" value="([^"]+)"/)![1];
     const removed = await worker.fetch(
       new Request("https://mamoru.lol/ops/remove", {

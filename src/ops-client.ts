@@ -616,6 +616,8 @@ export function opsClientScript(nonce: string): string {
     var module = modules[view.section];
     teardown = module ? module(main, still) : null;
     watchRefresh(view);
+    // otto/mamoru-astro#24: the console client draws charts and wires the account drawer after every swap.
+    try { document.dispatchEvent(new CustomEvent("ops:mounted", { detail: { scope: main, section: view.section } })); } catch (err) {}
   }
   function announce(text) {
     if (!live) return;

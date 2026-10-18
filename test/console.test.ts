@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import type { D1Db } from "../src/d1-infra";
+import { loadConsole, money, poolLabel } from "../src/console-data";
 import type { InfraSnapshot } from "../src/infra-snapshot";
-import { appendFlagChange, maxIdOf } from "../src/ops-flags-store";
 import { sealSession } from "../src/ops";
 import worker, { type Env } from "../src/worker";
 
@@ -30,12 +30,27 @@ const SEED_DATA_WITH_GAS = SEED_DATA.replace(
   "INSERT INTO account_daily VALUES ('2026-10-17', 8453, '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'acc1', 'unknown', 90, 95, 120000000, 121000000, 0, 120000000, 1000000, 1500000, 500000, '2000000000000000');",
 );
 
+const OPERATOR_SCHEMA = `CREATE TABLE operator_metrics_latest (id INTEGER PRIMARY KEY CHECK (id = 1), payload_json TEXT NOT NULL, generated_at TEXT NOT NULL, fetched_at TEXT NOT NULL);`;
+const OPERATOR_PAYLOAD = {
+  operator: { gitSha: "abc1234", relayer: { address: "0x8F7D", balanceWei: "3600000000000000" } },
+  // The operator's real shape (apps/mamoru-operator/src/metrics.ts): per provider, per method.
+  rpc: { last48h: [{ hourStart: "2026-10-18T07:00:00.000Z", data: { "alchemy.com": { eth_call: { cuEstimate: 12000 }, eth_blockNumber: { cuEstimate: 3000 } } } }, { hourStart: "2026-10-18T08:00:00.000Z", data: { "alchemy.com": { eth_call: { cuEstimate: 42000 } } } }] },
+  engines: [],
+  opsRecent: [
+    { accountKey: "acc1", kind: "enter", state: "confirmed", at: "2026-10-18T08:30:00Z", code: "EXEC_OK" },
+    { accountKey: "acc1", kind: "enter", state: "failed", at: "2026-10-18T08:00:00Z", code: "OWNER_TX_ERROR" },
+    { accountKey: "acc1", kind: "enter", state: "confirmed", at: "2026-10-04T00:00:00Z", code: "EXEC_OK" },
+  ],
+};
+const OPERATOR_SEED = `INSERT INTO operator_metrics_latest VALUES (1, '${JSON.stringify(OPERATOR_PAYLOAD)}', '2026-10-18T09:00:00Z', '2026-10-18T09:00:05Z');`;
+
 function memoryDb(tables: string[]): D1Db {
   const db = new Database(":memory:");
   if (tables.includes("yield")) db.exec(YIELD_SCHEMA);
   if (tables.includes("flags")) db.exec(FLAGS_SCHEMA);
   if (tables.includes("seed")) db.exec(SEED_DATA);
   if (tables.includes("seed-gas")) db.exec(SEED_DATA_WITH_GAS);
+  if (tables.includes("operator")) db.exec(OPERATOR_SCHEMA + OPERATOR_SEED);
   const stmt = (sql: string, values: unknown[] = []): any => ({
     bind: (...v: unknown[]) => stmt(sql, v),
     first: async () => (db.query(sql).get(...(values as never[])) as unknown) ?? null,
@@ -77,109 +92,100 @@ async function opsEnv(db: D1Db | undefined, ethUsd: number | null = 2000) {
   return { env, cookie: `mamoru_list=${sealed}` };
 }
 
-const get = (path: string, cookie: string) => new Request(`https://mamoru.lol${path}`, { headers: { cookie } });
+const get = (path: string, cookie = "", fragment = false) =>
+  new Request(`https://mamoru.lol${path}`, { headers: { ...(cookie ? { cookie } : {}), ...(fragment ? { "x-ops-fragment": "1" } : {}) } });
 
-describe("/ops/yield empty states", () => {
-  test("migration 0009 not applied: no account_snapshot_latest/account_daily at all", async () => {
-    const { env, cookie } = await opsEnv(memoryDb([]));
-    const html = await (await worker.fetch(get("/ops/yield", cookie), env)).text();
-    expect(html).toContain("Migration 0009 is not applied yet");
-  });
+const PATHS = ["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more"];
+const NOW = new Date("2026-10-18T10:00:00Z");
 
-  test("today's real state: 0009/0010 applied and empty, 0012 not applied yet — reads as flag off", async () => {
-    const { env, cookie } = await opsEnv(memoryDb(["yield"]));
-    const html = await (await worker.fetch(get("/ops/yield", cookie), env)).text();
-    expect(html).toContain("The yield ledger is off");
-    expect(html).toContain('href="/ops/functions"');
-  });
-
-  test("flag on, no snapshot rows yet: waiting for the first one", async () => {
-    const db = memoryDb(["yield", "flags"]);
-    await appendFlagChange(db, { flag: "yield_ledger", enabled: true, author: "x", reason: "go", expectedMaxId: await maxIdOf(db, "yield_ledger") });
-    const { env, cookie } = await opsEnv(db);
-    const html = await (await worker.fetch(get("/ops/yield", cookie), env)).text();
-    expect(html).toContain("Waiting for the first snapshot");
+describe("console gate (otto/mamoru-astro#24)", () => {
+  test("no session: every console view, document or fragment, hands out no data", async () => {
+    const { env } = await opsEnv(memoryDb(["yield", "seed", "operator"]));
+    for (const path of PATHS) {
+      const doc = await worker.fetch(get(path), env);
+      expect(doc.status).not.toBe(200);
+      const frag = await worker.fetch(get(path, "", true), env);
+      expect(frag.status).toBe(401);
+      expect(await frag.text()).not.toContain("acc1");
+    }
   });
 });
 
-describe("/ops/yield with data", () => {
-  async function flagOnDb() {
-    const db = memoryDb(["yield", "flags", "seed"]);
-    await appendFlagChange(db, { flag: "yield_ledger", enabled: true, author: "x", reason: "go", expectedMaxId: await maxIdOf(db, "yield_ledger") });
-    return db;
-  }
-
-  test("prod default excludes beta: only acc1 shows, with earned-so-far and capital figures", async () => {
-    const { env, cookie } = await opsEnv(await flagOnDb());
-    const html = await (await worker.fetch(get("/ops/yield", cookie), env)).text();
-    expect(html).toContain("acc1");
-    expect(html).not.toContain("acc2");
-    expect(html).toContain("Capital in positions");
-    expect(html).toContain("Fees earned to date");
-    expect(html).toContain("Net yield to users");
+describe("console views", () => {
+  test("Pulse, production by default: the beta account is out, the prod account's fees lead", async () => {
+    const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "operator"]));
+    const html = await (await worker.fetch(get("/ops", cookie), env)).text();
+    expect(html).toContain("Earned for users so far");
+    expect(html).toContain('<p class="c-big">30¢</p>');
+    expect(html).not.toContain("c-acct-acc2");
+    expect(html).toContain('id="c-acct-acc1"');
   });
 
-  test("env=beta reveals the beta account instead", async () => {
-    const { env, cookie } = await opsEnv(await flagOnDb());
-    const html = await (await worker.fetch(get("/ops/yield?env=beta", cookie), env)).text();
-    expect(html).toContain("acc2");
-    expect(html).not.toContain("acc1");
+  test("?env=all brings in the beta account and marks the switch", async () => {
+    const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "operator"]));
+    const html = await (await worker.fetch(get("/ops/yield?env=all", cookie), env)).text();
+    expect(html).toContain('id="c-acct-acc2"');
+    expect(html).toContain('href="/ops/yield?env=all" aria-current="true"');
   });
 
-  test("free-text account filter narrows to the matching one", async () => {
-    const { env, cookie } = await opsEnv(await flagOnDb());
-    const html = await (await worker.fetch(get("/ops/yield?env=all&account=acc2", cookie), env)).text();
-    expect(html).toContain("acc2");
-    expect(html).not.toContain("acc1");
+  test("ledger tables missing: Pulse says the ledger is not set up instead of showing zeros as yield", async () => {
+    const { env, cookie } = await opsEnv(memoryDb([]));
+    const html = await (await worker.fetch(get("/ops", cookie), env)).text();
+    expect(html).toContain("The yield ledger is not set up on this database");
   });
 
-  test("no gas recorded anywhere: the hero reads fees only, labelled as such", async () => {
-    const { env, cookie } = await opsEnv(await flagOnDb());
-    const html = await (await worker.fetch(get("/ops/yield", cookie), env)).text();
-    expect(html).toContain("Fees only. Gas not recorded yet.");
+  test("Engine without the operator table reads as not connected; with it, ops and failure codes show", async () => {
+    const off = await opsEnv(memoryDb(["yield", "seed"]));
+    expect(await (await worker.fetch(get("/ops/engine", off.cookie), off.env)).text()).toContain("Not connected yet");
+    const on = await opsEnv(memoryDb(["yield", "seed", "operator"]));
+    const html = await (await worker.fetch(get("/ops/engine", on.cookie), on.env)).text();
+    expect(html).toContain("OWNER_TX_ERROR");
+    expect(html).toContain("Confirmed operations per day");
   });
 
-  async function flagOnDbWithGas() {
-    const db = memoryDb(["yield", "flags", "seed-gas"]);
-    await appendFlagChange(db, { flag: "yield_ledger", enabled: true, author: "x", reason: "go", expectedMaxId: await maxIdOf(db, "yield_ledger") });
-    return db;
-  }
-
-  test("gas recorded and priced: the hero shows a real net, not the fees-only label", async () => {
-    const { env, cookie } = await opsEnv(await flagOnDbWithGas(), 2000);
-    const html = await (await worker.fetch(get("/ops/yield", cookie), env)).text();
-    expect(html).not.toContain("Fees only. Gas not recorded yet.");
-    expect(html).not.toContain("unpriced");
-    expect(html).not.toContain("Net unavailable");
+  test("Costs: RPC hours from the operator metrics, relayer from its balance, the top-up link kept", async () => {
+    const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "operator"]));
+    const html = await (await worker.fetch(get("/ops/costs", cookie), env)).text();
+    expect(html).toContain("RPC compute units per hour");
+    expect(html).toContain("0.0036 ETH");
+    expect(html).toContain('href="/ops/infra"');
   });
 
-  test("gas recorded but no ETH price yet: the hero and the account row both say so, never a fabricated $0 (code review, PR #10)", async () => {
-    const { env, cookie } = await opsEnv(await flagOnDbWithGas(), null);
-    const html = await (await worker.fetch(get("/ops/yield", cookie), env)).text();
-    expect(html).toContain("Net unavailable until the ETH price is read.");
-    expect(html).toContain("of gas recorded, not yet priced");
-    expect(html).toContain("0.002 ETH, unpriced");
-    expect(html).not.toContain("Fees only. Gas not recorded yet.");
+  test("fragments carry the view body, never the frame", async () => {
+    const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "operator"]));
+    for (const path of PATHS) {
+      const res = await worker.fetch(get(path, cookie, true), env);
+      expect(res.status).toBe(200);
+      const view = (await res.json()) as { html: string };
+      expect(view.html).not.toContain("<!DOCTYPE");
+      expect(view.html).not.toContain("<script");
+    }
+  });
+});
+
+describe("console model", () => {
+  test("fee APR uses the first confirmed entry the operator reports, and pools aggregate positions", async () => {
+    const m = await loadConsole(memoryDb(["yield", "seed", "operator"]), "prod", NOW, null);
+    expect(m.accounts.map((a) => a.key)).toEqual(["acc1"]);
+    const a = m.accounts[0]!;
+    expect(a.since).toBe("2026-10-04T00:00:00Z");
+    // 0.30 on 130 placed over 14.4 days.
+    expect(a.apr!).toBeCloseTo((0.3 / 130) * (365 / 14.41666) * 100, 1);
+    expect(m.pools).toHaveLength(1);
+    expect(m.totals.inRange).toBe(1);
+    expect(m.alerts.some((x) => x.title.includes("failed in the last 48 hours"))).toBe(true);
+    expect(m.operator!.rpc.map((h) => h.cu)).toEqual([15000, 42000]);
   });
 
-  test("the fragment carries the same body as the document, and the gate covers it unauthenticated", async () => {
-    const { env, cookie } = await opsEnv(await flagOnDb());
-    const doc = await (await worker.fetch(get("/ops/yield", cookie), env)).text();
-    expect(doc).toContain("Per account");
-    const fragRes = await worker.fetch(new Request("https://mamoru.lol/ops/yield", { headers: { cookie, "x-ops-fragment": "1" } }), env);
-    expect(fragRes.status).toBe(200);
-    const fragment = (await fragRes.json()) as { section: string; html: string };
-    expect(fragment.section).toBe("yield");
-    expect(doc).toContain(fragment.html);
-
-    const bare = await worker.fetch(new Request("https://mamoru.lol/ops/yield", { headers: { "x-ops-fragment": "1" } }), env);
-    expect(bare.status).toBe(401);
-    expect(await bare.text()).toBe('{"v":1,"login":true}');
-  });
-
-  test("period=30d widens the per-account period fee sum", async () => {
-    const { env, cookie } = await opsEnv(await flagOnDb());
-    const html = await (await worker.fetch(get("/ops/yield?period=30d", cookie), env)).text();
-    expect(html).toContain('value="30d" selected');
+  test("short money and fee tiers", () => {
+    expect(money(0)).toBe("$0");
+    expect(money(0.0004)).toBe("<0.1¢");
+    expect(money(0.0084)).toBe("0.8¢");
+    expect(money(0.099)).toBe("9.9¢");
+    expect(money(50.71)).toBe("$50.71");
+    expect(money(142996)).toBe("$143.0K");
+    expect(poolLabel("pool:USDC/cbBTC/500")).toEqual({ pair: "USDC / cbBTC", fee: "0.05%" });
+    expect(poolLabel("pool:WETH/USDC/3000").fee).toBe("0.3%");
+    expect(poolLabel("pool:USDC/USDT/100").fee).toBe("0.01%");
   });
 });

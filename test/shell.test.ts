@@ -61,8 +61,12 @@ async function consoleEnv(opts: { list?: boolean } = {}) {
 }
 
 const SECTIONS = [
-  { path: "/ops", section: "overview", title: "Overview", marker: "Value held" },
-  { path: "/ops/yield", section: "yield", title: "Yield", marker: "Period" },
+  // otto/mamoru-astro#24: the five console views, then the sections that kept their own pages.
+  { path: "/ops", section: "overview", title: "Pulse", marker: "Earned for users so far" },
+  { path: "/ops/yield", section: "yield", title: "Yield", marker: "Yield by account" },
+  { path: "/ops/accounts", section: "accounts", title: "Accounts", marker: "Where every account stands" },
+  { path: "/ops/engine", section: "engine", title: "Engine", marker: "Engine" },
+  { path: "/ops/costs", section: "costs", title: "Costs", marker: "Break-even" },
   { path: "/ops/mails", section: "mails", title: "Mails", marker: "On the list" },
   { path: "/ops/infra", section: "infra", title: "Infra and costs", marker: "Relayer balance" },
   { path: "/ops/experiments", section: "experiments", title: "Experiments", marker: "hero_cta" },
@@ -195,16 +199,21 @@ describe("one frame for every section", () => {
       expect(html).toContain(`<title>${s.title} · Mamoru ops</title>`);
       expect(html).toContain(`<main id="ops-main" class="ops-page" data-section="${s.section}"`);
       expect(html).toContain(`data-section="${s.section}" aria-current="page"`);
-      expect(html.match(/<a [^>]*aria-current="page"/g)?.length).toBe(1);
-      expect(html).toContain(`<h1>${s.title}</h1>`);
+      // One current link in the rail; the phone tab bar marks its own (the section, or "More").
+      const rail = html.split('<aside class="c-rail"')[1]!.split("</aside>")[0]!;
+      expect(rail.match(/<a [^>]*aria-current="page"/g)?.length).toBe(1);
+      const tabs = html.split('<nav class="ops-nav c-tabs"')[1]!.split("</nav>")[0]!;
+      expect(tabs.match(/aria-current="page"/g)?.length).toBe(1);
+      expect(html).toMatch(new RegExp(`<h1[^>]*>${s.title}</h1>`));
       expect(html).toContain(s.marker);
       expect(html).toContain('<form class="ops-who" method="post" action="/ops/logout">');
       expect(html).toContain("ottodevs@gmail.com");
       expect(html.match(/<style>/g)?.length).toBe(1);
-      expect(html.match(/<script /g)?.length).toBe(2);
+      // Theme (head, before paint), motion (head), the router, and the console client.
+      expect(html.match(/<script /g)?.length).toBe(4);
       const csp = res.headers.get("content-security-policy") ?? "";
       const nonce = csp.match(/script-src 'nonce-([^']+)'/)![1];
-      expect(html.match(new RegExp(`<script nonce="${nonce}">`, "g"))?.length).toBe(2);
+      expect(html.match(new RegExp(`<script nonce="${nonce}">`, "g"))?.length).toBe(4);
       expect(csp).toContain("default-src 'none'");
       expect(csp).toContain("connect-src 'self'");
       expect(csp).not.toContain("unsafe-eval");
@@ -224,7 +233,7 @@ describe("one frame for every section", () => {
       expect(view.v).toBe(1);
       expect(view.section).toBe(s.section);
       expect(view.title).toBe(s.title);
-      expect(view.html).toContain(`<h1>${s.title}</h1>`);
+      expect(view.html).toMatch(new RegExp(`<h1[^>]*>${s.title}</h1>`));
       expect(view.html).toContain(s.marker);
       expect(view.html).not.toContain("<html");
       expect(view.html).not.toContain("<script");

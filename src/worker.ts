@@ -60,6 +60,7 @@ import {
   mailsSection,
   noticeHtml,
   oauthCookie,
+  OPS_SECTIONS,
   openOauthState,
   openSession,
   opsHeaders,
@@ -72,11 +73,8 @@ import {
   type Flash,
 } from "./ops";
 import { infraSection } from "./ops-infra";
-import { parseAccountFilter } from "./account-filter";
 import { loadInfraReading } from "./infra-cache";
 import { captureDaily } from "./metrics-store";
-import { loadOverview } from "./metrics-overview";
-import { overviewSection } from "./ops-metrics";
 import type { D1Db } from "./d1-infra";
 import { homeDocument, isOpen } from "./open-at";
 import { applyExperiments } from "./exp-rewrite";
@@ -99,8 +97,8 @@ import {
   maxIdOf as flagMaxIdOf,
   type FlagChangeRow,
 } from "./ops-flags-store";
-import { yieldSection } from "./ops-yield";
-import { loadYieldOverview, parseYieldPeriod } from "./yield-overview";
+import { accountsView, costsView, engineView, moreView, pulseSection, yieldView as yieldConsoleView } from "./console-views";
+import { loadConsole, parseConsoleEnv } from "./console-data";
 import { archiveTarget } from "./archive";
 import { archiveBar, archiveSection } from "./ops-archive";
 import {
@@ -386,7 +384,7 @@ function withNotice(view: SectionView, text: string, tone: "plain" | "bad" = "pl
 }
 
 /** Sections a stranger is sent to Google from, and returned to after signing in. */
-const SECTION_PATHS = new Set(["/ops", "/ops/yield", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/functions", "/ops/archive"]);
+const SECTION_PATHS = new Set(["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/functions", "/ops/archive"]);
 
 /** Anyone who is not signed in and allowlisted sees the landing. Nothing else. */
 function toRoot(request: Request, cookies: string[] = []): Response {
@@ -608,11 +606,7 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
   // otto/mamoru#130: the filter is read fresh from the query string on every call, never cached — it is cheap
   // (it narrows D1 queries and filters the already-fetched snapshot) and must never serve one reader's
   // env=beta selection to another's default view.
-  const overviewView = async (fresh: boolean): Promise<SectionView> => {
-    const reading = await loadInfraReading(sources, fresh, undefined, behind);
-    const overview = await loadOverview(env.MAMORU_DB, reading.snapshot, new Date(), reading.stale, parseAccountFilter(url.searchParams));
-    return { ...overviewSection(overview, session.csrf), ...(reading.refreshing ? { refreshing: true } : {}) };
-  };
+
   const infraView = async (fresh: boolean): Promise<SectionView> =>
     infraSection(await loadInfraReading(sources, fresh, undefined, behind), session.csrf);
   const experimentsView = async (): Promise<SectionView> => experimentsSection(await loadExperimentReports(env.MAMORU_DB));
@@ -663,20 +657,33 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     return flashed(await experimentsView());
   }
 
-  // ---- yield (otto/mamoru-astro#20) ----
-  // Same account filter the Overview reads, fresh from the query string on every call for the same reason
-  // otto/mamoru#130's Overview filter is: it is cheap and must never serve one reader's selection to another's.
-  const yieldView = async (): Promise<SectionView> => {
+  // ---- console views (otto/mamoru-astro#24): one model, read fresh per request, scoped by ?env= ----
+  let consoleRefreshing = false;
+  const consoleModel = async () => {
     const reading = await loadInfraReading(sources, false, undefined, behind);
-    const filter = parseAccountFilter(url.searchParams);
-    const period = parseYieldPeriod(url.searchParams.get("period"));
-    const overview = await loadYieldOverview(env.MAMORU_DB, filter, period, new Date(), reading.snapshot.ethUsd);
-    return yieldSection(overview);
+    // The relayer figures come from the cached Infra reading: when it is being recomputed, the view says so.
+    consoleRefreshing = Boolean(reading.refreshing);
+    return loadConsole(env.MAMORU_DB, parseConsoleEnv(url.searchParams.get("env")), new Date(), reading.snapshot);
   };
-
-  if (sectionPath === "/ops/yield" && request.method === "GET") {
-    return flashed(await yieldView());
+  const consoleViews: Record<string, (m: Awaited<ReturnType<typeof consoleModel>>, now: Date) => SectionView> = {
+    "/ops": pulseSection,
+    "/ops/yield": yieldConsoleView,
+    "/ops/accounts": accountsView,
+    "/ops/engine": engineView,
+    "/ops/costs": costsView,
+  };
+  const consoleRoute = consoleViews[sectionPath];
+  if (consoleRoute && request.method === "GET") {
+    const model = await consoleModel();
+    const rendered = consoleRoute(model, new Date());
+    return flashed(consoleRefreshing ? { ...rendered, refreshing: true } : rendered);
   }
+  if (sectionPath === "/ops/more" && request.method === "GET") {
+    return flashed(moreView(OPS_SECTIONS));
+  }
+
+
+
 
   // ---- functions (otto/mamoru-astro#20, migration 0012 in ottodevs/mamoru) ----
   const functionsView = async (over: Partial<Pick<FunctionsPage, "notice" | "confirm">> = {}, status = 200): Promise<SectionView> => {
@@ -825,16 +832,13 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
   }
 
   if (url.pathname === "/ops/metrics/snapshot" && request.method === "POST") {
-    if (!csrfOk) return refuse("/ops", () => overviewView(false));
+    if (!csrfOk) return refuse("/ops", async () => pulseSection(await consoleModel(), new Date()));
     // Without D1 there is no row to write; the Infra cache is still refreshed.
     const outcome = await captureDaily(sources);
     if (!outcome.snapshot) await loadInfraReading(sources, true);
-    return settle("/ops", "", () => overviewView(false));
+    return settle("/ops", "", async () => pulseSection(await consoleModel(), new Date()));
   }
 
-  if (sectionPath === "/ops" && request.method === "GET") {
-    return flashed(await overviewView(false));
-  }
 
   if (url.pathname === "/ops/remove" && request.method === "POST") {
     if (!csrfOk) return refuse("/ops/mails", () => mailsView("bad"));
