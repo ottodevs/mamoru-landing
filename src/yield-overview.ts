@@ -1,18 +1,41 @@
 /**
- * Builds the /ops/yield model from yield-store.ts's raw D1 rows, plus the loader that reads them. The build
- * step (buildYieldOverview and below) is pure, same split as metrics-overview.ts, so every rule here is
- * testable without a database. Per-account figures match apps/mamoru-app/src/api/accounts/yield.ts's
- * loadYieldLedger exactly (earned so far = accrued + lifetime collected; value vs hold = this account's open
- * positions' value + accrued - hold baseline, read on the account's own current day) — otto/mamoru-astro#20's
+ * Builds the /ops/yield model from yield-store.ts's aggregate D1 rows, plus the loader that reads them. The
+ * build step (buildYieldOverview and below) is pure, same split as metrics-overview.ts, so every rule here
+ * is testable without a database. Per-account figures match apps/mamoru-app/src/api/accounts/yield.ts's
+ * loadYieldLedger: earned so far = accrued + lifetime collected; value vs hold = this account's open
+ * positions' value + accrued - hold baseline, read on each position's own latest day — otto/mamoru-astro#20's
  * acceptance criteria is that this page's numbers match that endpoint, so the formulas are ported, not
  * reinvented.
+ *
+ * Two rules code review flagged on PR #10 hold everywhere below:
+ * - One source per figure. "Earned to date" (account_snapshot_latest.fees_usdc + Σ account_daily.collected_usdc)
+ *   never reads yield_ledger_position_daily; that table is read only for the per-position drill-down and for
+ *   vs-hold. Nothing here sums a mix of account-level and position-level rows into one figure.
+ * - A recorded gas_paid_wei with no ETH price yet is "unpriced", never a fabricated $0 of cost: net reads as
+ *   null (rendered "—") instead of silently equalling earned, and the raw ETH amount is still carried so the
+ *   page can say so.
  */
 
 import type { AccountFilter } from "./account-filter";
 import type { D1Db } from "./d1-infra";
 import { addDays, dayRange, daysBetween, utcDay } from "./metrics-math";
 import { currentFlagStates } from "./ops-flags-store";
-import { fetchAccountDaily, fetchPositionDaily, fetchYieldAccounts, type AccountSnapshotRow, type DailyLedgerRow, type PositionDailyRow, type PositionSnapshot } from "./yield-store";
+import {
+  fetchAccountAggregates,
+  fetchDailyAggregates,
+  fetchEarliestDay,
+  fetchGasRows,
+  fetchPositionLatest,
+  fetchPositionLifetimeCollected,
+  fetchYieldAccounts,
+  type AccountAggregates,
+  type AccountSnapshotRow,
+  type DayAggregate,
+  type GasRow,
+  type OpenPosition,
+  type PositionLatest,
+  type PositionSnapshot,
+} from "./yield-store";
 
 export type YieldPeriod = "24h" | "7d" | "30d" | "all";
 
@@ -22,25 +45,7 @@ export function parseYieldPeriod(raw: string | null | undefined): YieldPeriod {
   return raw === "24h" || raw === "30d" || raw === "all" ? raw : "7d";
 }
 
-const dayOf = (iso: string): string => iso.slice(0, 10);
-
-function sumWei(values: readonly (string | null)[]): { total: bigint; any: boolean } {
-  let total = 0n;
-  let any = false;
-  for (const v of values) {
-    if (v === null) continue;
-    try {
-      total += BigInt(v);
-      any = true;
-    } catch {
-      // Not a parseable integer: skipped rather than thrown, same "degrade, never crash the page" rule as
-      // every other D1 read in this Worker.
-    }
-  }
-  return { total, any };
-}
-
-/** Wei of the native gas token to USD. Safe for realistic lifetime gas totals (well under 2^53). */
+/** Wei of the native gas token to USD. Only ever called with a non-null price; see `gasUnpriced` below. */
 function weiToUsd(wei: bigint, ethUsd: number): number {
   return (Number(wei) / 1e18) * ethUsd;
 }
@@ -53,7 +58,7 @@ export interface YieldPositionView {
   accruedFeesUsd: number;
   /** Lifetime. Null when migration 0010 is missing or this position has no recorded harvest yet. */
   collectedUsd: number | null;
-  /** This position's own current day. Null when migration 0010 is missing or that day has no row. */
+  /** This position's own latest recorded day. Null when migration 0010 is missing or there is no row. */
   vsHoldUsd: number | null;
 }
 
@@ -66,12 +71,19 @@ export interface YieldAccountView {
   feesUncollectedUsd: number;
   collectedToDateUsd: number;
   earnedToDateUsd: number;
+  /** Lifetime: true once this account has ever had a non-null gas_paid_wei row. */
   gasRecorded: boolean;
-  netToDateUsd: number;
+  /** True when gas was recorded but there is no ETH price to convert it: `gasToDateUsd`/`netToDateUsd` are
+   * null, never a fabricated $0 — `gasToDateEth` still carries the raw amount. */
+  gasUnpriced: boolean;
+  gasToDateEth: number | null;
+  gasToDateUsd: number | null;
+  /** Null exactly when `gasUnpriced`: a recorded cost with no known price is not the same as no cost. */
+  netToDateUsd: number | null;
   feesEarnedPeriodUsd: number;
   gasRecordedInPeriod: boolean;
   aprPeriodPct: number | null;
-  /** Null when migration 0010 is missing or there is no readable row for this account's current day. */
+  /** Null when migration 0010 is missing or there is no readable row for any open position. */
   vsHoldUsd: number | null;
   positionsInRange: number;
   positionsTotal: number;
@@ -82,8 +94,7 @@ export interface YieldAccountView {
 export interface YieldDailyBar {
   day: string;
   feesUsd: number;
-  /** Null when gas was not recorded on this day; the chart only ever draws the gas series when at least one
-   * day in the period has a value. */
+  /** Null when gas was not recorded that day, or recorded with no price to convert it. */
   gasUsd: number | null;
 }
 
@@ -101,9 +112,15 @@ export interface YieldOverview {
   /** flagOn and migration 0009 present, but zero accounts matched (no snapshot has ever been written yet,
    * or none matches this filter). */
   noRows: boolean;
-  netYieldPeriodUsd: number;
-  /** True when the hero figure above is a real net (gas known); false means it is fees only. */
+  /** Null exactly when `netYieldUnpriced`. */
+  netYieldPeriodUsd: number | null;
+  /** True when the hero figure above is a real net (gas known and priced). */
   netYieldIsNet: boolean;
+  /** True when gas was recorded in the period but there is no ETH price: the hero is neither a net nor
+   * "fees only", it is unavailable. */
+  netYieldUnpriced: boolean;
+  /** The period's recorded gas in ETH, present whenever gas was recorded at all that period (priced or not). */
+  netYieldGasEth: number | null;
   feesEarnedToDateUsd: number;
   feeAprPeriodPct: number | null;
   capitalInPositionsUsd: number;
@@ -119,14 +136,25 @@ export interface YieldInputs {
   /** Null when account_snapshot_latest/accounts could not be read: migration 0009 is not applied. */
   snapshots: AccountSnapshotRow[] | null;
   /** Null when account_daily could not be read: migration 0009 is not applied. */
-  daily: DailyLedgerRow[] | null;
+  accountAggregates: Map<string, AccountAggregates> | null;
+  /** Null when account_daily could not be read. Empty in the overwhelmingly common case (no harvest-receipt
+   * tracker has ever filled gas_paid_wei yet). */
+  gasRows: GasRow[] | null;
+  /** Null when account_daily could not be read. */
+  dailyAggregates: DayAggregate[] | null;
+  /** Earliest account_daily day across these accounts; only used by the "all" period. */
+  earliestDay: string | null;
   /** Null when yield_ledger_position_daily could not be read: migration 0010 is not applied. */
-  positionDaily: PositionDailyRow[] | null;
+  positionLatest: PositionLatest[] | null;
+  /** Null when yield_ledger_position_daily could not be read. Keyed "<chainId>:<tokenId>". */
+  positionCollected: Map<string, number> | null;
 }
 
 const EMPTY_OVERVIEW_BASE = {
-  netYieldPeriodUsd: 0,
+  netYieldPeriodUsd: null as number | null,
   netYieldIsNet: false,
+  netYieldUnpriced: false,
+  netYieldGasEth: null as number | null,
   feesEarnedToDateUsd: 0,
   feeAprPeriodPct: null,
   capitalInPositionsUsd: 0,
@@ -144,55 +172,44 @@ function periodSinceDay(period: YieldPeriod, today: string): string | null {
   return null;
 }
 
-function buildPosition(p: PositionSnapshot, accountKey: string, day: string, positionDaily: readonly PositionDailyRow[] | null): YieldPositionView {
-  if (positionDaily === null) {
-    return { tokenId: p.tokenId, pool: p.pool, inRange: p.inRange, valueUsd: p.valueUsd, accruedFeesUsd: p.feesUsd, collectedUsd: null, vsHoldUsd: null };
-  }
-  const rows = positionDaily.filter((r) => r.accountKey === accountKey && r.tokenId === p.tokenId);
-  const collected = rows.reduce((s, r) => s + (r.collectedUsd ?? 0), 0);
-  const anyCollected = rows.some((r) => r.collectedUsd !== null);
-  const today = rows.find((r) => r.day === day);
-  const vsHoldUsd = today ? today.valueUsd + today.accruedUsdClose - today.holdValueUsd : null;
-  return {
-    tokenId: p.tokenId,
-    pool: p.pool,
-    inRange: p.inRange,
-    valueUsd: p.valueUsd,
-    accruedFeesUsd: p.feesUsd,
-    collectedUsd: anyCollected ? collected : null,
-    vsHoldUsd,
-  };
+function buildPosition(p: PositionSnapshot, chainId: number, latestByToken: ReadonlyMap<number, PositionLatest>, collectedByKey: ReadonlyMap<string, number>): YieldPositionView {
+  const latest = latestByToken.get(p.tokenId);
+  const collectedUsd = collectedByKey.get(`${chainId}:${p.tokenId}`) ?? null;
+  const vsHoldUsd = latest ? latest.valueUsd + latest.accruedUsdClose - latest.holdValueUsd : null;
+  return { tokenId: p.tokenId, pool: p.pool, inRange: p.inRange, valueUsd: p.valueUsd, accruedFeesUsd: p.feesUsd, collectedUsd, vsHoldUsd };
 }
 
 function buildAccount(
   snap: AccountSnapshotRow,
-  daily: readonly DailyLedgerRow[],
-  positionDaily: readonly PositionDailyRow[] | null,
-  sinceDay: string | null,
+  agg: AccountAggregates | undefined,
+  gasLifetimeWei: bigint | null,
+  gasRecordedInPeriod: boolean,
   periodDays: number,
   ethUsd: number | null,
+  positionLatestForAccount: ReadonlyMap<number, PositionLatest>,
+  positionCollected: ReadonlyMap<string, number>,
 ): YieldAccountView {
-  const mine = daily.filter((d) => d.accountKey === snap.accountKey);
-  const collectedToDateUsd = mine.reduce((s, d) => s + (d.collectedUsd ?? 0), 0);
-  const { total: gasToDateWei, any: gasRecorded } = sumWei(mine.map((d) => d.gasPaidWei));
+  // One source per part (code review, otto/mamoru-astro#20 PR #10): the freshest accrued figure is
+  // account_snapshot_latest.fees_usdc (snap.feesUsd, already converted by yield-store.ts), lifetime
+  // collected is Σ account_daily.collected_usdc (agg.collectedToDateUsd, SQL SUM in fetchAccountAggregates).
+  // yield_ledger_position_daily never feeds this figure — see buildPosition above for where it is read.
+  const collectedToDateUsd = agg?.collectedToDateUsd ?? 0;
   const earnedToDateUsd = snap.feesUsd + collectedToDateUsd;
-  const gasToDateUsd = gasRecorded && ethUsd !== null ? weiToUsd(gasToDateWei, ethUsd) : 0;
-  const netToDateUsd = earnedToDateUsd - gasToDateUsd;
 
-  const period = mine.filter((d) => sinceDay === null || d.day >= sinceDay);
-  const feesEarnedPeriodUsd = period.reduce((s, d) => s + (d.feesCloseUsd - d.feesOpenUsd + (d.collectedUsd ?? 0)), 0);
-  const { any: gasRecordedInPeriod } = sumWei(period.map((d) => d.gasPaidWei));
-  const avgLpPeriod = period.length ? period.reduce((s, d) => s + d.lpCloseUsd, 0) / period.length : null;
+  const gasRecorded = gasLifetimeWei !== null;
+  const gasUnpriced = gasRecorded && ethUsd === null;
+  const gasToDateEth = gasRecorded ? Number(gasLifetimeWei) / 1e18 : null;
+  const gasToDateUsd = gasRecorded && ethUsd !== null ? weiToUsd(gasLifetimeWei as bigint, ethUsd) : null;
+  // A recorded cost with no price yet is not the same as no cost: net is unavailable, never earned-minus-zero.
+  const netToDateUsd = gasUnpriced ? null : earnedToDateUsd - (gasToDateUsd ?? 0);
+
+  const feesEarnedPeriodUsd = agg?.feesEarnedPeriodUsd ?? 0;
+  const avgLpPeriod = agg?.avgLpPeriodUsd ?? null;
   const aprPeriodPct = avgLpPeriod && avgLpPeriod > 0 ? (feesEarnedPeriodUsd / avgLpPeriod) * (365 / periodDays) * 100 : null;
 
-  const day = dayOf(snap.readAt);
-  const positions = snap.positions.map((p) => buildPosition(p, snap.accountKey, day, positionDaily));
-  const openTokenIds = new Set(snap.positions.map((p) => p.tokenId));
-  let vsHoldUsd: number | null = null;
-  if (positionDaily !== null && openTokenIds.size > 0) {
-    const rows = positionDaily.filter((r) => r.accountKey === snap.accountKey && r.day === day && openTokenIds.has(r.tokenId));
-    if (rows.length) vsHoldUsd = rows.reduce((s, r) => s + (r.valueUsd + r.accruedUsdClose - r.holdValueUsd), 0);
-  }
+  const positions = snap.positions.map((p) => buildPosition(p, snap.chainId, positionLatestForAccount, positionCollected));
+  const vsHoldRows = snap.positions.map((p) => positionLatestForAccount.get(p.tokenId)).filter((r): r is PositionLatest => r !== undefined);
+  const vsHoldUsd = vsHoldRows.length ? vsHoldRows.reduce((s, r) => s + (r.valueUsd + r.accruedUsdClose - r.holdValueUsd), 0) : null;
 
   return {
     accountKey: snap.accountKey,
@@ -204,6 +221,9 @@ function buildAccount(
     collectedToDateUsd,
     earnedToDateUsd,
     gasRecorded,
+    gasUnpriced,
+    gasToDateEth,
+    gasToDateUsd,
     netToDateUsd,
     feesEarnedPeriodUsd,
     gasRecordedInPeriod,
@@ -216,26 +236,87 @@ function buildAccount(
   };
 }
 
+/** Lifetime and period-scoped gas, grouped by account, summed with BigInt (gasRows is already the sparse,
+ * non-null-only read — see yield-store.ts's fetchGasRows). A parse failure on one row is skipped, never
+ * thrown, same tolerance as every other D1 read in this Worker. */
+function groupGasByAccount(gasRows: readonly GasRow[], sinceDay: string | null): { lifetime: Map<string, bigint>; periodAny: Set<string> } {
+  const lifetime = new Map<string, bigint>();
+  const periodAny = new Set<string>();
+  for (const row of gasRows) {
+    let wei: bigint;
+    try {
+      wei = BigInt(row.gasPaidWei);
+    } catch {
+      continue;
+    }
+    lifetime.set(row.accountKey, (lifetime.get(row.accountKey) ?? 0n) + wei);
+    if (sinceDay === null || row.day >= sinceDay) periodAny.add(row.accountKey);
+  }
+  return { lifetime, periodAny };
+}
+
+/** Period gas, grouped by day (for the chart and the page-level hero). Same BigInt tolerance as above. */
+function groupGasByDay(gasRows: readonly GasRow[], sinceDay: string | null): Map<string, bigint> {
+  const byDay = new Map<string, bigint>();
+  for (const row of gasRows) {
+    if (sinceDay !== null && row.day < sinceDay) continue;
+    let wei: bigint;
+    try {
+      wei = BigInt(row.gasPaidWei);
+    } catch {
+      continue;
+    }
+    byDay.set(row.day, (byDay.get(row.day) ?? 0n) + wei);
+  }
+  return byDay;
+}
+
+function groupPositionLatestByAccount(rows: readonly PositionLatest[]): Map<string, Map<number, PositionLatest>> {
+  const map = new Map<string, Map<number, PositionLatest>>();
+  for (const r of rows) {
+    const inner = map.get(r.accountKey) ?? new Map<number, PositionLatest>();
+    inner.set(r.tokenId, r);
+    map.set(r.accountKey, inner);
+  }
+  return map;
+}
+
 export function buildYieldOverview(inputs: YieldInputs, filter: AccountFilter, period: YieldPeriod, now: Date, ethUsd: number | null, flagOn: boolean): YieldOverview {
   const today = utcDay(now);
-  const missing0009 = inputs.snapshots === null || inputs.daily === null;
+  const missing0009 = inputs.snapshots === null || inputs.accountAggregates === null;
   if (missing0009) {
-    return { filter, period, periodDays: 1, asOf: null, missing0009: true, missing0010: inputs.positionDaily === null, flagOn, noRows: false, ...EMPTY_OVERVIEW_BASE };
+    return { filter, period, periodDays: 1, asOf: null, missing0009: true, missing0010: inputs.positionLatest === null || inputs.positionCollected === null, flagOn, noRows: false, ...EMPTY_OVERVIEW_BASE };
   }
   const snapshots = inputs.snapshots!;
-  const daily = inputs.daily!;
-  const missing0010 = inputs.positionDaily === null;
+  const aggByAccount = inputs.accountAggregates!;
+  const gasRows = inputs.gasRows ?? [];
+  const dailyAggregates = inputs.dailyAggregates ?? [];
+  const missing0010 = inputs.positionLatest === null || inputs.positionCollected === null;
+  const positionCollected = inputs.positionCollected ?? new Map<string, number>();
   const noRows = flagOn && snapshots.length === 0;
   if (!flagOn || noRows) {
     return { filter, period, periodDays: 1, asOf: null, missing0009: false, missing0010, flagOn, noRows, ...EMPTY_OVERVIEW_BASE };
   }
 
-  const earliestDay = daily.reduce<string | null>((min, d) => (min === null || d.day < min ? d.day : min), null);
   const sinceDay = periodSinceDay(period, today);
-  const periodDays = period === "all" ? Math.max(1, earliestDay ? daysBetween(earliestDay, today) + 1 : 1) : (sinceDay === today ? 1 : daysBetween(sinceDay!, today) + 1);
+  const periodDays = period === "all" ? Math.max(1, inputs.earliestDay ? daysBetween(inputs.earliestDay, today) + 1 : 1) : (sinceDay === today ? 1 : daysBetween(sinceDay!, today) + 1);
+
+  const gasByAccount = groupGasByAccount(gasRows, sinceDay);
+  const positionLatestByAccount = groupPositionLatestByAccount(inputs.positionLatest ?? []);
 
   const accounts = snapshots
-    .map((snap) => buildAccount(snap, daily, inputs.positionDaily, sinceDay, periodDays, ethUsd))
+    .map((snap) =>
+      buildAccount(
+        snap,
+        aggByAccount.get(snap.accountKey),
+        gasByAccount.lifetime.get(snap.accountKey) ?? null,
+        gasByAccount.periodAny.has(snap.accountKey),
+        periodDays,
+        ethUsd,
+        positionLatestByAccount.get(snap.accountKey) ?? new Map(),
+        positionCollected,
+      ),
+    )
     .sort((a, b) => b.earnedToDateUsd - a.earnedToDateUsd);
 
   const capitalInPositionsUsd = snapshots.reduce((s, r) => s + r.lpUsd, 0);
@@ -244,38 +325,24 @@ export function buildYieldOverview(inputs: YieldInputs, filter: AccountFilter, p
   const projectedFeeUncollectedUsd = accounts.reduce((s, a) => s + a.feesUncollectedUsd, 0) * 0.1;
   const gasRecordedAnywhere = accounts.some((a) => a.gasRecorded);
 
-  const scopedDaily = daily.filter((d) => snapshots.some((s) => s.accountKey === d.accountKey));
-  const periodRows = scopedDaily.filter((d) => sinceDay === null || d.day >= sinceDay);
-  const byDay = new Map<string, { fees: number; lp: number; lpN: number; gasWei: bigint[]; gasAny: boolean }>();
-  for (const row of periodRows) {
-    const bucket = byDay.get(row.day) ?? { fees: 0, lp: 0, lpN: 0, gasWei: [], gasAny: false };
-    bucket.fees += row.feesCloseUsd - row.feesOpenUsd + (row.collectedUsd ?? 0);
-    bucket.lp += row.lpCloseUsd;
-    bucket.lpN += 1;
-    if (row.gasPaidWei !== null) {
-      bucket.gasAny = true;
-      try {
-        bucket.gasWei.push(BigInt(row.gasPaidWei));
-      } catch {
-        // skipped, same tolerance as sumWei above
-      }
-    }
-    byDay.set(row.day, bucket);
-  }
-  const feesEarnedPeriodUsd = [...byDay.values()].reduce((s, b) => s + b.fees, 0);
-  const daysWithLp = [...byDay.values()].filter((b) => b.lpN > 0);
-  const avgLpAggregate = daysWithLp.length ? daysWithLp.reduce((s, b) => s + b.lp, 0) / daysWithLp.length : null;
+  const feesEarnedPeriodUsd = dailyAggregates.reduce((s, d) => s + d.feesUsd, 0);
+  const avgLpAggregate = dailyAggregates.length ? dailyAggregates.reduce((s, d) => s + d.lpUsdSum, 0) / dailyAggregates.length : null;
   const feeAprPeriodPct = avgLpAggregate && avgLpAggregate > 0 ? (feesEarnedPeriodUsd / avgLpAggregate) * (365 / periodDays) * 100 : null;
-  const gasRecordedInPeriodAnywhere = [...byDay.values()].some((b) => b.gasAny);
-  const gasPeriodWeiTotal = [...byDay.values()].reduce((s, b) => s + b.gasWei.reduce((x, y) => x + y, 0n), 0n);
-  const netYieldIsNet = gasRecordedInPeriodAnywhere && ethUsd !== null;
-  const netYieldPeriodUsd = netYieldIsNet ? feesEarnedPeriodUsd - weiToUsd(gasPeriodWeiTotal, ethUsd as number) : feesEarnedPeriodUsd;
 
-  const barStart = sinceDay ?? earliestDay ?? today;
+  const gasByDay = groupGasByDay(gasRows, sinceDay);
+  const gasRecordedInPeriodAnywhere = gasByDay.size > 0;
+  const gasPeriodWeiTotal = [...gasByDay.values()].reduce((s, w) => s + w, 0n);
+  const netYieldUnpriced = gasRecordedInPeriodAnywhere && ethUsd === null;
+  const netYieldIsNet = gasRecordedInPeriodAnywhere && ethUsd !== null;
+  const netYieldPeriodUsd = netYieldUnpriced ? null : netYieldIsNet ? feesEarnedPeriodUsd - weiToUsd(gasPeriodWeiTotal, ethUsd as number) : feesEarnedPeriodUsd;
+  const netYieldGasEth = gasRecordedInPeriodAnywhere ? Number(gasPeriodWeiTotal) / 1e18 : null;
+
+  const barStart = sinceDay ?? inputs.earliestDay ?? today;
+  const byDayFees = new Map(dailyAggregates.map((d) => [d.day, d.feesUsd]));
   const dailyBars: YieldDailyBar[] = dayRange(barStart, today).map((day) => {
-    const bucket = byDay.get(day);
-    const gasUsd = bucket?.gasAny && ethUsd !== null ? weiToUsd(bucket.gasWei.reduce((x, y) => x + y, 0n), ethUsd) : null;
-    return { day, feesUsd: bucket?.fees ?? 0, gasUsd };
+    const gasWei = gasByDay.get(day) ?? null;
+    const gasUsd = gasWei !== null && ethUsd !== null ? weiToUsd(gasWei, ethUsd) : null;
+    return { day, feesUsd: byDayFees.get(day) ?? 0, gasUsd };
   });
 
   const asOf = snapshots.reduce<string | null>((max, s) => (max === null || s.readAt > max ? s.readAt : max), null);
@@ -291,6 +358,8 @@ export function buildYieldOverview(inputs: YieldInputs, filter: AccountFilter, p
     noRows: false,
     netYieldPeriodUsd,
     netYieldIsNet,
+    netYieldUnpriced,
+    netYieldGasEth,
     feesEarnedToDateUsd,
     feeAprPeriodPct,
     capitalInPositionsUsd,
@@ -302,6 +371,12 @@ export function buildYieldOverview(inputs: YieldInputs, filter: AccountFilter, p
   };
 }
 
+/** Every open position across these snapshots, chain + token id + owning account, for the position-daily
+ * lookups (yield-store.ts's fetchPositionLatest/fetchPositionLifetimeCollected). */
+function openPositionsOf(snapshots: readonly AccountSnapshotRow[]): OpenPosition[] {
+  return snapshots.flatMap((s) => s.positions.map((p) => ({ chainId: s.chainId, tokenId: p.tokenId, accountKey: s.accountKey })));
+}
+
 /**
  * Reads everything /ops/yield needs and builds the model. The `yield_ledger` flag (ops-flags-store.ts,
  * migration 0012) is read here, not passed in: a missing ops_flag_changes table reads as off, same "no row
@@ -309,13 +384,25 @@ export function buildYieldOverview(inputs: YieldInputs, filter: AccountFilter, p
  * coherent "it's off" page instead of a second kind of error.
  */
 export async function loadYieldOverview(db: D1Db | undefined, filter: AccountFilter, period: YieldPeriod, now: Date, ethUsd: number | null): Promise<YieldOverview> {
-  if (!db) return buildYieldOverview({ snapshots: null, daily: null, positionDaily: null }, filter, period, now, ethUsd, false);
+  const empty: YieldInputs = { snapshots: null, accountAggregates: null, gasRows: null, dailyAggregates: null, earliestDay: null, positionLatest: null, positionCollected: null };
+  if (!db) return buildYieldOverview(empty, filter, period, now, ethUsd, false);
+
   const [flagStates, snapshots] = await Promise.all([currentFlagStates(db), fetchYieldAccounts(db, filter)]);
   const flagOn = flagStates?.get("yield_ledger")?.enabled ?? false;
-  if (snapshots === null) {
-    return buildYieldOverview({ snapshots: null, daily: null, positionDaily: null }, filter, period, now, ethUsd, flagOn);
-  }
+  if (snapshots === null) return buildYieldOverview(empty, filter, period, now, ethUsd, flagOn);
+
+  const today = utcDay(now);
+  const sinceDay = periodSinceDay(period, today) ?? "";
   const accountKeys = snapshots.map((s) => s.accountKey);
-  const [daily, positionDaily] = await Promise.all([fetchAccountDaily(db, filter.chainId, accountKeys), fetchPositionDaily(db, filter.chainId, accountKeys)]);
-  return buildYieldOverview({ snapshots, daily, positionDaily }, filter, period, now, ethUsd, flagOn);
+  const [accountAggregates, gasRows, dailyAggregates, earliestDay] = await Promise.all([
+    fetchAccountAggregates(db, filter.chainId, accountKeys, sinceDay),
+    fetchGasRows(db, filter.chainId, accountKeys),
+    fetchDailyAggregates(db, filter.chainId, accountKeys, sinceDay),
+    fetchEarliestDay(db, filter.chainId, accountKeys),
+  ]);
+
+  const openPositions = openPositionsOf(snapshots);
+  const [positionLatest, positionCollected] = await Promise.all([fetchPositionLatest(db, openPositions), fetchPositionLifetimeCollected(db, openPositions)]);
+
+  return buildYieldOverview({ snapshots, accountAggregates, gasRows, dailyAggregates, earliestDay, positionLatest, positionCollected }, filter, period, now, ethUsd, flagOn);
 }

@@ -5,6 +5,15 @@
  * only elsewhere in this Worker, same rule as d1-infra.ts and metrics-store.ts. Every USD column on these
  * three tables is raw USDC base units (6 decimals) as INTEGER, per both migrations' header comments; every
  * read below divides by 1e6 so nothing downstream has to remember the scale.
+ *
+ * Every USDC-scaled sum here is computed in SQL (GROUP BY), never by capping a row list and reducing it in
+ * JS: a day's worth of history per account is unbounded in principle (years of account_daily rows), and a
+ * LIMIT on the rows feeding a SUM would silently under-count an old or active account instead of refusing or
+ * degrading — exactly the kind of wrong-not-missing number this console must never show (code review,
+ * otto/mamoru-astro#20 PR #10). The one exception is `gas_paid_wei`: TEXT, not USDC-scaled, so it is fetched
+ * (sparse rows only, `IS NOT NULL`, no day bound) and summed with BigInt in the caller instead of SQL SUM,
+ * never cast through a float64. The only LIMIT left anywhere in this file bounds how many *accounts* (or
+ * distinct positions) are displayed, applied after every filter, never the rows a total is built from.
  */
 
 import { accountScopeSql, type AccountFilter } from "./account-filter";
@@ -13,6 +22,11 @@ import type { D1Db } from "./d1-infra";
 const USDC = 1_000_000;
 
 const missingTable = (e: unknown) => /no such table/i.test(e instanceof Error ? e.message : String(e));
+
+/** Escapes `%` and `_` so a free-text search term can't accidentally use SQL LIKE wildcards. */
+function likeEscape(value: string): string {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
 
 export type PositionSnapshot = {
   tokenId: number;
@@ -80,14 +94,23 @@ function parsePositions(json: string): PositionSnapshot[] {
 
 /**
  * Every account_snapshot_latest row in scope: env/chain/is_test from a join against `accounts` (otto/mamoru#130's
- * accountScopeSql, same as fetchInfraCounts in d1-infra.ts), then the free-text `?account=` term matched
- * against the key or the address in JS (same rule as infra-snapshot.ts's matchesFilter — the SQL above only
- * narrows env/chain, never the free-text term). Null when account_snapshot_latest or accounts is missing,
- * i.e. migration 0009 is not applied. Capped: an ops console reads hundreds of accounts, not millions.
+ * accountScopeSql, same as fetchInfraCounts in d1-infra.ts) and the free-text `?account=` term, both in the
+ * SQL WHERE, bound params, before the LIMIT — a free-text match past the first `cap` account keys (sorted)
+ * must still be found; narrowing after the LIMIT instead of before it was a real bug here (code review,
+ * otto/mamoru-astro#20 PR #10) since a match sorting after the cutoff would silently never be read at all.
+ * Null when account_snapshot_latest or accounts is missing, i.e. migration 0009 is not applied. `cap` bounds
+ * how many matching accounts this page shows, never which ones match.
  */
 export async function fetchYieldAccounts(db: D1Db, filter: AccountFilter, cap = 1000): Promise<AccountSnapshotRow[] | null> {
-  const { sql, params } = accountScopeSql(filter, "a");
-  const where = sql ? `WHERE ${sql}` : "";
+  const scope = accountScopeSql(filter, "a");
+  const clauses = scope.sql ? [scope.sql] : [];
+  const params: unknown[] = [...scope.params];
+  if (filter.account) {
+    const pattern = `%${likeEscape(filter.account.toLowerCase())}%`;
+    clauses.push("(LOWER(asl.account_key) LIKE ? ESCAPE '\\' OR LOWER(asl.address) LIKE ? ESCAPE '\\')");
+    params.push(pattern, pattern);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   try {
     const { results } = await db
       .prepare(
@@ -100,7 +123,7 @@ export async function fetchYieldAccounts(db: D1Db, filter: AccountFilter, cap = 
       )
       .bind(...params, cap)
       .all<RawSnapshot>();
-    const rows: AccountSnapshotRow[] = results.map((r) => ({
+    return results.map((r) => ({
       chainId: Number(r.chain_id),
       address: String(r.address),
       accountKey: String(r.account_key),
@@ -113,104 +136,213 @@ export async function fetchYieldAccounts(db: D1Db, filter: AccountFilter, cap = 
       totalUsd: Number(r.total_usdc) / USDC,
       positions: parsePositions(r.positions_json),
     }));
-    if (!filter.account) return rows;
-    const needle = filter.account.toLowerCase();
-    return rows.filter((r) => r.accountKey.toLowerCase().includes(needle) || r.address.toLowerCase().includes(needle));
   } catch (e) {
     if (missingTable(e)) return null;
     throw e;
   }
 }
 
-export type DailyLedgerRow = {
-  day: string;
-  accountKey: string;
-  feesOpenUsd: number;
-  feesCloseUsd: number;
-  lpCloseUsd: number;
-  /** Null until a harvest-receipt tracker exists (yield-ledger.ts's own comment); never fabricated as zero. */
-  collectedUsd: number | null;
-  /** Raw wei, decimal string; null until a harvest-receipt tracker exists. */
-  gasPaidWei: string | null;
-};
-
-type RawDaily = { day: string; account_key: string; fees_open_usdc: number; fees_close_usdc: number; lp_close_usdc: number; collected_usdc: number | null; gas_paid_wei: string | null };
-
-/**
- * Every account_daily row for these accounts, oldest first, unbounded by day: the per-account "collected to
- * date" and "gas to date" figures are lifetime sums (same contract as apps/mamoru-app/src/api/accounts/yield.ts's
- * loadYieldLedger), and the period figures (fees earned in N days, the daily bars) are derived from the same
- * rows in ops-yield-overview.ts rather than fetched twice. Null when account_daily is missing, i.e. migration
- * 0009 is not applied. Empty `accountKeys` short-circuits to `[]` without a query (an empty IN () is invalid SQL).
- */
-export async function fetchAccountDaily(db: D1Db, chainId: number | "all", accountKeys: readonly string[], cap = 20_000): Promise<DailyLedgerRow[] | null> {
-  if (accountKeys.length === 0) return [];
+/** `WHERE account_key IN (...)`, plus chain when the filter narrows to one. Never called with an empty list. */
+function accountKeyScope(chainId: number | "all", accountKeys: readonly string[]): { sql: string; params: unknown[] } {
   const placeholders = accountKeys.map(() => "?").join(", ");
   const chainClause = chainId === "all" ? "" : "AND chain_id = ?";
+  const params: unknown[] = [...accountKeys, ...(chainId === "all" ? [] : [chainId])];
+  return { sql: `account_key IN (${placeholders}) ${chainClause}`, params };
+}
+
+export type AccountAggregates = {
+  accountKey: string;
+  /** Lifetime, from account_daily.collected_usdc. Null when this account has never had one recorded. */
+  collectedToDateUsd: number | null;
+  /** Σ(fees_close − fees_open + collected) over account_daily rows with day ≥ `sinceDay`. */
+  feesEarnedPeriodUsd: number;
+  /** Average of lp_close_usdc over the same period rows. Null when there are none. */
+  avgLpPeriodUsd: number | null;
+};
+
+type RawAccountAgg = { account_key: string; collected_to_date: number | null; fees_period: number | null; lp_period_sum: number | null; days_in_period: number };
+
+/**
+ * One row per account: lifetime collected (unconditional SUM, so a years-old account is never truncated)
+ * and the period's fees/avg-lp (conditional SUM on `day >= sinceDay`), in one GROUP BY account_key query —
+ * no row list is fetched and reduced in JS, so there is nothing here a row-count LIMIT could silently cut
+ * off (code review, otto/mamoru-astro#20 PR #10). `collected_usdc`/`lp_close_usdc` are USDC-scaled INTEGER
+ * columns (same precision the rest of this Worker already reads as a plain `number`, d1-infra.ts included),
+ * so SQL SUM/AVG here is exact at any realistic scale. Gas is deliberately not summed here: `gas_paid_wei`
+ * is TEXT precisely because a wei amount has no fixed small decimal scale, so it is read and summed as a
+ * BigInt in JS instead (fetchGasRows below), never cast through a float64 in SQL or here. Pass
+ * `sinceDay = ""` for the "all" period: every real day string sorts after the empty string, so the period
+ * condition is then always true.
+ */
+export async function fetchAccountAggregates(db: D1Db, chainId: number | "all", accountKeys: readonly string[], sinceDay: string): Promise<Map<string, AccountAggregates> | null> {
+  if (accountKeys.length === 0) return new Map();
+  const scope = accountKeyScope(chainId, accountKeys);
   try {
     const { results } = await db
       .prepare(
-        `SELECT day, account_key, fees_open_usdc, fees_close_usdc, lp_close_usdc, collected_usdc, gas_paid_wei
-         FROM account_daily WHERE account_key IN (${placeholders}) ${chainClause} ORDER BY day ASC LIMIT ?`,
+        `SELECT account_key,
+                SUM(collected_usdc) AS collected_to_date,
+                SUM(CASE WHEN day >= ? THEN fees_close_usdc - fees_open_usdc + COALESCE(collected_usdc, 0) ELSE 0 END) AS fees_period,
+                SUM(CASE WHEN day >= ? THEN lp_close_usdc ELSE 0 END) AS lp_period_sum,
+                SUM(CASE WHEN day >= ? THEN 1 ELSE 0 END) AS days_in_period
+         FROM account_daily WHERE ${scope.sql} GROUP BY account_key`,
       )
-      .bind(...accountKeys, ...(chainId === "all" ? [] : [chainId]), cap)
-      .all<RawDaily>();
-    return results.map((r) => ({
-      day: String(r.day),
-      accountKey: String(r.account_key),
-      feesOpenUsd: Number(r.fees_open_usdc) / USDC,
-      feesCloseUsd: Number(r.fees_close_usdc) / USDC,
-      lpCloseUsd: Number(r.lp_close_usdc) / USDC,
-      collectedUsd: r.collected_usdc === null || r.collected_usdc === undefined ? null : Number(r.collected_usdc) / USDC,
-      gasPaidWei: r.gas_paid_wei ?? null,
-    }));
+      .bind(sinceDay, sinceDay, sinceDay, ...scope.params)
+      .all<RawAccountAgg>();
+    const map = new Map<string, AccountAggregates>();
+    for (const r of results) {
+      map.set(String(r.account_key), {
+        accountKey: String(r.account_key),
+        collectedToDateUsd: r.collected_to_date === null ? null : Number(r.collected_to_date) / USDC,
+        feesEarnedPeriodUsd: Number(r.fees_period ?? 0) / USDC,
+        avgLpPeriodUsd: r.days_in_period > 0 ? Number(r.lp_period_sum ?? 0) / USDC / r.days_in_period : null,
+      });
+    }
+    return map;
   } catch (e) {
     if (missingTable(e)) return null;
     throw e;
   }
 }
 
-export type PositionDailyRow = {
-  day: string;
-  accountKey: string;
-  tokenId: number;
-  valueUsd: number;
-  accruedUsdClose: number;
-  holdValueUsd: number;
-  collectedUsd: number | null;
-};
+export type DayAggregate = { day: string; feesUsd: number; lpUsdSum: number };
 
-type RawPositionDaily = { day: string; account_key: string; token_id: number; value_usd: number; accrued_usd_close: number; hold_value_usd: number; collected_usd: number | null };
+type RawDayAgg = { day: string; fees: number | null; lp_sum: number | null };
 
 /**
- * Every yield_ledger_position_daily row for these accounts, oldest first, unbounded by day: lifetime
- * per-position "collected" sums the same way, and "value vs hold" is read for each account's own current
- * day (openPositionsValueVsHold's exact rule in apps/mamoru-app/src/api/accounts/yield.ts) by the caller,
- * from these same rows, so the two never drift. Null when yield_ledger_position_daily is missing, i.e.
- * migration 0010 is not applied — distinct from 0009: an account can have a current snapshot with no
- * position-level yield detail yet.
+ * One row per UTC day across every account in scope, day ≥ `sinceDay` (empty string for "all"): the daily
+ * chart and the page's own period totals both read this, already bounded by the period, never by an
+ * arbitrary row cap. Gas is not part of this query — see fetchGasRows. Null when account_daily is missing.
  */
-export async function fetchPositionDaily(db: D1Db, chainId: number | "all", accountKeys: readonly string[], cap = 50_000): Promise<PositionDailyRow[] | null> {
+export async function fetchDailyAggregates(db: D1Db, chainId: number | "all", accountKeys: readonly string[], sinceDay: string): Promise<DayAggregate[] | null> {
   if (accountKeys.length === 0) return [];
-  const placeholders = accountKeys.map(() => "?").join(", ");
-  const chainClause = chainId === "all" ? "" : "AND chain_id = ?";
+  const scope = accountKeyScope(chainId, accountKeys);
   try {
     const { results } = await db
       .prepare(
-        `SELECT day, account_key, token_id, value_usd, accrued_usd_close, hold_value_usd, collected_usd
-         FROM yield_ledger_position_daily WHERE account_key IN (${placeholders}) ${chainClause} ORDER BY day ASC LIMIT ?`,
+        `SELECT day, SUM(fees_close_usdc - fees_open_usdc + COALESCE(collected_usdc, 0)) AS fees, SUM(lp_close_usdc) AS lp_sum
+         FROM account_daily WHERE ${scope.sql} AND day >= ? GROUP BY day ORDER BY day ASC`,
       )
-      .bind(...accountKeys, ...(chainId === "all" ? [] : [chainId]), cap)
-      .all<RawPositionDaily>();
+      .bind(...scope.params, sinceDay)
+      .all<RawDayAgg>();
+    return results.map((r) => ({ day: String(r.day), feesUsd: Number(r.fees ?? 0) / USDC, lpUsdSum: Number(r.lp_sum ?? 0) / USDC }));
+  } catch (e) {
+    if (missingTable(e)) return null;
+    throw e;
+  }
+}
+
+export type GasRow = { accountKey: string; day: string; gasPaidWei: string };
+
+type RawGasRow = { account_key: string; day: string; gas_paid_wei: string };
+
+/**
+ * Every account_daily row that actually has a recorded gas_paid_wei, for these accounts, lifetime (no day
+ * bound: the caller slices by period in JS). `gas_paid_wei IS NOT NULL` makes this naturally sparse — today
+ * it is always empty (no harvest-receipt tracker exists yet, yield-ledger.ts's own comment) — so there is no
+ * row-count cap here at all, deliberately: capping a sparse, filtered-to-only-what-matters query would only
+ * ever cut real data, never noise. Kept as the raw TEXT wei string so the caller sums with BigInt, exact at
+ * any lifetime total (code review, otto/mamoru-astro#20 PR #10: a wei amount must never cross a float64).
+ */
+export async function fetchGasRows(db: D1Db, chainId: number | "all", accountKeys: readonly string[]): Promise<GasRow[] | null> {
+  if (accountKeys.length === 0) return [];
+  const scope = accountKeyScope(chainId, accountKeys);
+  try {
+    const { results } = await db
+      .prepare(`SELECT account_key, day, gas_paid_wei FROM account_daily WHERE ${scope.sql} AND gas_paid_wei IS NOT NULL ORDER BY day ASC`)
+      .bind(...scope.params)
+      .all<RawGasRow>();
+    return results.map((r) => ({ accountKey: String(r.account_key), day: String(r.day), gasPaidWei: String(r.gas_paid_wei) }));
+  } catch (e) {
+    if (missingTable(e)) return null;
+    throw e;
+  }
+}
+
+/** MIN(day) across these accounts: the "all" period's start. Null when there is no row at all. */
+export async function fetchEarliestDay(db: D1Db, chainId: number | "all", accountKeys: readonly string[]): Promise<string | null> {
+  if (accountKeys.length === 0) return null;
+  const scope = accountKeyScope(chainId, accountKeys);
+  try {
+    const r = await db.prepare(`SELECT MIN(day) AS d FROM account_daily WHERE ${scope.sql}`).bind(...scope.params).first<{ d: string | null }>();
+    return r?.d ?? null;
+  } catch (e) {
+    if (missingTable(e)) return null;
+    throw e;
+  }
+}
+
+/** One open position to look up: which chain and token id, and which account it belongs to (for grouping). */
+export type OpenPosition = { chainId: number; tokenId: number; accountKey: string };
+
+/** `(chain_id = ? AND token_id = ?) OR (chain_id = ? AND token_id = ?) OR ...`, parenthesized as one unit. */
+function positionPairsSql(positions: readonly OpenPosition[]): { sql: string; params: unknown[] } {
+  const sql = positions.map(() => "(chain_id = ? AND token_id = ?)").join(" OR ");
+  const params = positions.flatMap((p) => [p.chainId, p.tokenId]);
+  return { sql: `(${sql})`, params };
+}
+
+export type PositionLatest = { accountKey: string; tokenId: number; valueUsd: number; accruedUsdClose: number; holdValueUsd: number };
+
+type RawPositionLatest = { account_key: string; token_id: number; value_usd: number; accrued_usd_close: number; hold_value_usd: number };
+
+/**
+ * The single latest-day row for each of these positions (a MAX(day) correlated subquery per (chain_id,
+ * token_id), never a full history fetch filtered in JS to one day): "value vs hold" reads whatever the most
+ * recent write for a position is, which otherwise needed every row for every position's whole lifetime just
+ * to find one day (code review, otto/mamoru-astro#20 PR #10 — the old approach also had a row-count LIMIT
+ * ahead of that filtering). Bounded by the number of positions passed in, not by any day-history cap. Null
+ * when yield_ledger_position_daily is missing, i.e. migration 0010 is not applied. Empty `positions`
+ * short-circuits to `[]`.
+ */
+export async function fetchPositionLatest(db: D1Db, positions: readonly OpenPosition[]): Promise<PositionLatest[] | null> {
+  if (positions.length === 0) return [];
+  const pairs = positionPairsSql(positions);
+  try {
+    const { results } = await db
+      .prepare(
+        `SELECT account_key, token_id, value_usd, accrued_usd_close, hold_value_usd
+         FROM yield_ledger_position_daily pd
+         WHERE ${pairs.sql}
+           AND day = (SELECT MAX(day) FROM yield_ledger_position_daily WHERE chain_id = pd.chain_id AND token_id = pd.token_id)`,
+      )
+      .bind(...pairs.params)
+      .all<RawPositionLatest>();
     return results.map((r) => ({
-      day: String(r.day),
       accountKey: String(r.account_key),
       tokenId: Number(r.token_id),
       valueUsd: Number(r.value_usd) / USDC,
       accruedUsdClose: Number(r.accrued_usd_close) / USDC,
       holdValueUsd: Number(r.hold_value_usd) / USDC,
-      collectedUsd: r.collected_usd === null || r.collected_usd === undefined ? null : Number(r.collected_usd) / USDC,
     }));
+  } catch (e) {
+    if (missingTable(e)) return null;
+    throw e;
+  }
+}
+
+type RawPositionCollected = { chain_id: number; token_id: number; collected_sum: number | null };
+
+/**
+ * Lifetime `collected_usd`, summed in SQL and grouped by (chain_id, token_id) — the per-position drill-down's
+ * "Collected" column, for exactly the positions passed in, with no history-row cap ahead of the sum. Keyed
+ * `"<chainId>:<tokenId>"` since a token id is only unique within its own chain. Null when
+ * yield_ledger_position_daily is missing.
+ */
+export async function fetchPositionLifetimeCollected(db: D1Db, positions: readonly OpenPosition[]): Promise<Map<string, number> | null> {
+  if (positions.length === 0) return new Map();
+  const pairs = positionPairsSql(positions);
+  try {
+    const { results } = await db
+      .prepare(`SELECT chain_id, token_id, SUM(collected_usd) AS collected_sum FROM yield_ledger_position_daily WHERE ${pairs.sql} GROUP BY chain_id, token_id`)
+      .bind(...pairs.params)
+      .all<RawPositionCollected>();
+    const map = new Map<string, number>();
+    for (const r of results) {
+      if (r.collected_sum === null) continue;
+      map.set(`${Number(r.chain_id)}:${Number(r.token_id)}`, Number(r.collected_sum) / USDC);
+    }
+    return map;
   } catch (e) {
     if (missingTable(e)) return null;
     throw e;

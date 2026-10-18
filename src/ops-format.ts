@@ -41,6 +41,19 @@ export function fmtApr(value: number): string {
   return `${value.toFixed(1)}%`;
 }
 
+/**
+ * A raw ETH (or other native gas token) amount, for when there is no USD price to show it with instead
+ * (otto/mamoru-astro#20 code review, PR #10: a recorded gas figure with no price yet must still be visible,
+ * never silently dropped to "$0"). Six decimals, trailing zeros trimmed: "0.000412 ETH", "0 ETH" for a
+ * genuine zero.
+ */
+export function fmtEth(value: number): string {
+  if (!Number.isFinite(value) || value === 0) return "0 ETH";
+  const sign = value < 0 ? "-" : "";
+  const trimmed = Math.abs(value).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+  return `${sign}${trimmed === "" ? "0" : trimmed} ETH`;
+}
+
 /** The account key as every other /ops table shows it: full below 10 characters, else the first 8 and an ellipsis. */
 export function fmtAccountKey(key: string): string {
   return key.length <= 10 ? key : `${key.slice(0, 8)}…`;

@@ -24,11 +24,18 @@ INSERT INTO account_daily VALUES ('2026-10-17', 8453, '0xaaaaaaaaaaaaaaaaaaaaaaa
 INSERT INTO account_daily VALUES ('2026-10-18', 8453, '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'acc1', 'unknown', 96, 100, 121000000, 131300000, 1000000, 130000000, 1500000, 2000000, NULL, NULL);
 `;
 
+/** Same as SEED_DATA, with a recorded gas figure on acc1's 2026-10-17 row (0.002 ETH). */
+const SEED_DATA_WITH_GAS = SEED_DATA.replace(
+  "INSERT INTO account_daily VALUES ('2026-10-17', 8453, '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'acc1', 'unknown', 90, 95, 120000000, 121000000, 0, 120000000, 1000000, 1500000, 500000, NULL);",
+  "INSERT INTO account_daily VALUES ('2026-10-17', 8453, '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'acc1', 'unknown', 90, 95, 120000000, 121000000, 0, 120000000, 1000000, 1500000, 500000, '2000000000000000');",
+);
+
 function memoryDb(tables: string[]): D1Db {
   const db = new Database(":memory:");
   if (tables.includes("yield")) db.exec(YIELD_SCHEMA);
   if (tables.includes("flags")) db.exec(FLAGS_SCHEMA);
   if (tables.includes("seed")) db.exec(SEED_DATA);
+  if (tables.includes("seed-gas")) db.exec(SEED_DATA_WITH_GAS);
   const stmt = (sql: string, values: unknown[] = []): any => ({
     bind: (...v: unknown[]) => stmt(sql, v),
     first: async () => (db.query(sql).get(...(values as never[])) as unknown) ?? null,
@@ -130,6 +137,29 @@ describe("/ops/yield with data", () => {
     const { env, cookie } = await opsEnv(await flagOnDb());
     const html = await (await worker.fetch(get("/ops/yield", cookie), env)).text();
     expect(html).toContain("Fees only. Gas not recorded yet.");
+  });
+
+  async function flagOnDbWithGas() {
+    const db = memoryDb(["yield", "flags", "seed-gas"]);
+    await appendFlagChange(db, { flag: "yield_ledger", enabled: true, author: "x", reason: "go", expectedMaxId: await maxIdOf(db, "yield_ledger") });
+    return db;
+  }
+
+  test("gas recorded and priced: the hero shows a real net, not the fees-only label", async () => {
+    const { env, cookie } = await opsEnv(await flagOnDbWithGas(), 2000);
+    const html = await (await worker.fetch(get("/ops/yield", cookie), env)).text();
+    expect(html).not.toContain("Fees only. Gas not recorded yet.");
+    expect(html).not.toContain("unpriced");
+    expect(html).not.toContain("Net unavailable");
+  });
+
+  test("gas recorded but no ETH price yet: the hero and the account row both say so, never a fabricated $0 (code review, PR #10)", async () => {
+    const { env, cookie } = await opsEnv(await flagOnDbWithGas(), null);
+    const html = await (await worker.fetch(get("/ops/yield", cookie), env)).text();
+    expect(html).toContain("Net unavailable until the ETH price is read.");
+    expect(html).toContain("of gas recorded, not yet priced");
+    expect(html).toContain("0.002 ETH, unpriced");
+    expect(html).not.toContain("Fees only. Gas not recorded yet.");
   });
 
   test("the fragment carries the same body as the document, and the gate covers it unauthenticated", async () => {
