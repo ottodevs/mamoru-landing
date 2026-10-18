@@ -235,13 +235,13 @@ describe("fetchPositionLatest / fetchPositionLifetimeCollected", () => {
   test("fetchPositionLatest returns only the latest day per (chain, token), not every historical row", async () => {
     const db = memoryDb();
     const rows = await fetchPositionLatest(db, [position]);
-    expect(rows).toEqual([{ accountKey: "acc1", tokenId: 1, valueUsd: 130, accruedUsdClose: 0.3, holdValueUsd: 125 }]);
+    expect(rows).toEqual([{ chainId: 8453, accountKey: "acc1", tokenId: 1, valueUsd: 130, accruedUsdClose: 0.3, holdValueUsd: 125 }]);
   });
 
   test("fetchPositionLifetimeCollected sums collected_usd across every day for the position, in SQL", async () => {
     const db = spyDb();
     const map = await fetchPositionLifetimeCollected(db, [position]);
-    expect(map!.get("8453:1")).toBeCloseTo(0.5, 6);
+    expect(map!.get("8453:acc1:1")).toBeCloseTo(0.5, 6);
     for (const sql of db.queries) expect(sql.toUpperCase()).not.toContain("LIMIT");
   });
 
@@ -249,6 +249,33 @@ describe("fetchPositionLatest / fetchPositionLifetimeCollected", () => {
     const db = memoryDb();
     expect(await fetchPositionLatest(db, [])).toEqual([]);
     expect(await fetchPositionLifetimeCollected(db, [])).toEqual(new Map());
+  });
+
+  test("two accounts sharing the same (chain_id, token_id): each sees only its own row (code review, PR #10 round 2)", async () => {
+    const db = new Database(":memory:");
+    db.exec(SCHEMA);
+    // acc9 collides with acc1 on (chain_id=8453, token_id=1) — should never happen in real data (a Uniswap
+    // token id has one owner), but the query must not rely on that: it binds account_key too.
+    db.exec(
+      `INSERT INTO accounts VALUES ('acc9', 'u9', 8453, '0xDD3333333333333333333333333333333333DD', '2026-09-01T00:00:00Z', 'prod', 0);
+       INSERT INTO yield_ledger_position_daily VALUES ('2026-10-18', 8453, 1, 'acc9', '0xdd3333333333333333333333333333333333dd', 'unknown', 'pool:OTHER', 10, 10, '0', '0', 900000, '0', '0', 900000, 999000000, 1000000, NULL, NULL, 700000, NULL, '2026-10-18T09:00:05Z');`,
+    );
+    const stmt = (sql: string, values: unknown[] = []): any => ({
+      bind: (...v: unknown[]) => stmt(sql, v),
+      first: async () => (db.query(sql).get(...(values as never[])) as unknown) ?? null,
+      all: async () => ({ results: db.query(sql).all(...(values as never[])), success: true }),
+    });
+    const fake: D1Db = { prepare: (sql: string) => stmt(sql) };
+    const positions: OpenPosition[] = [{ chainId: 8453, tokenId: 1, accountKey: "acc1" }, { chainId: 8453, tokenId: 1, accountKey: "acc9" }];
+
+    const latest = await fetchPositionLatest(fake, positions);
+    const byAccount = new Map(latest!.map((r) => [r.accountKey, r]));
+    expect(byAccount.get("acc1")).toEqual({ chainId: 8453, accountKey: "acc1", tokenId: 1, valueUsd: 130, accruedUsdClose: 0.3, holdValueUsd: 125 });
+    expect(byAccount.get("acc9")).toEqual({ chainId: 8453, accountKey: "acc9", tokenId: 1, valueUsd: 999, accruedUsdClose: 0.9, holdValueUsd: 1 });
+
+    const collected = await fetchPositionLifetimeCollected(fake, positions);
+    expect(collected!.get("8453:acc1:1")).toBeCloseTo(0.5, 6); // acc1's own two seed rows, unaffected by acc9
+    expect(collected!.get("8453:acc9:1")).toBeCloseTo(0.7, 6); // acc9's own row only
   });
 
   test("missing table reads as null for both", async () => {

@@ -272,28 +272,41 @@ export async function fetchEarliestDay(db: D1Db, chainId: number | "all", accoun
   }
 }
 
-/** One open position to look up: which chain and token id, and which account it belongs to (for grouping). */
+/** One open position to look up: which chain and token id, and which account it belongs to. */
 export type OpenPosition = { chainId: number; tokenId: number; accountKey: string };
 
-/** `(chain_id = ? AND token_id = ?) OR (chain_id = ? AND token_id = ?) OR ...`, parenthesized as one unit. */
+/**
+ * Key for every per-position map in this module and in yield-overview.ts: chain + account + token. A token
+ * id is only unique within its own chain (two chains can mint the same id), and the account is part of the
+ * key too, in addition to being bound in the SQL WHERE below, as defense in depth — a row must never be
+ * attributed to the wrong account even if a future bug on the writing side let two accounts' rows collide on
+ * (chain_id, token_id) (code review, otto/mamoru-astro#20 PR #10 round 2).
+ */
+export function positionKey(chainId: number, accountKey: string, tokenId: number): string {
+  return `${chainId}:${accountKey}:${tokenId}`;
+}
+
+/** `(chain_id = ? AND token_id = ? AND account_key = ?) OR ...`, parenthesized as one unit: every row read
+ * for a position must belong to the account that opened it, never merely share its chain and token id. */
 function positionPairsSql(positions: readonly OpenPosition[]): { sql: string; params: unknown[] } {
-  const sql = positions.map(() => "(chain_id = ? AND token_id = ?)").join(" OR ");
-  const params = positions.flatMap((p) => [p.chainId, p.tokenId]);
+  const sql = positions.map(() => "(chain_id = ? AND token_id = ? AND account_key = ?)").join(" OR ");
+  const params = positions.flatMap((p) => [p.chainId, p.tokenId, p.accountKey]);
   return { sql: `(${sql})`, params };
 }
 
-export type PositionLatest = { accountKey: string; tokenId: number; valueUsd: number; accruedUsdClose: number; holdValueUsd: number };
+export type PositionLatest = { chainId: number; accountKey: string; tokenId: number; valueUsd: number; accruedUsdClose: number; holdValueUsd: number };
 
-type RawPositionLatest = { account_key: string; token_id: number; value_usd: number; accrued_usd_close: number; hold_value_usd: number };
+type RawPositionLatest = { chain_id: number; account_key: string; token_id: number; value_usd: number; accrued_usd_close: number; hold_value_usd: number };
 
 /**
  * The single latest-day row for each of these positions (a MAX(day) correlated subquery per (chain_id,
- * token_id), never a full history fetch filtered in JS to one day): "value vs hold" reads whatever the most
- * recent write for a position is, which otherwise needed every row for every position's whole lifetime just
- * to find one day (code review, otto/mamoru-astro#20 PR #10 — the old approach also had a row-count LIMIT
- * ahead of that filtering). Bounded by the number of positions passed in, not by any day-history cap. Null
- * when yield_ledger_position_daily is missing, i.e. migration 0010 is not applied. Empty `positions`
- * short-circuits to `[]`.
+ * account_key, token_id), never a full history fetch filtered in JS to one day): "value vs hold" reads
+ * whatever the most recent write for a position is, which otherwise needed every row for every position's
+ * whole lifetime just to find one day (code review, otto/mamoru-astro#20 PR #10 — the old approach also had
+ * a row-count LIMIT ahead of that filtering). The correlated subquery binds account_key too, not just chain
+ * and token id (round 2 of the same review): a row can never come back under the wrong account. Bounded by
+ * the number of positions passed in, not by any day-history cap. Null when yield_ledger_position_daily is
+ * missing, i.e. migration 0010 is not applied. Empty `positions` short-circuits to `[]`.
  */
 export async function fetchPositionLatest(db: D1Db, positions: readonly OpenPosition[]): Promise<PositionLatest[] | null> {
   if (positions.length === 0) return [];
@@ -301,14 +314,15 @@ export async function fetchPositionLatest(db: D1Db, positions: readonly OpenPosi
   try {
     const { results } = await db
       .prepare(
-        `SELECT account_key, token_id, value_usd, accrued_usd_close, hold_value_usd
+        `SELECT chain_id, account_key, token_id, value_usd, accrued_usd_close, hold_value_usd
          FROM yield_ledger_position_daily pd
          WHERE ${pairs.sql}
-           AND day = (SELECT MAX(day) FROM yield_ledger_position_daily WHERE chain_id = pd.chain_id AND token_id = pd.token_id)`,
+           AND day = (SELECT MAX(day) FROM yield_ledger_position_daily WHERE chain_id = pd.chain_id AND token_id = pd.token_id AND account_key = pd.account_key)`,
       )
       .bind(...pairs.params)
       .all<RawPositionLatest>();
     return results.map((r) => ({
+      chainId: Number(r.chain_id),
       accountKey: String(r.account_key),
       tokenId: Number(r.token_id),
       valueUsd: Number(r.value_usd) / USDC,
@@ -321,26 +335,28 @@ export async function fetchPositionLatest(db: D1Db, positions: readonly OpenPosi
   }
 }
 
-type RawPositionCollected = { chain_id: number; token_id: number; collected_sum: number | null };
+type RawPositionCollected = { chain_id: number; account_key: string; token_id: number; collected_sum: number | null };
 
 /**
- * Lifetime `collected_usd`, summed in SQL and grouped by (chain_id, token_id) — the per-position drill-down's
- * "Collected" column, for exactly the positions passed in, with no history-row cap ahead of the sum. Keyed
- * `"<chainId>:<tokenId>"` since a token id is only unique within its own chain. Null when
- * yield_ledger_position_daily is missing.
+ * Lifetime `collected_usd`, summed in SQL and grouped by (chain_id, account_key, token_id) — the
+ * per-position drill-down's "Collected" column, for exactly the positions passed in, with no history-row
+ * cap ahead of the sum. Keyed by positionKey() so this map and fetchPositionLatest's are looked up the same
+ * way. Null when yield_ledger_position_daily is missing.
  */
 export async function fetchPositionLifetimeCollected(db: D1Db, positions: readonly OpenPosition[]): Promise<Map<string, number> | null> {
   if (positions.length === 0) return new Map();
   const pairs = positionPairsSql(positions);
   try {
     const { results } = await db
-      .prepare(`SELECT chain_id, token_id, SUM(collected_usd) AS collected_sum FROM yield_ledger_position_daily WHERE ${pairs.sql} GROUP BY chain_id, token_id`)
+      .prepare(
+        `SELECT chain_id, account_key, token_id, SUM(collected_usd) AS collected_sum FROM yield_ledger_position_daily WHERE ${pairs.sql} GROUP BY chain_id, account_key, token_id`,
+      )
       .bind(...pairs.params)
       .all<RawPositionCollected>();
     const map = new Map<string, number>();
     for (const r of results) {
       if (r.collected_sum === null) continue;
-      map.set(`${Number(r.chain_id)}:${Number(r.token_id)}`, Number(r.collected_sum) / USDC);
+      map.set(positionKey(Number(r.chain_id), String(r.account_key), Number(r.token_id)), Number(r.collected_sum) / USDC);
     }
     return map;
   } catch (e) {

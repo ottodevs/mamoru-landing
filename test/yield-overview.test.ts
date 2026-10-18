@@ -92,8 +92,8 @@ describe("buildYieldOverview: full scenario, matches loadYieldLedger's formulas"
     { day: "2026-10-17", feesUsd: 1, lpUsdSum: 120 },
     { day: "2026-10-18", feesUsd: 0.5, lpUsdSum: 130 },
   ];
-  const positionLatest: PositionLatest[] = [{ accountKey: "acc1", tokenId: 1, valueUsd: 130, accruedUsdClose: 0.3, holdValueUsd: 125 }];
-  const positionCollected = new Map<string, number>([["8453:1", 0.5]]);
+  const positionLatest: PositionLatest[] = [{ chainId: 8453, accountKey: "acc1", tokenId: 1, valueUsd: 130, accruedUsdClose: 0.3, holdValueUsd: 125 }];
+  const positionCollected = new Map<string, number>([["8453:acc1:1", 0.5]]);
   const inputs: YieldInputs = { snapshots: [acc1, acc2], accountAggregates, gasRows, dailyAggregates, earliestDay: "2026-10-16", positionLatest, positionCollected };
 
   test("per-account figures: earned so far = accrued + lifetime collected (loadYieldLedger's rule)", () => {
@@ -116,7 +116,7 @@ describe("buildYieldOverview: full scenario, matches loadYieldLedger's formulas"
     // Position-daily's own accrued_usd_close (0.9, via positionLatest) deliberately differs from the
     // snapshot's accrued (acc1.feesUsd = 0.3): earnedToDateUsd must still read 0.3 + 0.5, never touch the
     // position-level number (code review, otto/mamoru-astro#20 PR #10).
-    const divergentPositionLatest: PositionLatest[] = [{ accountKey: "acc1", tokenId: 1, valueUsd: 130, accruedUsdClose: 0.9, holdValueUsd: 125 }];
+    const divergentPositionLatest: PositionLatest[] = [{ chainId: 8453, accountKey: "acc1", tokenId: 1, valueUsd: 130, accruedUsdClose: 0.9, holdValueUsd: 125 }];
     const o = buildYieldOverview({ ...inputs, positionLatest: divergentPositionLatest }, DEFAULT_FILTER, "7d", NOW, 2000, true);
     const a1 = o.accounts.find((a) => a.accountKey === "acc1")!;
     expect(a1.earnedToDateUsd).toBeCloseTo(0.3 + 0.5, 6);
@@ -139,6 +139,35 @@ describe("buildYieldOverview: full scenario, matches loadYieldLedger's formulas"
     const p1 = a1.positions.find((p) => p.tokenId === 1)!;
     expect(p1.vsHoldUsd).toBeCloseTo(130 + 0.3 - 125, 6);
     expect(p1.collectedUsd).toBeCloseTo(0.5, 6);
+  });
+
+  test("the same account key, token id and value map keep two distinct vs-hold values on two different chains (code review, PR #10 round 2)", () => {
+    // Same accountKey ("multi") and the same tokenId (7) on two chains: a token id is only unique within
+    // its own chain, so a map keyed by account+token alone would collide these into one. positionKey()
+    // must key by (chainId, accountKey, tokenId) so neither chain's figure overwrites the other's.
+    const onBase: AccountSnapshotRow = {
+      chainId: 8453, address: "0xmulti-base", accountKey: "multi", env: "prod", isTest: false,
+      readAt: "2026-10-18T09:00:00Z", idleUsd: 0, lpUsd: 50, feesUsd: 0.1, totalUsd: 50.1,
+      positions: [{ tokenId: 7, pool: "pool:base", inRange: true, valueUsd: 50, feesUsd: 0.1 }],
+    };
+    const onOtherChain: AccountSnapshotRow = {
+      chainId: 10, address: "0xmulti-other", accountKey: "multi", env: "prod", isTest: false,
+      readAt: "2026-10-18T09:00:00Z", idleUsd: 0, lpUsd: 60, feesUsd: 0.2, totalUsd: 60.2,
+      positions: [{ tokenId: 7, pool: "pool:other", inRange: true, valueUsd: 60, feesUsd: 0.2 }],
+    };
+    const multiPositionLatest: PositionLatest[] = [
+      { chainId: 8453, accountKey: "multi", tokenId: 7, valueUsd: 50, accruedUsdClose: 0.1, holdValueUsd: 40 }, // vsHold = 10.1
+      { chainId: 10, accountKey: "multi", tokenId: 7, valueUsd: 60, accruedUsdClose: 0.2, holdValueUsd: 45 }, // vsHold = 15.2
+    ];
+    const o = buildYieldOverview(
+      { snapshots: [onBase, onOtherChain], accountAggregates: new Map(), gasRows: [], dailyAggregates: [], earliestDay: null, positionLatest: multiPositionLatest, positionCollected: new Map() },
+      DEFAULT_FILTER, "7d", NOW, 2000, true,
+    );
+    const base = o.accounts.find((a) => a.chainId === 8453)!;
+    const other = o.accounts.find((a) => a.chainId === 10)!;
+    expect(base.vsHoldUsd).toBeCloseTo(50 + 0.1 - 40, 6);
+    expect(other.vsHoldUsd).toBeCloseTo(60 + 0.2 - 45, 6);
+    expect(base.vsHoldUsd).not.toBeCloseTo(other.vsHoldUsd!, 6);
   });
 
   test("page-level aggregates: capital, fees to date, projected fee, sorted by fees earned desc", () => {

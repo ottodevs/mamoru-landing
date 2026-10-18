@@ -28,6 +28,7 @@ import {
   fetchPositionLatest,
   fetchPositionLifetimeCollected,
   fetchYieldAccounts,
+  positionKey,
   type AccountAggregates,
   type AccountSnapshotRow,
   type DayAggregate,
@@ -172,9 +173,13 @@ function periodSinceDay(period: YieldPeriod, today: string): string | null {
   return null;
 }
 
-function buildPosition(p: PositionSnapshot, chainId: number, latestByToken: ReadonlyMap<number, PositionLatest>, collectedByKey: ReadonlyMap<string, number>): YieldPositionView {
-  const latest = latestByToken.get(p.tokenId);
-  const collectedUsd = collectedByKey.get(`${chainId}:${p.tokenId}`) ?? null;
+/** Every per-position lookup keys by (chain, account, token) — positionKey() in yield-store.ts — so a
+ * position never reads another account's row, and the same token id on two different chains for the same
+ * account never collides (code review, otto/mamoru-astro#20 PR #10 round 2). */
+function buildPosition(p: PositionSnapshot, chainId: number, accountKey: string, latestByKey: ReadonlyMap<string, PositionLatest>, collectedByKey: ReadonlyMap<string, number>): YieldPositionView {
+  const key = positionKey(chainId, accountKey, p.tokenId);
+  const latest = latestByKey.get(key);
+  const collectedUsd = collectedByKey.get(key) ?? null;
   const vsHoldUsd = latest ? latest.valueUsd + latest.accruedUsdClose - latest.holdValueUsd : null;
   return { tokenId: p.tokenId, pool: p.pool, inRange: p.inRange, valueUsd: p.valueUsd, accruedFeesUsd: p.feesUsd, collectedUsd, vsHoldUsd };
 }
@@ -186,7 +191,7 @@ function buildAccount(
   gasRecordedInPeriod: boolean,
   periodDays: number,
   ethUsd: number | null,
-  positionLatestForAccount: ReadonlyMap<number, PositionLatest>,
+  positionLatestByKey: ReadonlyMap<string, PositionLatest>,
   positionCollected: ReadonlyMap<string, number>,
 ): YieldAccountView {
   // One source per part (code review, otto/mamoru-astro#20 PR #10): the freshest accrued figure is
@@ -207,8 +212,10 @@ function buildAccount(
   const avgLpPeriod = agg?.avgLpPeriodUsd ?? null;
   const aprPeriodPct = avgLpPeriod && avgLpPeriod > 0 ? (feesEarnedPeriodUsd / avgLpPeriod) * (365 / periodDays) * 100 : null;
 
-  const positions = snap.positions.map((p) => buildPosition(p, snap.chainId, positionLatestForAccount, positionCollected));
-  const vsHoldRows = snap.positions.map((p) => positionLatestForAccount.get(p.tokenId)).filter((r): r is PositionLatest => r !== undefined);
+  const positions = snap.positions.map((p) => buildPosition(p, snap.chainId, snap.accountKey, positionLatestByKey, positionCollected));
+  const vsHoldRows = snap.positions
+    .map((p) => positionLatestByKey.get(positionKey(snap.chainId, snap.accountKey, p.tokenId)))
+    .filter((r): r is PositionLatest => r !== undefined);
   const vsHoldUsd = vsHoldRows.length ? vsHoldRows.reduce((s, r) => s + (r.valueUsd + r.accruedUsdClose - r.holdValueUsd), 0) : null;
 
   return {
@@ -271,13 +278,11 @@ function groupGasByDay(gasRows: readonly GasRow[], sinceDay: string | null): Map
   return byDay;
 }
 
-function groupPositionLatestByAccount(rows: readonly PositionLatest[]): Map<string, Map<number, PositionLatest>> {
-  const map = new Map<string, Map<number, PositionLatest>>();
-  for (const r of rows) {
-    const inner = map.get(r.accountKey) ?? new Map<number, PositionLatest>();
-    inner.set(r.tokenId, r);
-    map.set(r.accountKey, inner);
-  }
+/** Flat, keyed by positionKey() (chain + account + token): the same key fetchPositionLifetimeCollected's
+ * map already uses, so both are looked up identically in buildPosition above. */
+function groupPositionLatest(rows: readonly PositionLatest[]): Map<string, PositionLatest> {
+  const map = new Map<string, PositionLatest>();
+  for (const r of rows) map.set(positionKey(r.chainId, r.accountKey, r.tokenId), r);
   return map;
 }
 
@@ -302,7 +307,7 @@ export function buildYieldOverview(inputs: YieldInputs, filter: AccountFilter, p
   const periodDays = period === "all" ? Math.max(1, inputs.earliestDay ? daysBetween(inputs.earliestDay, today) + 1 : 1) : (sinceDay === today ? 1 : daysBetween(sinceDay!, today) + 1);
 
   const gasByAccount = groupGasByAccount(gasRows, sinceDay);
-  const positionLatestByAccount = groupPositionLatestByAccount(inputs.positionLatest ?? []);
+  const positionLatestByKey = groupPositionLatest(inputs.positionLatest ?? []);
 
   const accounts = snapshots
     .map((snap) =>
@@ -313,7 +318,7 @@ export function buildYieldOverview(inputs: YieldInputs, filter: AccountFilter, p
         gasByAccount.periodAny.has(snap.accountKey),
         periodDays,
         ethUsd,
-        positionLatestByAccount.get(snap.accountKey) ?? new Map(),
+        positionLatestByKey,
         positionCollected,
       ),
     )
