@@ -21,10 +21,14 @@ export type AccountYield = {
   idle: number;
   /** Uncollected fees since each position's checkpoint, USD. */
   fees: number;
-  /** When it started earning: its first confirmed entry if the operator reports it, else when the account was made. */
+  /** Its first confirmed entry, as the operator reports it; null when the operator has not reported one. */
   since: string | null;
   days: number | null;
-  /** Fee APR, gross of gas, %: fees over capital in positions, annualised over `days`. Null under 50¢ placed. */
+  /**
+   * Fee APR, gross of gas, %: uncollected fees over capital placed, annualised from the first entry. A lower bound:
+   * fees count from each position's last checkpoint, which is never earlier than the first entry, so a harvest or a
+   * re-centre can only make the true figure higher. Null without a reported first entry or under 50¢ placed.
+   */
   apr: number | null;
   positions: Position[];
   readAt: string;
@@ -162,8 +166,11 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     rows<OperatorRow>(db, `SELECT payload_json, generated_at FROM operator_metrics_latest WHERE id = 1`),
   ]);
 
-  const operator = parseOperator(operatorRows?.[0]);
+  const parsedOperator = parseOperator(operatorRows?.[0]);
   const acctRows = (accounts ?? []).filter((a) => inScope(env, a.env, a.is_test));
+  // The operator reports every account; a production view only counts operations of accounts in scope.
+  const inView = new Set(acctRows.map((a) => a.account_key.slice(0, 8)));
+  const operator = parsedOperator && { ...parsedOperator, ops: parsedOperator.ops.filter((o) => inView.has(o.accountKey)) };
   const byKey = new Map(acctRows.map((a) => [a.account_key, a]));
   // First confirmed entry per account (8-char key on the wire), when the operator's recent ops reach back that far.
   const firstEnter = new Map<string, string>();
@@ -191,7 +198,7 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     }
     const lp = usd(s.lp_usdc);
     const fees = usd(s.fees_usdc);
-    const since = firstEnter.get(s.account_key.slice(0, 8)) ?? acct.created_at ?? null;
+    const since = firstEnter.get(s.account_key.slice(0, 8)) ?? null;
     const days = since ? daysBetween(since, now) : null;
     yields.push({
       key: s.account_key.slice(0, 8),
@@ -210,7 +217,10 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
   yields.sort((a, b) => b.fees - a.fees || b.lp - a.lp);
 
   const working = yields.filter((a) => a.lp > 0.01);
-  const capDays = working.reduce((x, a) => x + a.lp * (a.days ?? 0), 0);
+  // Numerator and denominator over the same accounts: those with capital placed and a known first entry.
+  const dated = working.filter((a) => a.days != null);
+  const capDays = dated.reduce((x, a) => x + a.lp * (a.days ?? 0), 0);
+  const datedFees = dated.reduce((x, a) => x + a.fees, 0);
   const feesSum = yields.reduce((x, a) => x + a.fees, 0);
   const positions = working.flatMap((a) => a.positions.map((p) => ({ ...p, days: a.days })));
   const poolMap = new Map<string, PoolYield & { capDays: number }>();
@@ -245,7 +255,7 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
       fees: feesSum,
       lp: working.reduce((x, a) => x + a.lp, 0),
       idle: yields.reduce((x, a) => x + a.idle, 0),
-      apr: capDays > 0 ? (feesSum / capDays) * 365 * 100 : null,
+      apr: capDays > 0 ? (datedFees / capDays) * 365 * 100 : null,
       positions: positions.length,
       inRange: positions.filter((p) => p.inRange).length,
       earning: working.length,

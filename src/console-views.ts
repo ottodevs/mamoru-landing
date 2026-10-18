@@ -121,7 +121,7 @@ export function pulseSection(m: ConsoleModel, now: Date): SectionView {
   const t = m.totals;
   const hero = `<section class="c-sheet c-hero"><p class="c-k">Earned for users so far</p>
 <p class="c-big">${esc(money(t.fees))}</p>
-<p class="c-line"><span><b>${esc(pct(t.apr))}</b> fee APR, before gas</span><span><b>${esc(money(t.lp))}</b> placed in ${t.positions} positions</span><span><b>${t.earning}</b> accounts earning</span></p>
+<p class="c-line"><span>at least <b>${esc(pct(t.apr))}</b> fee APR, before gas</span><span><b>${esc(money(t.lp))}</b> placed in ${t.positions} positions</span><span><b>${t.earning}</b> accounts earning</span></p>
 ${capitalChart(m)}
 <p class="c-foot">Capital held per day, every account including test: that daily table has no environment yet. A dip is a withdrawal as often as a price move.</p></section>`;
   const attention = sheet("Needs attention", m.alerts.length ? `${m.alerts.length} open` : null, alertsList(m), "c-attn");
@@ -154,14 +154,21 @@ function poolCards(m: ConsoleModel): string {
     .join("")}</ul>`;
 }
 
+/** Harvests counted from the operator's own confirmed operations; unknown without them, never a typed-in zero. */
+function harvestFig(m: ConsoleModel): string {
+  if (!m.operator) return fig("Harvests", "n/a", "engine data not connected yet");
+  const n = m.operator.ops.filter((o) => o.state === "confirmed" && /harvest|collect/.test(o.kind)).length;
+  return fig("Harvests", String(n), n ? `in the last ${m.operator.ops.length} operations` : "none in the recent operations: a harvest waits until fees beat 3 times its gas");
+}
+
 export function yieldView(m: ConsoleModel, now: Date): SectionView {
   const t = m.totals;
   const best = m.accounts.filter((a) => a.apr != null).sort((a, b) => (b.apr ?? 0) - (a.apr ?? 0))[0];
   const figs = `<div class="c-figs">
 ${fig("Earned to date", money(t.fees), "uncollected fees, every position")}
-${fig("Fee APR", pct(t.apr), "weighted by capital, before gas")}
+${fig("Fee APR", pct(t.apr), "at least: since first entry, weighted by capital, before gas")}
 ${fig("Best account", best ? pct(best.apr) : "n/a", best ? `${best.key}, ${money(best.lp)} placed` : "")}
-${fig("Harvested", "$0", "none yet: a harvest waits until fees beat 3 times its gas")}
+${harvestFig(m)}
 </div>`;
   const body = `<div class="c-grid hero">${sheet("Yield by account", "Bar length is fees earned. Open an account for its positions.", leaderboard(m))}${sheet("Pools", "What each pool earns per dollar placed", poolCards(m))}</div>`;
   const daily = sheet("Daily yield", "Fees earned, gas paid and the net per day, on one axis in dollars", `<p class="c-empty">The ledger started on 18 Oct. This fills in as each day closes; gas per account is recorded once the operator writes it (ottodevs/mamoru#129).</p>`);
@@ -277,15 +284,15 @@ ${fig("Fee revenue to date", money(m.totals.fees * 0.1), "10% of the yield, proj
         ),
       )
     : sheet("RPC compute units per hour", null, `<p class="c-empty">Appears once the app Worker stores the operator metrics (migration 0013).</p>`);
-  const apr = (m.totals.apr ?? 8) / 100;
+  const apr = m.totals.apr != null ? m.totals.apr / 100 : null;
   const monthly = 60;
-  const need = apr > 0 ? (monthly * 12) / (apr * 0.1) : null;
+  const need = apr && apr > 0 ? (monthly * 12) / (apr * 0.1) : null;
   const be = sheet(
     "Break-even",
     "Capital Mamoru must manage for a 10% fee on the yield to cover a fixed monthly cost",
     need
-      ? `<p class="c-prose">At the current fee APR of <b>${esc(pct(apr * 100))}</b> and <b>$60</b> a month of fixed costs, the fee covers costs from <b>${esc(money(need))}</b> under management. Today: <b>${esc(money(m.totals.lp))}</b>.</p><span class="c-meter"><i style="width:${Math.max(0.8, (m.totals.lp / need) * 100).toFixed(2)}%"></i></span>`
-      : `<p class="c-empty">Needs a fee APR to compute.</p>`,
+      ? `<p class="c-prose">At the current fee APR of <b>${esc(pct((apr ?? 0) * 100))}</b> and <b>$60</b> a month of fixed costs, the fee covers costs from <b>${esc(money(need))}</b> under management. Today: <b>${esc(money(m.totals.lp))}</b>.</p><span class="c-meter"><i style="width:${Math.max(0.8, (m.totals.lp / need) * 100).toFixed(2)}%"></i></span>`
+      : `<p class="c-empty">Needs a fee APR, which needs capital placed and a first entry reported by the engine.</p>`,
   );
   const topup = `<p class="c-prose"><a href="/ops/infra">Top up the relayer, and see what one new account costs</a></p>`;
   return view("costs", "Costs", head("Costs", "/ops/costs", m) + figs + rpcSheet + `<div class="c-grid two">${be}${sheet("Relayer", r?.address ? r.address.slice(0, 6) + "…" + r.address.slice(-4) + " on Base" : null, topup)}</div>` + drawers(m, now));

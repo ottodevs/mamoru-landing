@@ -40,6 +40,7 @@ const OPERATOR_PAYLOAD = {
     { accountKey: "acc1", kind: "enter", state: "confirmed", at: "2026-10-18T08:30:00Z", code: "EXEC_OK" },
     { accountKey: "acc1", kind: "enter", state: "failed", at: "2026-10-18T08:00:00Z", code: "OWNER_TX_ERROR" },
     { accountKey: "acc1", kind: "enter", state: "confirmed", at: "2026-10-04T00:00:00Z", code: "EXEC_OK" },
+    { accountKey: "acc2", kind: "enter", state: "failed", at: "2026-10-18T07:00:00Z", code: "BETA_ONLY_CODE" },
   ],
 };
 const OPERATOR_SEED = `INSERT INTO operator_metrics_latest VALUES (1, '${JSON.stringify(OPERATOR_PAYLOAD)}', '2026-10-18T09:00:00Z', '2026-10-18T09:00:05Z');`;
@@ -160,6 +161,34 @@ describe("console views", () => {
       expect(view.html).not.toContain("<!DOCTYPE");
       expect(view.html).not.toContain("<script");
     }
+  });
+});
+
+describe("console honesty (review r1, PR #13)", () => {
+  test("production views leave out the operations of accounts outside the scope", async () => {
+    const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "operator"]));
+    expect(await (await worker.fetch(get("/ops/engine", cookie), env)).text()).not.toContain("BETA_ONLY_CODE");
+    expect(await (await worker.fetch(get("/ops/engine?env=all", cookie), env)).text()).toContain("BETA_ONLY_CODE");
+  });
+
+  test("without the engine's first entry there is no APR, no break-even and no harvest count: n/a, not a guess", async () => {
+    const m = await loadConsole(memoryDb(["yield", "seed"]), "prod", NOW, null);
+    expect(m.accounts[0]!.since).toBeNull();
+    expect(m.accounts[0]!.apr).toBeNull();
+    expect(m.totals.apr).toBeNull();
+    const { env, cookie } = await opsEnv(memoryDb(["yield", "seed"]));
+    const costs = await (await worker.fetch(get("/ops/costs", cookie), env)).text();
+    expect(costs).toContain("Needs a fee APR");
+    const y = await (await worker.fetch(get("/ops/yield", cookie), env)).text();
+    expect(y).toContain("engine data not connected yet");
+    expect(y).not.toContain(">$0</span><span class=\"c-note\">none yet");
+  });
+
+  test("portfolio APR counts only accounts with capital placed and a first entry, in both terms", async () => {
+    const m = await loadConsole(memoryDb(["yield", "seed", "operator"]), "all", NOW, null);
+    // acc2 (beta) has fees but no reported first entry: it is out of the numerator as well as the denominator.
+    const a1 = m.accounts.find((a) => a.key === "acc1")!;
+    expect(m.totals.apr!).toBeCloseTo(a1.apr!, 6);
   });
 });
 
