@@ -1,3 +1,5 @@
+import type { AccountFilter } from "./account-filter";
+import { CHAIN_ID } from "./chain-addresses";
 import { b64url, b64urlDecode } from "./google";
 import type { Entry } from "./list";
 import { motionHeadScript, opsClientScript } from "./ops-client";
@@ -184,17 +186,21 @@ export const FLASH_COPY: Record<Exclude<Flash, "">, string> = {
   bad: "That did not go through. Try again.",
 };
 
-export type SectionId = "overview" | "mails" | "infra" | "experiments" | "settings" | "archive" | "gate";
+export type SectionId = "overview" | "yield" | "mails" | "infra" | "experiments" | "settings" | "functions" | "archive" | "gate";
 
 export type OpsSection = { id: string; label: string; href: string; /** Leaves the console: a full navigation in a new tab. */ out?: boolean };
 
 /** Extensible on purpose: new /ops sections are one more entry, not a rewrite. */
 export const OPS_SECTIONS: readonly OpsSection[] = [
   { id: "overview", label: "Overview", href: "/ops" },
+  // otto/mamoru-astro#20: right after Overview, since it reads the same account filter.
+  { id: "yield", label: "Yield", href: "/ops/yield" },
   { id: "mails", label: "Mails", href: "/ops/mails" },
   { id: "infra", label: "Infra", href: "/ops/infra" },
   { id: "experiments", label: "Experiments", href: "/ops/experiments" },
   { id: "settings", label: "Settings", href: "/ops/settings" },
+  // otto/mamoru-astro#20: right after Settings, another switch over what the engine does.
+  { id: "functions", label: "Functions", href: "/ops/functions" },
   { id: "archive", label: "Archive", href: "/ops/archive" },
   // The staged site is its own document with its own base URL and CSP, so it opens beside the console.
   { id: "preview", label: "Preview", href: "/ops/preview", out: true },
@@ -542,6 +548,34 @@ td.mail:hover .full, td.mail:focus-within .full, .reveal-box:checked ~ table td.
 .note-failed { color: var(--bad); }
 .note-pending { color: var(--warn); }
 
+/* ---- functions (otto/mamoru-astro#20) ---- */
+.pill { font-size: 0.85rem; }
+.pill-on { color: var(--emerald); }
+.pill-off { color: var(--muted); }
+.fn-toggle { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; }
+.fn-toggle input { border: 0; border-bottom: 1px solid var(--rule); background: none; padding: 0.15rem 0; min-width: 9rem; }
+.set-confirm { border-top: 1px solid var(--ink); padding-top: 1rem; margin-top: 0.4rem; }
+
+/* ---- yield (otto/mamoru-astro#20) ---- */
+.yld-period { margin-left: 0; }
+.yld-table { display: block; margin-top: 1.2rem; font-variant-numeric: tabular-nums; }
+.yld-row { display: grid; grid-template-columns: 9rem 4.2rem repeat(10, minmax(4.2rem, 1fr)); column-gap: 0.7rem; align-items: baseline; padding: 0.55rem 0; border-bottom: 1px solid var(--rule); }
+.yld-row > * { text-align: right; overflow: hidden; text-overflow: ellipsis; }
+.yld-row > :first-child, .yld-row > :nth-child(2) { text-align: left; }
+.yld-head { color: var(--muted); font-size: 0.8rem; border-bottom: 1px solid var(--ink); }
+.yld-acct { border-bottom: 1px solid var(--rule); }
+.yld-acct summary { cursor: pointer; list-style: none; }
+.yld-acct summary::-webkit-details-marker { display: none; }
+.yld-acct summary .yld-row { border-bottom: 0; }
+.yld-acct[open] summary .yld-row { border-bottom: 1px solid var(--rule); }
+.yld-positions { margin: 0 0 0.9rem 1.2rem; font-size: 0.85rem; }
+.yld-positions th, .yld-positions td { padding: 0.4rem 0.8rem 0.4rem 0; border-color: var(--rule); text-align: right; }
+.yld-positions th:first-child, .yld-positions td:first-child { text-align: left; }
+@media (max-width: 860px) {
+  .yld-row { grid-template-columns: 7rem 3.4rem repeat(10, minmax(3.6rem, 1fr)); font-size: 0.85rem; }
+  .yld-row .yld-wide { display: none; }
+}
+
 /* ---- narrow frame ---- */
 .ops-page.still .sec :is(.layer, .dot, .stem, .bar, .step-bar, .tick, .line) { animation: none !important; }
 @media (max-width: 640px) {
@@ -602,6 +636,36 @@ export function figure(opts: { col: number; lead?: boolean; label: string; value
 /** A number that counts up once on first view. The final text is in the markup. */
 export function countUp(value: number, format: string, text: string): string {
   return `<span data-n="${value}" data-f="${esc(format)}">${esc(text)}</span>`;
+}
+
+const selected = (value: string, current: string): string => (value === current ? " selected" : "");
+
+/**
+ * otto/mamoru#130's env/chain/account filter, as a plain GET form. Shared by every section that scopes by
+ * account (Overview, and otto/mamoru-astro#20's Yield): `extra` is a section's own additional field
+ * (Overview's group-by toggle, Yield's period control), appended before the submit button so the one
+ * env/chain/account control is never redrawn twice. No `data-ops-form` (that attribute is for POSTs the
+ * router fragment-swaps): a GET here is an ordinary navigation, which the router's own link-click handling
+ * already fragment-swaps once it lands.
+ */
+export function accountFilterBar(opts: { filter: AccountFilter; action: string; extra?: string }): string {
+  const f = opts.filter;
+  const chainVal = f.chainId === "all" ? "all" : String(f.chainId);
+  return `<form class="ops-filter" method="get" action="${esc(opts.action)}" aria-label="Filter the figures below">
+    <label>Environment<select name="env">
+      <option value="prod"${selected("prod", f.env)}>Production</option>
+      <option value="beta"${selected("beta", f.env)}>Beta</option>
+      <option value="test"${selected("test", f.env)}>Test</option>
+      <option value="all"${selected("all", f.env)}>All</option>
+    </select></label>
+    <label>Chain<select name="chain">
+      <option value="all"${selected("all", chainVal)}>All chains</option>
+      <option value="${CHAIN_ID}"${selected(String(CHAIN_ID), chainVal)}>Base (${CHAIN_ID})</option>
+    </select></label>
+    <label>Account<input type="text" name="account" value="${esc(f.account ?? "")}" placeholder="key or address" /></label>
+    ${opts.extra ?? ""}
+    <button type="submit">Apply</button>
+  </form>`;
 }
 
 /**

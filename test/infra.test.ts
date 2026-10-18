@@ -175,10 +175,12 @@ describe("uniswap-math.ts", () => {
 
 describe("ops.ts nav", () => {
   test("OPS_SECTIONS is extensible and includes Overview + Mails + Infra", () => {
-    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["overview", "mails", "infra", "experiments", "settings", "archive", "preview"]);
+    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["overview", "yield", "mails", "infra", "experiments", "settings", "functions", "archive", "preview"]);
     expect(OPS_SECTIONS.find((s) => s.id === "overview")?.href).toBe("/ops");
+    expect(OPS_SECTIONS.find((s) => s.id === "yield")?.href).toBe("/ops/yield");
     expect(OPS_SECTIONS.find((s) => s.id === "mails")?.href).toBe("/ops/mails");
     expect(OPS_SECTIONS.find((s) => s.id === "infra")?.href).toBe("/ops/infra");
+    expect(OPS_SECTIONS.find((s) => s.id === "functions")?.href).toBe("/ops/functions");
   });
 
   test("renderNav marks the active section, links every section, and sends Preview out", () => {

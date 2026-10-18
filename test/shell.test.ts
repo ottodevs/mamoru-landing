@@ -62,9 +62,11 @@ async function consoleEnv(opts: { list?: boolean } = {}) {
 
 const SECTIONS = [
   { path: "/ops", section: "overview", title: "Overview", marker: "Value held" },
+  { path: "/ops/yield", section: "yield", title: "Yield", marker: "Period" },
   { path: "/ops/mails", section: "mails", title: "Mails", marker: "On the list" },
   { path: "/ops/infra", section: "infra", title: "Infra and costs", marker: "Relayer balance" },
   { path: "/ops/experiments", section: "experiments", title: "Experiments", marker: "hero_cta" },
+  { path: "/ops/functions", section: "functions", title: "Functions", marker: "Yield ledger" },
   { path: "/ops/archive", section: "archive", title: "Archive", marker: "Tokyo landing" },
 ] as const;
 
@@ -306,7 +308,7 @@ describe("the gate applies to fragments", () => {
       expect(res.status).toBe(404);
       expect(await res.text()).toBe("Not found.");
     }
-    for (const path of ["/ops/remove", "/ops/send", "/ops/infra/refresh", "/ops/metrics/snapshot", "/ops/logout"]) {
+    for (const path of ["/ops/remove", "/ops/send", "/ops/infra/refresh", "/ops/metrics/snapshot", "/ops/logout", "/ops/functions/apply"]) {
       const res = await worker.fetch(post(path, "csrf=x", { "x-ops-fragment": "1" }), env);
       expect(res.status).toBe(404);
       // The router turns anything that is not a JSON view into a full navigation.

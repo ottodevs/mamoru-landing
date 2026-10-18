@@ -186,24 +186,30 @@ export function renderTimeChart(opts: TimeChartOpts): string {
 </div>`;
 }
 
-/** Daily bars. null slots are days before tracking began: a resting tick, not a zero. */
-export function renderBars(opts: { id: string; title: string; slots: DauSlot[]; emptyNote: string }): string {
+/**
+ * Daily bars. null slots are days before tracking began: a resting tick, not a zero. `format` defaults to
+ * "int" (DAU's whole accounts); otto/mamoru-astro#20's Yield reuses this same primitive with "usd" for fees
+ * and gas, so the scale ceiling and every label read as money instead of a truncated whole number.
+ */
+export function renderBars(opts: { id: string; title: string; slots: DauSlot[]; emptyNote: string; format?: "usd" | "int"; label?: string }): string {
+  const format = opts.format ?? "int";
   const tracked = opts.slots.filter((s) => s.n !== null);
-  const max = niceCeilInt(Math.max(0, ...tracked.map((s) => s.n ?? 0)));
+  const max = format === "usd" ? niceCeil(Math.max(0, ...tracked.map((s) => s.n ?? 0))) : niceCeilInt(Math.max(0, ...tracked.map((s) => s.n ?? 0)));
   const count = opts.slots.length || 1;
+  const seriesLabel = opts.label ?? "Active";
   const tips: TipPoint[] = [];
   const bars = opts.slots
     .map((slot, i) => {
       const x = ((i + 0.5) / count) * 100;
       if (slot.n === null) return `<span class="slot"><span class="bar rest"></span></span>`;
-      const h = (slot.n / max) * 100;
-      tips.push({ x: Number(r2(x)), y: Number(r2(100 - h)), t: shortDay(slot.day), l: [["Active", fmtInt(slot.n)]] });
+      const h = max > 0 ? (slot.n / max) * 100 : 0;
+      tips.push({ x: Number(r2(x)), y: Number(r2(100 - h)), t: shortDay(slot.day), l: [[seriesLabel, fmt(format, slot.n)]] });
       const today = i === opts.slots.length - 1 ? " today" : "";
       return `<span class="slot" data-i="${tips.length - 1}"><span class="bar${today}${slot.n === 0 ? " zero" : ""}" style="height:${r2(h)}%;--i:${i}"></span></span>`;
     })
     .join("");
   const summary = tracked.length
-    ? `${opts.title}: ${tracked.map((s) => `${shortDay(s.day)} ${s.n}`).join(", ")}.`
+    ? `${opts.title}: ${tracked.map((s) => `${shortDay(s.day)} ${fmt(format, s.n ?? 0)}`).join(", ")}.`
     : `${opts.title}: ${opts.emptyNote}`;
   const note = tracked.length ? "" : `<p class="plot-note">${esc(opts.emptyNote)}</p>`;
   const days = opts.slots.map((s) => s.day);
@@ -212,7 +218,7 @@ export function renderBars(opts: { id: string; title: string; slots: DauSlot[]; 
     : "";
   return `<div class="chart bars" data-chart="${chartData(tips)}">
   <div class="plot${tracked.length ? "" : " idle"}"${tips.length ? ' tabindex="0"' : ""} role="group" aria-label="${esc(opts.title)}">
-    ${grid()}<div class="bar-row" role="img" aria-label="${esc(summary)}">${bars}</div>${tracked.length ? yTicks("int", max) : ""}${ticks}${note}
+    ${grid()}<div class="bar-row" role="img" aria-label="${esc(summary)}">${bars}</div>${tracked.length ? yTicks(format, max) : ""}${ticks}${note}
   </div>
 </div>`;
 }

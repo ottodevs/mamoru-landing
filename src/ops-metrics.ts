@@ -1,11 +1,10 @@
 /** Renders /ops, the metrics overview. Pure string building over an Overview model. */
 
-import { CHAIN_ID } from "./chain-addresses";
 import { filterQuery } from "./account-filter";
 import { renderBars, renderFunnel, renderTally, renderTimeChart } from "./metrics-charts";
 import { dauSlots, fmtInt, fmtUsd, shortDay } from "./metrics-math";
 import { DAU_DAYS, type Change, type Overview } from "./metrics-overview";
-import { pageHead, renderDocument, type SectionView } from "./ops";
+import { accountFilterBar, pageHead, renderDocument, type SectionView } from "./ops";
 import { esc } from "./text";
 
 function signed(value: number, format: "usd" | "int"): string {
@@ -88,33 +87,13 @@ function table(summary: string, head: string[], rows: string[][]): string {
 
 const sel = (value: string, current: string): string => (value === current ? " selected" : "");
 
-/**
- * otto/mamoru#130: env/chain/account filters plus the group-by toggle, as a plain GET form against /ops.
- * No `data-ops-form` (that attribute is for POSTs the router fragment-swaps): a GET here is an ordinary
- * navigation, which the router's own link-click handling already fragment-swaps once it lands.
- */
-function filterBar(o: Overview): string {
-  const f = o.filter;
-  const chainVal = f.chainId === "all" ? "all" : String(f.chainId);
-  return `<form class="ops-filter" method="get" action="/ops" aria-label="Filter the figures below">
-    <label>Environment<select name="env">
-      <option value="prod"${sel("prod", f.env)}>Production</option>
-      <option value="beta"${sel("beta", f.env)}>Beta</option>
-      <option value="test"${sel("test", f.env)}>Test</option>
-      <option value="all"${sel("all", f.env)}>All</option>
-    </select></label>
-    <label>Chain<select name="chain">
-      <option value="all"${sel("all", chainVal)}>All chains</option>
-      <option value="${CHAIN_ID}"${sel(String(CHAIN_ID), chainVal)}>Base (${CHAIN_ID})</option>
-    </select></label>
-    <label>Account<input type="text" name="account" value="${esc(f.account ?? "")}" placeholder="key or address" /></label>
-    <label>Group by<select name="group">
-      <option value="none"${sel("none", f.group)}>&mdash;</option>
-      <option value="chain"${sel("chain", f.group)}>Chain</option>
-      <option value="env"${sel("env", f.group)}>Environment</option>
-    </select></label>
-    <button type="submit">Apply</button>
-  </form>`;
+/** otto/mamoru#130's group-by toggle, Overview's own addition to the shared filter bar (ops.ts's accountFilterBar). */
+function groupByField(f: Overview["filter"]): string {
+  return `<label>Group by<select name="group">
+    <option value="none"${sel("none", f.group)}>&mdash;</option>
+    <option value="chain"${sel("chain", f.group)}>Chain</option>
+    <option value="env"${sel("env", f.group)}>Environment</option>
+  </select></label>`;
 }
 
 /** otto/mamoru#130: today's filtered accounts split by chain or by environment. Empty when ungrouped. */
@@ -264,7 +243,7 @@ export function overviewSection(o: Overview, csrf: string): SectionView {
     section: "overview",
     title: "Overview",
     html: `${pageHead({ title: "Overview", asOf: o.asOf, refresh: { action: refreshAction, csrf } })}
-    ${filterBar(o)}
+    ${accountFilterBar({ filter: o.filter, action: "/ops", extra: groupByField(o.filter) })}
     ${notes}
     ${figures(o)}
     <div class="cols">

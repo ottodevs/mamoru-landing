@@ -87,6 +87,20 @@ import { settingsSection, type SettingsPage } from "./ops-settings";
 import { checkConfirmToken, issueConfirmToken, risksOf } from "./engine-settings-confirm";
 import { inEffect, appendVersion, maxIdOf, SettingsConflict, SettingsOutcomeUnknown, listTemplates, listVersions, versionById, type Env as SettingsEnv } from "./engine-settings-store";
 import { DEFAULT_SETTINGS, canonicalJson, settingsFromForm, validateSettings } from "./engine-settings-model";
+import { functionsSection, type FunctionsPage } from "./ops-functions";
+import { isOpsFlagName, OPS_FLAGS, OPS_FLAG_NAMES } from "./ops-flags-model";
+import { checkFlagConfirmToken, issueFlagConfirmToken } from "./ops-flags-confirm";
+import {
+  appendFlagChange,
+  currentFlagStates,
+  FlagConflict,
+  FlagOutcomeUnknown,
+  listFlagChanges,
+  maxIdOf as flagMaxIdOf,
+  type FlagChangeRow,
+} from "./ops-flags-store";
+import { yieldSection } from "./ops-yield";
+import { loadYieldOverview, parseYieldPeriod } from "./yield-overview";
 import { archiveTarget } from "./archive";
 import { archiveBar, archiveSection } from "./ops-archive";
 import {
@@ -372,7 +386,7 @@ function withNotice(view: SectionView, text: string, tone: "plain" | "bad" = "pl
 }
 
 /** Sections a stranger is sent to Google from, and returned to after signing in. */
-const SECTION_PATHS = new Set(["/ops", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/archive"]);
+const SECTION_PATHS = new Set(["/ops", "/ops/yield", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/functions", "/ops/archive"]);
 
 /** Anyone who is not signed in and allowlisted sees the landing. Nothing else. */
 function toRoot(request: Request, cookies: string[] = []): Response {
@@ -647,6 +661,74 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
 
   if (sectionPath === "/ops/experiments" && request.method === "GET") {
     return flashed(await experimentsView());
+  }
+
+  // ---- yield (otto/mamoru-astro#20) ----
+  // Same account filter the Overview reads, fresh from the query string on every call for the same reason
+  // otto/mamoru#130's Overview filter is: it is cheap and must never serve one reader's selection to another's.
+  const yieldView = async (): Promise<SectionView> => {
+    const reading = await loadInfraReading(sources, false, undefined, behind);
+    const filter = parseAccountFilter(url.searchParams);
+    const period = parseYieldPeriod(url.searchParams.get("period"));
+    const overview = await loadYieldOverview(env.MAMORU_DB, filter, period, new Date(), reading.snapshot.ethUsd);
+    return yieldSection(overview);
+  };
+
+  if (sectionPath === "/ops/yield" && request.method === "GET") {
+    return flashed(await yieldView());
+  }
+
+  // ---- functions (otto/mamoru-astro#20, migration 0012 in ottodevs/mamoru) ----
+  const functionsView = async (over: Partial<Pick<FunctionsPage, "notice" | "confirm">> = {}, status = 200): Promise<SectionView> => {
+    const db = env.MAMORU_DB;
+    const states = db ? await currentFlagStates(db) : null;
+    let history: FlagChangeRow[] = [];
+    if (db && states !== null) {
+      const perFlag = await Promise.all(OPS_FLAG_NAMES.map((flag) => listFlagChanges(db, flag, 20)));
+      history = perFlag
+        .flatMap((rows) => rows ?? [])
+        .sort((a, b) => b.id - a.id)
+        .slice(0, 20);
+    }
+    return { ...functionsSection({ states, history, csrf: session.csrf, ...over }), status };
+  };
+
+  if (sectionPath === "/ops/functions" && request.method === "GET") {
+    return flashed(await functionsView());
+  }
+
+  if (url.pathname === "/ops/functions/apply" && request.method === "POST") {
+    if (!csrfOk || !form) return respond(await functionsView({ notice: { text: FLASH_COPY.bad, tone: "bad" } }, 403));
+    const db = env.MAMORU_DB;
+    if (!db) return respond(await functionsView({}, 503));
+    const flagRaw = String(form.get("flag") ?? "");
+    if (!isOpsFlagName(flagRaw)) return respond(await functionsView({ notice: { text: "Not applied: that function does not exist.", tone: "bad" } }, 400));
+    const flag = flagRaw;
+    const enabled = form.get("enabled") === "1";
+    const reason = String(form.get("reason") ?? "");
+    if (!reason.trim()) return respond(await functionsView({ notice: { text: "Not applied: say why.", tone: "bad" } }, 400));
+    // Read fresh on every call, ask included: the confirm token's digest commits to this same value, so a
+    // flag changed between asking and confirming invalidates the token and forces a fresh confirm screen —
+    // same mechanism as engine-settings-confirm.ts's `inEffect`/`expectedMaxId` pairing.
+    const expectedMaxId = await flagMaxIdOf(db, flag);
+    if (enabled) {
+      const secret = env.OPS_SESSION_SECRET ?? "";
+      const token = String(form.get("confirm_token") ?? "");
+      if (!token || !(await checkFlagConfirmToken(secret, session.csrf, token, flag, true, expectedMaxId))) {
+        const issued = await issueFlagConfirmToken(secret, session.csrf, flag, true, expectedMaxId);
+        return respond(await functionsView({ confirm: { flag, reason, token: issued } }));
+      }
+    }
+    let outcome: { status: number; text: string; tone: "plain" | "bad" };
+    try {
+      await appendFlagChange(db, { flag, enabled, author: session.email, reason, expectedMaxId });
+      outcome = { status: 200, tone: "plain", text: `${OPS_FLAGS[flag].label} turned ${enabled ? "on" : "off"}. The operator picks it up within a minute.` };
+    } catch (e) {
+      if (e instanceof FlagConflict) outcome = { status: 409, tone: "bad", text: "Not applied: someone changed this function meanwhile. Review it again below." };
+      else if (e instanceof FlagOutcomeUnknown) outcome = { status: 503, tone: "bad", text: "Unknown whether this was written: the database did not say. Check the history below before trying again." };
+      else outcome = { status: 400, tone: "bad", text: `Not applied: ${(e as Error).message}.` };
+    }
+    return respond(await functionsView({ notice: { text: outcome.text, tone: outcome.tone } }, outcome.status));
   }
 
   // ---- engine settings (spec 006, otto/mamoru#147) ----
@@ -942,9 +1024,11 @@ const APP_HOST = "app.mamoru.lol";
 
 const RETURN_TO = new Set([
   "https://mamoru.lol/ops",
+  "https://mamoru.lol/ops/yield",
   "https://mamoru.lol/ops/mails",
   "https://mamoru.lol/ops/infra",
   "https://mamoru.lol/ops/experiments",
+  "https://mamoru.lol/ops/functions",
   "https://mamoru.lol/ops/landing",
   "https://mamoru.lol/ops/app",
   "https://mamoru.lol/ops/app/onboarding",
