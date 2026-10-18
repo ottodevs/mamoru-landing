@@ -121,7 +121,7 @@ export function pulseSection(m: ConsoleModel, now: Date): SectionView {
   const t = m.totals;
   const hero = `<section class="c-sheet c-hero"><p class="c-k">Earned for users so far</p>
 <p class="c-big">${esc(money(t.fees))}</p>
-<p class="c-line"><span>at least <b>${esc(pct(t.apr))}</b> fee APR, before gas</span><span><b>${esc(money(t.lp))}</b> placed in ${t.positions} positions</span><span><b>${t.earning}</b> accounts earning</span></p>
+<p class="c-line"><span>${t.apr != null ? `at least <b>${esc(pct(t.apr))}</b> fee APR, before gas` : "fee APR shows once the engine reports first entries"}</span><span><b>${esc(money(t.lp))}</b> placed in ${t.positions} positions</span><span><b>${t.earning}</b> accounts earning</span></p>
 ${capitalChart(m)}
 <p class="c-foot">Capital held per day, every account including test: that daily table has no environment yet. A dip is a withdrawal as often as a price move.</p></section>`;
   const attention = sheet("Needs attention", m.alerts.length ? `${m.alerts.length} open` : null, alertsList(m), "c-attn");
