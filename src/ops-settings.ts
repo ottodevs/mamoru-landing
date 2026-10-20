@@ -20,7 +20,11 @@ export function describeSettings(s: EngineSettings): string {
   const guard = s.guard.enabled
     ? `fall guard on (BTC ${pct(s.guard.btc.fallBps)} fall with ${pct(s.guard.btc.volBps)} vol, ETH ${pct(s.guard.eth.fallBps)} with ${pct(s.guard.eth.volBps)})`
     : "fall guard off";
-  return `${cap}; ${depth}; ${guard}.`;
+  const rerange =
+    s.rerange?.mode === "lazy"
+      ? `re-range lazy (buffer ${s.rerange.edgeBufferTicks} ticks, dwell ${s.rerange.minDwellSeconds}s, horizon ${s.rerange.horizonSeconds}s, LVR weight ${pct(s.rerange.lvrWeightBps ?? 0)})`
+      : "re-range eager";
+  return `${cap}; ${depth}; ${guard}; ${rerange}.`;
 }
 
 const when = (iso: string) => iso.replace("T", " ").slice(0, 16) + " UTC";
@@ -63,6 +67,11 @@ function hiddenFields(env: Env, template: string, s: EngineSettings, canary: str
     h("btc_vol", String(s.guard.btc.volBps)),
     h("eth_fall", String(s.guard.eth.fallBps)),
     h("eth_vol", String(s.guard.eth.volBps)),
+    h("rerange_mode", s.rerange?.mode === "lazy" ? "lazy" : "eager"),
+    h("rerange_buffer", s.rerange?.edgeBufferTicks === undefined ? "" : String(s.rerange.edgeBufferTicks)),
+    h("rerange_dwell", s.rerange?.minDwellSeconds === undefined ? "" : String(s.rerange.minDwellSeconds)),
+    h("rerange_horizon", s.rerange?.horizonSeconds === undefined ? "" : String(s.rerange.horizonSeconds)),
+    h("rerange_lvr", s.rerange?.lvrWeightBps === undefined ? "" : String(s.rerange.lvrWeightBps)),
     h("canary", canary),
     h("reason", reason),
   ].join("");
@@ -102,6 +111,17 @@ function editForm(csrf: string, templates: readonly TemplateRow[], draft: { env:
       ${num("btc_vol", "BTC volatility", s.guard.btc.volBps, BOUNDS.volBps, "bps annualized")}
       ${num("eth_fall", "ETH 24 h fall", s.guard.eth.fallBps, BOUNDS.fallBps, "bps")}
       ${num("eth_vol", "ETH volatility", s.guard.eth.volBps, BOUNDS.volBps, "bps annualized")}
+    </fieldset>
+    <fieldset><legend>Re-range</legend>
+      <label>Mode <select name="rerange_mode">
+        <option value="eager"${s.rerange?.mode !== "lazy" ? " selected" : ""}>eager (today's trigger)</option>
+        <option value="lazy"${s.rerange?.mode === "lazy" ? " selected" : ""}>lazy (buffer, dwell, cost test)</option>
+      </select></label>
+      <span class="dim">Lazy needs all four numbers below.</span>
+      ${num("rerange_buffer", "Edge buffer", s.rerange?.edgeBufferTicks, BOUNDS.edgeBufferTicks, "ticks past the edge")}
+      ${num("rerange_dwell", "Min dwell", s.rerange?.minDwellSeconds, BOUNDS.minDwellSeconds, "seconds out of range")}
+      ${num("rerange_horizon", "Horizon", s.rerange?.horizonSeconds, BOUNDS.horizonSeconds, "seconds of fees in the cost test")}
+      ${num("rerange_lvr", "LVR weight", s.rerange?.lvrWeightBps, BOUNDS.lvrWeightBps, "bps")}
     </fieldset>
     <label>Why <input name="reason" required maxlength="500" value="${esc(draft.reason)}" /></label>
     <button type="submit">Apply</button>
@@ -153,7 +173,7 @@ export function settingsSection(p: SettingsPage): SectionView {
     section: "settings",
     title: "Engine settings",
     html: `${head}
-    <p class="lede">What the engine does with deposits: cap, depth sizing and the fall guard. Bounds are enforced again by the operator, which refuses anything outside them. Settings never change what an account's approval allows.</p>
+    <p class="lede">What the engine does with deposits: cap, depth sizing, the fall guard and how it re-ranges a position. Bounds are enforced again by the operator, which refuses anything outside them. Settings never change what an account's approval allows.</p>
     ${notice}${confirm}
     ${activeBlock(p.active)}
     ${editForm(p.csrf, p.templates, p.draft)}
