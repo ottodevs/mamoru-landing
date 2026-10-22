@@ -394,16 +394,25 @@ export function opsClientScript(nonce: string): string {
       var mine = ++run;
       var to = target.address, want = chainHex();
       set({ phase: "signing" });
-      // The network is read again right before sending: the wallet may have switched since the review. The chain id
-      // also travels in the transaction, so a wallet that switches in between refuses it instead of sending elsewhere.
+      // The network is read again right before sending, since the wallet may have switched after the review; the chain
+      // id also travels in the transaction for wallets that honour it. A switch in the instant between this read and
+      // the wallet handling the send cannot be closed from a page (EIP-1193), so the network is read once more after
+      // signing and a mismatch is said plainly. Every target is the same relayer EOA, so such funds are not lost.
       request("eth_chainId").then(function (chainId) {
         if (mine !== run) return null;
         if (String(chainId).toLowerCase() !== want) { set({ phase: "wrongnet" }); return null; }
         return request("eth_sendTransaction", [{ from: state.account, to: to, value: L.toHex(parsed.wei), chainId: want }]);
       }).then(function (hash) {
-        if (mine !== run || hash === null) return;
-        set({ phase: "sent", hash: String(hash), slow: false });
-        poll(mine, 0);
+        if (mine !== run || hash === null) return null;
+        return request("eth_chainId").then(function (after) {
+          if (mine !== run) return;
+          if (String(after).toLowerCase() !== want) {
+            fail({ message: "the wallet changed network while signing, so transaction " + String(hash) + " may have gone out on chain " + String(after) + " instead of " + target.chain.name + ". It went to the same relayer address, so nothing is lost; check that chain's explorer before sending again" }, "ready");
+            return;
+          }
+          set({ phase: "sent", hash: String(hash), slow: false });
+          poll(mine, 0);
+        });
       }).catch(function (err) { if (mine === run) fail(err, "ready"); });
     }
     function stopPolling() {
