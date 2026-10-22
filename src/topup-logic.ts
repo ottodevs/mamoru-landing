@@ -37,9 +37,27 @@ export interface TopupState {
 
 export interface TopupContext {
   relayer: string;
+  /** The chain the wallet sends on. Absent: Base, the relayer's home chain. */
+  chain?: TopupChain;
+  /** Who receives, as said in sentences ("the relayer"). Absent: "the relayer". */
+  recipientName?: string;
   /** What one new account costs the relayer, wei. null when not known. */
   costWei: bigint | null;
   ethUsd: number | null;
+}
+
+/** One network a wallet in /ops can be topped up on. Plain data: it is serialized into the page. */
+export interface TopupChain {
+  /** eth_chainId as the wallet reports it, lower-case hex. */
+  hex: string;
+  name: string;
+  /** Native asset, sent as a plain transfer. */
+  symbol: string;
+  /** Prefix of a transaction URL. */
+  explorerTx: string;
+  explorerName: string;
+  /** Extra fee room for chains with an L1 data fee (OP-stack); wei, decimal string. */
+  l1FeeMarginWei?: string;
 }
 
 export interface TopupAction {
@@ -72,6 +90,13 @@ export function topupLogic() {
   // Base adds an L1 data fee the wallet's gas price does not include; this covers it with room.
   var L1_FEE_MARGIN = BigInt("2000000000000");
   var BASE_CHAIN_HEX = "0x2105";
+  var BASE: TopupChain = { hex: BASE_CHAIN_HEX, name: "Base", symbol: "ETH", explorerTx: "https://basescan.org/tx/", explorerName: "Basescan", l1FeeMarginWei: L1_FEE_MARGIN.toString() };
+  var chainOf = function (ctx?: TopupContext): TopupChain {
+    return (ctx && ctx.chain) || BASE;
+  };
+  var whoOf = function (ctx?: TopupContext) {
+    return (ctx && ctx.recipientName) || "the relayer";
+  };
 
   var pow10 = function (n: number) {
     var out = BigInt(1);
@@ -113,10 +138,11 @@ export function topupLogic() {
     return (q / scale).toString() + (fracText ? "." + fracText : "");
   };
 
-  /** 21000 gas at twice the wallet's gas price, plus the L1 data fee margin. */
-  var estimateFee = function (gasPriceWei: bigint) {
+  /** 21000 gas at twice the wallet's gas price, plus the chain's L1 data fee margin (Base by default). */
+  var estimateFee = function (gasPriceWei: bigint, chain?: TopupChain) {
     var price = gasPriceWei > ZERO ? gasPriceWei : ZERO;
-    return TRANSFER_GAS * price * BigInt(2) + L1_FEE_MARGIN;
+    var c = chain || BASE;
+    return TRANSFER_GAS * price * BigInt(2) + (c.l1FeeMarginWei ? BigInt(c.l1FeeMarginWei) : ZERO);
   };
 
   /** The largest amount that still leaves the fee behind, floored to six decimals. */
@@ -161,7 +187,8 @@ export function topupLogic() {
   };
 
   /** Wallet errors as plain sentences. The wallet's own words are kept only for the unknown case. */
-  var explain = function (err: unknown) {
+  var explain = function (err: unknown, ctx?: TopupContext) {
+    var ch = chainOf(ctx);
     var e = (err || {}) as { code?: unknown; message?: unknown; data?: { message?: unknown } };
     var code = Number(e.code);
     var message = String(e.message || (e.data && e.data.message) || "").trim();
@@ -173,10 +200,10 @@ export function topupLogic() {
       return "The wallet already has a request waiting. Open the wallet, finish or dismiss it, then try again.";
     }
     if (/insufficient funds|insufficient balance|not enough/.test(lower)) {
-      return "The wallet says it does not have enough ETH for this amount plus the network fee.";
+      return "The wallet says it does not have enough " + ch.symbol + " for this amount plus the network fee.";
     }
     if (code === 4902 || code === 4901 || /unrecognized chain|chain.*not.*added|wrong network|chain mismatch/.test(lower)) {
-      return "The wallet is not on Base. Switch it to Base and try again.";
+      return "The wallet is not on " + ch.name + ". Switch it to " + ch.name + " and try again.";
     }
     if (code === 4100 || /unauthorized|locked/.test(lower)) {
       return "The wallet is locked or has not approved this site. Unlock it and connect again.";
@@ -188,7 +215,7 @@ export function topupLogic() {
   var REASONS: Record<string, string> = {
     format: "That is not an amount. Use digits, like 0.005.",
     negative: "The amount cannot be negative.",
-    decimals: "ETH has 18 decimal places at most.",
+    decimals: "The amount has 18 decimal places at most.",
     zero: "The amount has to be more than zero.",
   };
 
@@ -205,6 +232,9 @@ export function topupLogic() {
 
   /** Everything the widget shows for a state. The script only copies this onto the page. */
   var view = function (state: TopupState, ctx: TopupContext): TopupView {
+    var ch = chainOf(ctx);
+    var sym = ch.symbol;
+    var who = whoOf(ctx);
     var out: TopupView = {
       step: 1,
       tone: "plain",
@@ -223,14 +253,14 @@ export function topupLogic() {
       out.wallet =
         shortAddress(state.account) +
         (state.phase === "wrongnet"
-          ? " · not on Base"
+          ? " · not on " + ch.name
           : state.balance === null
             ? " · reading balance"
-            : " · " + formatEth(state.balance) + " ETH on Base");
+            : " · " + formatEth(state.balance) + " " + sym + " on " + ch.name);
     }
     var parsed = parseEth(state.amountText);
     var amount = parsed.ok ? formatEth(parsed.wei, 18) : "";
-    var txLink = state.hash ? { href: "https://basescan.org/tx/" + state.hash, text: "View " + shortAddress(state.hash) + " on Basescan" } : null;
+    var txLink = state.hash ? { href: ch.explorerTx + state.hash, text: "View " + shortAddress(state.hash) + " on " + ch.explorerName } : null;
 
     if (state.phase === "nowallet") {
       out.line = "No wallet found in this browser.";
@@ -253,46 +283,47 @@ export function topupLogic() {
     if (state.phase === "wrongnet") {
       out.tone = "warn";
       out.line = "The wallet is on another network.";
-      out.detail = "The relayer lives on Base. Switching does not send anything.";
-      out.primary = { label: "Switch to Base", action: "switch", enabled: true };
+      out.detail = "This wallet is funded on " + ch.name + ". Switching does not send anything.";
+      out.primary = { label: "Switch to " + ch.name, action: "switch", enabled: true };
       return out;
     }
     if (state.phase === "ready") {
       out.step = 2;
-      out.primary = { label: "Send to relayer", action: "review", enabled: false };
+      out.primary = { label: "Send to " + who.replace(/^the /, ""), action: "review", enabled: false };
       if (!parsed.ok) {
-        out.line = parsed.reason === "empty" ? "Choose how much to send." : REASONS[parsed.reason] || REASONS.format;
+        out.line =
+          parsed.reason === "empty" ? "Choose how much to send." : parsed.reason === "decimals" ? sym + " has 18 decimal places at most." : REASONS[parsed.reason] || REASONS.format;
         if (parsed.reason !== "empty") out.tone = "warn";
         return out;
       }
       if (state.balance === null || state.fee === null) {
-        out.line = "Reading the wallet's balance on Base.";
+        out.line = "Reading the wallet's balance on " + ch.name + ".";
         return out;
       }
       var check = afford(state.balance, parsed.wei, state.fee);
       if (!check.ok) {
         out.tone = "warn";
         out.line =
-          "This wallet has " + formatEth(state.balance) + " ETH on Base. Sending " + amount + " ETH needs about " + formatEth(check.need, 5, true) + ".";
+          "This wallet has " + formatEth(state.balance) + " " + sym + " on " + ch.name + ". Sending " + amount + " " + sym + " needs about " + formatEth(check.need, 5, true) + ".";
         if (check.max > ZERO) {
           var most = formatEth(check.max);
-          out.detail = "The most it can send is " + most + " ETH.";
-          out.offer = { label: "Use " + most + " ETH", amountText: most };
+          out.detail = "The most it can send is " + most + " " + sym + ".";
+          out.offer = { label: "Use " + most + " " + sym, amountText: most };
         } else {
-          out.detail = "It cannot cover the network fee. Add ETH to it on Base first, or send from another wallet with the address below.";
+          out.detail = "It cannot cover the network fee. Add " + sym + " to it on " + ch.name + " first, or send from another wallet with the address below.";
         }
         return out;
       }
-      out.line = "Ready to send " + amount + " ETH to the relayer.";
-      out.detail = "Network fee about " + formatEth(state.fee, 6, true) + " ETH.";
+      out.line = "Ready to send " + amount + " " + sym + " to " + who + ".";
+      out.detail = "Network fee about " + formatEth(state.fee, 6, true) + " " + sym + ".";
       out.primary.enabled = true;
       return out;
     }
     out.step = 3;
     out.amountLocked = true;
     if (state.phase === "confirm") {
-      out.line = "Send " + amount + " ETH to the relayer on Base?";
-      out.detail = "To " + ctx.relayer + ". From " + shortAddress(state.account) + ". Network: Base.";
+      out.line = "Send " + amount + " " + sym + " to " + who + (who.indexOf(ch.name) === -1 ? " on " + ch.name : "") + "?";
+      out.detail = "To " + ctx.relayer + ". From " + shortAddress(state.account) + ". Network: " + ch.name + ".";
       out.primary = { label: "Confirm in wallet", action: "send", enabled: true };
       out.secondary = { label: "Go back", action: "back", enabled: true };
       return out;
@@ -304,7 +335,7 @@ export function topupLogic() {
       return out;
     }
     if (state.phase === "sent") {
-      out.line = state.slow ? "Still waiting for Base to confirm." : "Sent. Waiting for Base to confirm.";
+      out.line = state.slow ? "Still waiting for " + ch.name + " to confirm." : "Sent. Waiting for " + ch.name + " to confirm.";
       out.detail = state.slow ? "It usually takes a few seconds. The link shows where it stands." : "This usually takes a few seconds.";
       out.link = txLink;
       if (state.slow) out.primary = { label: "Check again", action: "check", enabled: true };
@@ -313,7 +344,7 @@ export function topupLogic() {
     }
     if (state.phase === "confirmed") {
       out.tone = "good";
-      out.line = "Confirmed. The relayer has the funds.";
+      out.line = "Confirmed. " + who.charAt(0).toUpperCase() + who.slice(1) + " has the funds.";
       out.detail = "Refreshing the figures above.";
       out.link = txLink;
       out.primary = { label: "Refresh now", action: "reload", enabled: true };

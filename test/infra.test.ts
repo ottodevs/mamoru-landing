@@ -29,6 +29,9 @@ import {
 } from "../src/infra-snapshot";
 import worker, { type Env } from "../src/worker";
 
+/** Other chains never touch the network in tests: every read fails, so their balance is unknown. */
+const NO_FETCH = async () => { throw new Error("no network in tests"); };
+
 const Q96 = 2 ** 96;
 
 function sqrtPriceX96For(token1PerToken0: number, decimals0: number, decimals1: number): bigint {
@@ -186,7 +189,7 @@ describe("ops.ts nav", () => {
 
   test("renderNav marks the active section, links every section, and sends Preview out", () => {
     const nav = renderNav("infra");
-    expect(nav).toContain('<a class="minor" href="/ops/infra" data-section="infra" aria-current="page">Relayer top-up</a>');
+    expect(nav).toContain('<a class="minor" href="/ops/infra" data-section="infra" aria-current="page">Funding</a>');
     expect(nav).toContain('<a href="/ops" data-section="overview">Pulse</a>');
     expect(nav).toContain('<a class="minor" href="/ops/mails" data-section="mails">Waitlist and mail</a>');
     expect(nav).toContain('<span class="c-group">Control</span>');
@@ -274,7 +277,7 @@ describe("infra-snapshot.ts", () => {
   test("RPC unreachable: relayer/cost are null with an error note, but D1 counts still load", async () => {
     const client = fakeClient({ gasPriceThrows: true });
     const db = fakeD1({ total_users: 39, total_accounts: 39, last7d: 39 }, []);
-    const snapshot: InfraSnapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client);
+    const snapshot: InfraSnapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client, NO_FETCH);
     expect(snapshot.rpcError).toBeTruthy();
     expect(snapshot.relayer).toBeNull();
     expect(snapshot.cost).toBeNull();
@@ -330,7 +333,7 @@ describe("infra-snapshot.ts", () => {
     ];
     const db = fakeD1({ total_users: 3, total_accounts: 3, last7d: 1 }, accounts);
 
-    const snapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client);
+    const snapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client, NO_FETCH);
 
     expect(snapshot.rpcError).toBeUndefined();
     expect(snapshot.ethUsd).toBeCloseTo(2500, 4);
@@ -417,7 +420,7 @@ function partialFixture(opts: { failOnce?: string[]; alwaysFail?: { functionName
 describe("partial reads", () => {
   test("a clean read is complete: no partial flag, nothing marked unread", async () => {
     const { client, db } = partialFixture({});
-    const snapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client);
+    const snapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client, NO_FETCH);
     expect(snapshot.partial).toBeUndefined();
     expect(snapshot.accounts?.unreadAccounts).toBeUndefined();
     expect(snapshot.accounts?.rows.some((r) => r.unread)).toBe(false);
@@ -427,7 +430,7 @@ describe("partial reads", () => {
 
   test("calls that fail once are retried and the snapshot comes back complete", async () => {
     const { client, db } = partialFixture({ failOnce: ["balanceOf", "getEthBalance", "positions", "slot0", "getPool"] });
-    const snapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client);
+    const snapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client, NO_FETCH);
     expect(snapshot.partial).toBeUndefined();
     expect(snapshot.ethUsd).toBeCloseTo(2500, 4);
     expect(snapshot.accounts?.idleUsdcUsd).toBeCloseTo(48, 9);
@@ -436,7 +439,7 @@ describe("partial reads", () => {
 
   test("a balance that keeps failing marks the account unread and the snapshot partial; it is never a silent zero", async () => {
     const { client, db } = partialFixture({ alwaysFail: [{ functionName: "balanceOf", arg0: ACC_IDLE }] });
-    const snapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client);
+    const snapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client, NO_FETCH);
     expect(snapshot.partial).toEqual({ unreadAccounts: 1, parts: expect.arrayContaining(["balances", "positions"]) });
     expect(snapshot.accounts?.unreadAccounts).toBe(1);
     const idle = snapshot.accounts?.rows.find((r) => r.address === ACC_IDLE);
@@ -453,13 +456,13 @@ describe("partial reads", () => {
 
   test("a position that cannot be read marks its account, and a missing ETH price marks prices", async () => {
     const lost = partialFixture({ alwaysFail: [{ functionName: "positions", arg0: 10n as unknown as string }] });
-    const snapshot = await computeInfraSnapshot({ MAMORU_DB: lost.db }, lost.client);
+    const snapshot = await computeInfraSnapshot({ MAMORU_DB: lost.db }, lost.client, NO_FETCH);
     expect(snapshot.partial?.unreadAccounts).toBe(1);
     expect(snapshot.partial?.parts).toContain("positions");
     expect(snapshot.accounts?.rows.find((r) => r.address === ACC_LP)?.unread).toBe(true);
 
     const blind = partialFixture({ alwaysFail: [{ functionName: "getPool", arg0: USDC_ADDRESS }] });
-    const unpriced = await computeInfraSnapshot({ MAMORU_DB: blind.db }, blind.client);
+    const unpriced = await computeInfraSnapshot({ MAMORU_DB: blind.db }, blind.client, NO_FETCH);
     expect(unpriced.ethUsd).toBeNull();
     expect(unpriced.partial?.parts).toContain("prices");
     expect(unpriced.relayer?.usd).toBeNull();
@@ -600,7 +603,7 @@ describe("ops-infra.ts render", () => {
     expect(html).toContain("Healthy");
     expect(html).toContain("More accounts at today");
     expect(html).toContain("The reserve is not burned.");
-    expect(html).toContain('data-section="infra" aria-current="page">Relayer top-up</a>');
+    expect(html).toContain('data-section="infra" aria-current="page">Funding</a>');
     expect(html).toContain("39 users");
     expect(html).toContain("1 more account has never been funded.");
     expect(html).not.toContain('class="notice"');

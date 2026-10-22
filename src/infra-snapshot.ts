@@ -6,6 +6,7 @@
  */
 
 import type { Address } from "viem";
+import { readFunding } from "./funding";
 import {
   type BaseClient,
   type ContractCall,
@@ -156,6 +157,8 @@ export interface InfraSnapshot {
   relayer: RelayerView | null;
   cost: CostView | null;
   accounts: AccountsView | null;
+  /** Balance of each funding target (src/funding.ts), wei as a decimal string; null when that chain did not answer. */
+  funding?: { id: string; balanceWei: string | null }[];
 }
 
 export interface InfraEnv {
@@ -475,7 +478,11 @@ async function buildAccountsView(
 export async function computeInfraSnapshot(
   env: InfraEnv,
   client: BaseClient = buildClient(env.BASE_RPC_URL),
+  fetchFn: (input: string, init?: RequestInit) => Promise<Response> = fetch,
 ): Promise<InfraSnapshot> {
+  // The other chains are read in parallel with Base and never wait on it; the Base relayer comes from the keyed client.
+  const fundingOf = async (baseWei: bigint | null) =>
+    (await readFunding({ "relayer-base": baseWei }, fetchFn)).map((r) => ({ id: r.target.id, balanceWei: r.balanceWei === null ? null : r.balanceWei.toString() }));
   const asOf = new Date().toISOString();
 
   let gasPriceWei: bigint;
@@ -497,6 +504,7 @@ export async function computeInfraSnapshot(
       relayer: null,
       cost: null,
       accounts: await buildAccountsView(env, null, null),
+      funding: await fundingOf(null),
     };
   }
 
@@ -524,7 +532,7 @@ export async function computeInfraSnapshot(
     accountsFunded: accountsFunded(relayerBalanceWei, breakdown.totalWei),
   };
 
-  const accounts = await buildAccountsView(env, client, prices);
+  const [accounts, funding] = await Promise.all([buildAccountsView(env, client, prices), fundingOf(relayerBalanceWei)]);
 
   // A missing ETH price leaves every USD figure blank; unread accounts leave totals short.
   const parts = new Set<UnreadPart>(accounts?.unreadParts ?? []);
@@ -533,5 +541,5 @@ export async function computeInfraSnapshot(
     ? { unreadAccounts: accounts?.unreadAccounts ?? 0, parts: [...parts] }
     : undefined;
 
-  return { asOf, ...(partial ? { partial } : {}), ethUsd: prices.ethUsd, btcUsd: prices.btcUsd, relayer, cost, accounts };
+  return { asOf, ...(partial ? { partial } : {}), ethUsd: prices.ethUsd, btcUsd: prices.btcUsd, relayer, cost, accounts, funding };
 }
