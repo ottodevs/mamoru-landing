@@ -404,9 +404,10 @@ export function opsClientScript(nonce: string): string {
         return request("eth_sendTransaction", [{ from: state.account, to: to, value: L.toHex(parsed.wei), chainId: want }]);
       }).then(function (hash) {
         if (mine !== run || hash === null) return null;
-        return request("eth_chainId").then(function (after) {
+        // A failed read here must never hide a hash the wallet already returned: it then counts as sent.
+        return request("eth_chainId").catch(function () { return null; }).then(function (after) {
           if (mine !== run) return;
-          if (String(after).toLowerCase() !== want) {
+          if (after !== null && String(after).toLowerCase() !== want) {
             fail({ message: "the wallet changed network while signing, so transaction " + String(hash) + " may have gone out on chain " + String(after) + " instead of " + target.chain.name + ". It went to the same relayer address, so nothing is lost; check that chain's explorer before sending again" }, "ready");
             return;
           }
