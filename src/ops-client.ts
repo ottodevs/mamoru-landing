@@ -209,8 +209,11 @@ export function opsClientScript(nonce: string): string {
   // State lives here, outside the section, so a connected wallet survives section changes.
   var Topup = (function () {
     var state = { phase: "idle", account: null, balance: null, fee: null, amountText: "", hash: null, error: "", slow: false, failedTo: "idle" };
-    var ctx = { relayer: "", costWei: null, ethUsd: null };
+    var ctx = { relayer: "", costWei: null, ethUsd: null, chain: null, recipientName: "the relayer" };
     var cfg = null, dom = null, eth = null, bound = null, run = 0, pollTimer = null, refreshed = false;
+    // The funding target the widget points at; kept across section changes like the wallet.
+    var targetId = null, target = null;
+    function chainHex() { return target ? String(target.chain.hex).toLowerCase() : L.BASE_CHAIN_HEX; }
 
     function paint() {
       if (!dom) return;
@@ -261,7 +264,7 @@ export function opsClientScript(nonce: string): string {
     }
     function fail(err, backTo) {
       stopPolling();
-      set({ phase: "failed", error: L.explain(err), failedTo: backTo });
+      set({ phase: "failed", error: L.explain(err, ctx), failedTo: backTo });
     }
     function request(method, params) {
       return eth.request({ method: method, params: params || [] });
@@ -340,7 +343,7 @@ export function opsClientScript(nonce: string): string {
       set({ phase: "ready", balance: null, fee: null, hash: null, error: "", slow: false });
       request("eth_chainId").then(function (chainId) {
         if (mine !== run) return;
-        if (String(chainId).toLowerCase() !== L.BASE_CHAIN_HEX) { set({ phase: "wrongnet" }); return; }
+        if (String(chainId).toLowerCase() !== chainHex()) { set({ phase: "wrongnet" }); return; }
         readBalance(mine);
       }).catch(function (err) { if (mine === run) fail(err, "idle"); });
     }
@@ -349,20 +352,21 @@ export function opsClientScript(nonce: string): string {
         if (mine !== run) return;
         var balance = L.fromHex(res[0]), gasPrice = L.fromHex(res[1]);
         if (balance === null || gasPrice === null) { fail({ message: "the wallet did not return a balance" }, "ready"); return; }
-        set({ balance: balance, fee: L.estimateFee(gasPrice) });
+        set({ balance: balance, fee: L.estimateFee(gasPrice, ctx.chain || undefined) });
         if (then) then();
       }).catch(function (err) { if (mine === run) fail(err, "ready"); });
     }
     function switchChain() {
       var mine = ++run;
-      request("wallet_switchEthereumChain", [{ chainId: L.BASE_CHAIN_HEX }]).catch(function (err) {
-        if (Number(err && err.code) !== 4902) throw err;
+      var c = target.chain;
+      request("wallet_switchEthereumChain", [{ chainId: c.hex }]).catch(function (err) {
+        if (Number(err && err.code) !== 4902 || !c.rpc) throw err;
         return request("wallet_addEthereumChain", [{
-          chainId: L.BASE_CHAIN_HEX,
-          chainName: "Base",
-          nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-          rpcUrls: [cfg.addChainRpc],
-          blockExplorerUrls: ["https://basescan.org"],
+          chainId: c.hex,
+          chainName: c.name,
+          nativeCurrency: { name: c.symbol === "ETH" ? "Ether" : c.name, symbol: c.symbol, decimals: 18 },
+          rpcUrls: [c.rpc],
+          blockExplorerUrls: [c.explorerUrl],
         }]);
       }).then(function () { if (mine === run) afterAccount(); })
         .catch(function (err) { if (mine === run) fail(err, "wrongnet"); });
@@ -384,7 +388,7 @@ export function opsClientScript(nonce: string): string {
       }
       var mine = ++run;
       set({ phase: "signing" });
-      request("eth_sendTransaction", [{ from: state.account, to: cfg.relayer, value: L.toHex(parsed.wei) }]).then(function (hash) {
+      request("eth_sendTransaction", [{ from: state.account, to: target.address, value: L.toHex(parsed.wei) }]).then(function (hash) {
         if (mine !== run) return;
         set({ phase: "sent", hash: String(hash), slow: false });
         poll(mine, 0);
@@ -403,7 +407,7 @@ export function opsClientScript(nonce: string): string {
             set({ phase: "confirmed" });
             pollTimer = setTimeout(reload, 1800);
           } else {
-            fail({ message: "the transaction was included but reverted, so nothing reached the relayer" }, "ready");
+            fail({ message: "the transaction was included but reverted, so nothing reached " + ctx.recipientName }, "ready");
           }
           return;
         }
@@ -454,26 +458,89 @@ export function opsClientScript(nonce: string): string {
         sel.addRange(range);
         node.textContent = "Selected, now copy";
       };
-      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(cfg.relayer).then(done, select);
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(target.address).then(done, select);
       else select();
+    }
+
+    /** Points the widget at one funding target: chain, asset, address, presets. A connected wallet is checked again. */
+    function select(id, fromUser) {
+      var list = (cfg && cfg.targets) || [];
+      var next = null;
+      for (var i = 0; i < list.length; i++) if (list[i].id === id) next = list[i];
+      if (!next) return;
+      var changed = !target || target.id !== next.id;
+      target = next;
+      targetId = next.id;
+      var isEth = next.priceAsEth;
+      ctx = {
+        relayer: next.address,
+        // Accounts-funded math is only meaningful for the relayer on Base.
+        costWei: next.id === "relayer-base" && cfg.costWei ? BigInt(cfg.costWei) : null,
+        ethUsd: isEth ? cfg.ethUsd : null,
+        chain: next.chain,
+        recipientName: next.recipientName,
+      };
+      if (!dom) return;
+      dom.title.textContent = "Top up: " + next.label;
+      dom.unit.textContent = next.chain.symbol;
+      dom.addr.textContent = next.address;
+      dom.net.textContent = "Send " + next.chain.symbol + " on the " + next.chain.name + " network only. Once it arrives, press Refresh and the balance above goes up.";
+      var rows = dom.root.querySelectorAll("tr[data-target]");
+      for (var r = 0; r < rows.length; r++) {
+        if (rows[r].getAttribute("data-target") === next.id) rows[r].setAttribute("aria-current", "true");
+        else rows[r].removeAttribute("aria-current");
+      }
+      var old = dom.presets.querySelectorAll(".tu-preset[data-amt]");
+      for (var o = 0; o < old.length; o++) old[o].remove();
+      for (var p = next.presets.length - 1; p >= 0; p--) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "tu-preset";
+        b.setAttribute("data-amt", next.presets[p]);
+        b.setAttribute("aria-pressed", "false");
+        b.textContent = next.presets[p];
+        dom.presets.insertBefore(b, dom.presets.firstChild);
+      }
+      if (changed && fromUser) {
+        stopPolling();
+        state.hash = null;
+        state.amountText = "";
+        dom.input.value = "";
+        if (state.account && eth) { afterAccount(); return; }
+      }
+      paint();
     }
 
     function init(scope) {
       var box = scope.querySelector("#topup");
       if (!box || typeof BigInt !== "function") return function () {};
       try { cfg = JSON.parse(box.getAttribute("data-topup")); } catch (err) { return function () {}; }
-      ctx = { relayer: cfg.relayer, costWei: cfg.costWei ? BigInt(cfg.costWei) : null, ethUsd: cfg.ethUsd };
+      if (!cfg.targets || !cfg.targets.length) {
+        // A page from before the funding list: the relayer on Base only.
+        cfg.targets = [{ id: "relayer-base", label: "Relayer on Base", recipientName: "the relayer", address: cfg.relayer, presets: ["0.005", "0.01", "0.02"], priceAsEth: true,
+          chain: { hex: L.BASE_CHAIN_HEX, name: "Base", symbol: "ETH", explorerTx: "https://basescan.org/tx/", explorerName: "Basescan", l1FeeMarginWei: "2000000000000", rpc: cfg.addChainRpc, explorerUrl: "https://basescan.org" } }];
+      }
       var $ = function (id) { return box.querySelector("#" + id); };
       dom = {
         root: box, line: $("tu-line"), detail: $("tu-detail"), walletRow: $("tu-wallet"), walletText: $("tu-wallet-text"),
         input: $("tu-input"), hint: $("tu-hint"), max: $("tu-max"), primary: $("tu-primary"), secondary: $("tu-secondary"),
         offer: $("tu-offer"), link: $("tu-link"), addr: $("tu-addr"),
+        title: $("tu-title") || document.createElement("h3"), unit: $("tu-unit") || document.createElement("span"),
+        presets: $("tu-presets") || box.querySelector(".tu-presets"), net: $("tu-net") || document.createElement("p"),
       };
+      select(targetId || cfg.selected || cfg.targets[0].id, false);
       dom.input.value = state.amountText;
       box.addEventListener("click", function (ev) {
         var node = ev.target && ev.target.closest ? ev.target.closest("button") : null;
         if (!node || node.disabled || !box.contains(node)) return;
         if (node.id === "tu-copy") { copy(node); return; }
+        var fund = node.getAttribute("data-fund");
+        if (fund) {
+          if (state.phase === "confirm" || state.phase === "signing") return;
+          select(fund, true);
+          dom.title.scrollIntoView({ block: "nearest" });
+          return;
+        }
         var amt = node.getAttribute("data-amt");
         if (amt) { setAmount(amt); return; }
         var act = actions[node.getAttribute("data-act")];

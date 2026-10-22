@@ -214,7 +214,7 @@ export const OPS_SECTIONS: readonly OpsSection[] = [
   { id: "experiments", label: "Experiments", href: "/ops/experiments", group: "Grow" },
   { id: "settings", label: "Engine settings", href: "/ops/settings", group: "Control" },
   { id: "functions", label: "Functions", href: "/ops/functions", group: "Control" },
-  { id: "infra", label: "Relayer top-up", href: "/ops/infra", group: "Control" },
+  { id: "infra", label: "Funding", href: "/ops/infra", group: "Control" },
   { id: "archive", label: "Archive", href: "/ops/archive", group: "More" },
   // The staged site is its own document with its own base URL and CSP, so it opens beside the console.
   { id: "preview", label: "Preview", href: "/ops/preview", out: true, group: "More" },
@@ -472,6 +472,22 @@ table.ledger .dim { color: var(--muted); }
 .sum { margin: 0.9rem 0 0; line-height: 1.5; }
 .quiet-line { margin: 0 0 2rem; font-size: 0.9rem; color: var(--muted); }
 
+/* ---- funding list (otto/mamoru-astro#27): one row per wallet, the chosen one marked by a hairline ---- */
+table.fund { margin: 0.4rem 0 1.4rem; font-variant-numeric: tabular-nums; }
+table.fund caption { text-align: left; caption-side: top; font-size: 0.9rem; padding-bottom: 0.4rem; }
+table.fund td { border-color: var(--rule); padding: 0.65rem 0 0.65rem 1rem; vertical-align: top; }
+table.fund td.f-who { padding-left: 0.6rem; border-left: 2px solid transparent; }
+table.fund tr[aria-current] td.f-who { border-left-color: var(--ink); }
+table.fund .f-who b { display: block; font-weight: 400; }
+table.fund .f-who span { display: block; font-size: 0.85rem; line-height: 1.4; margin-top: 0.15rem; max-width: 34rem; }
+table.fund td.f-bal { text-align: right; white-space: nowrap; }
+table.fund .f-bal span { display: block; font-size: 0.85rem; }
+table.fund td.f-act { text-align: right; width: 1%; }
+.tu-title { margin: 0 0 0.6rem; }
+@media (max-width: 560px) {
+  table.fund td { padding-left: 0.6rem; }
+  table.fund .f-who span { font-size: 0.8rem; }
+}
 .tu-top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 0.4rem 1.5rem; margin-top: 1rem; min-height: 1.5rem; }
 .tu-steps { list-style: none; display: flex; gap: 1.4rem; margin: 0; padding: 0; font-size: 0.85rem; color: var(--muted); }
 .tu-steps li[aria-current] { color: var(--ink); border-bottom: 1px solid var(--ink); }

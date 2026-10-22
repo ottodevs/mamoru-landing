@@ -1,6 +1,6 @@
 /** Renders the Infra section. Pure string building over an Infra reading. */
 
-import { RELAYER_ADDRESS, WALLET_ADD_CHAIN_RPC } from "./chain-addresses";
+import { FUNDING_TARGETS, fundingStatus, widgetTarget, type FundingRow, type FundingStatus } from "./funding";
 import type { RelayerStatus } from "./cost";
 import type { InfraReading } from "./infra-cache";
 import type { AccountView, InfraSnapshot } from "./infra-snapshot";
@@ -162,19 +162,57 @@ function accountsSection(s: InfraSnapshot): string {
   </section>`;
 }
 
+/** wei → native units, trimmed, for the funding list. */
+function fmtNative(wei: bigint, symbol: string): string {
+  const whole = wei / 10n ** 18n;
+  const frac = ((wei % 10n ** 18n) * 10000n) / 10n ** 18n;
+  const f = frac.toString().padStart(4, "0").replace(/0+$/, "");
+  return `${whole.toString()}${f ? "." + f : ""} ${symbol}`;
+}
+
+const FUND_WORDS: Record<FundingStatus, string> = { ok: "Healthy", low: "Running low", empty: "Empty", unknown: "Not read" };
+
+/** Every wallet the system spends from, with its balance; each row selects it in the widget below. */
+function fundingRows(s: InfraSnapshot): FundingRow[] {
+  const read = new Map((s.funding ?? []).map((f) => [f.id, f.balanceWei === null ? null : BigInt(f.balanceWei)]));
+  return FUNDING_TARGETS.map((target) => {
+    const balanceWei = read.has(target.id) ? (read.get(target.id) ?? null) : null;
+    return { target, balanceWei, status: fundingStatus(balanceWei, target.lowWei) };
+  });
+}
+
 /** The widget's markup. Its behaviour is the `infra` module of the console script; `data-topup` is its config. */
 function topupSection(s: InfraSnapshot): string {
+  const rows = fundingRows(s);
+  // Open on the wallet that needs it most: empty first, then low, then the Base relayer.
+  const rank: Record<FundingStatus, number> = { empty: 0, low: 1, unknown: 2, ok: 3 };
+  const first = [...rows].sort((a, b) => rank[a.status] - rank[b.status])[0] ?? rows[0]!;
   const config = JSON.stringify({
-    relayer: RELAYER_ADDRESS,
-    addChainRpc: WALLET_ADD_CHAIN_RPC,
+    relayer: first.target.address,
     costWei: s.cost ? (s.cost.totalWei ?? String(Math.round(s.cost.totalEth * 1e18))) : null,
     ethUsd: s.ethUsd,
+    targets: rows.map(widgetTarget),
+    selected: first.target.id,
   });
-  const presets = ["0.005", "0.01", "0.02"]
+  const list = rows
+    .map((r) => {
+      const t = r.target;
+      const bal = r.balanceWei === null ? "not read" : fmtNative(r.balanceWei, t.chain.symbol);
+      const ticket = t.ticket ? ` <a href="${esc(t.ticket.href)}">${esc(t.ticket.label)}</a>` : "";
+      return `<tr data-target="${esc(t.id)}"${t.id === first.target.id ? ' aria-current="true"' : ""}>
+        <td class="f-who"><b>${esc(t.label)}</b><span class="soft">${esc(t.pays)}${ticket}</span></td>
+        <td class="f-bal"><a href="${esc(t.chain.explorerAddress + t.address)}">${esc(bal)}</a><span class="status-${r.status === "unknown" ? "low" : r.status}">${FUND_WORDS[r.status]}</span></td>
+        <td class="f-act"><button type="button" class="link" data-fund="${esc(t.id)}">Fund</button></td>
+      </tr>`;
+    })
+    .join("");
+  const presets = first.target.presets
     .map((amt) => `<button type="button" class="tu-preset" data-amt="${amt}" aria-pressed="false">${amt}</button>`)
     .join("");
   return `<section class="sec" id="topup" style="--s:0ms" data-topup="${esc(config)}">
-    <div class="sec-head"><h2>Top up the relayer</h2></div>
+    <div class="sec-head"><h2>Funding</h2></div>
+    <table class="fund"><caption class="soft">Every wallet Mamoru spends from. Choose one to fund it from this page.</caption><tbody>${list}</tbody></table>
+    <h3 class="tu-title" id="tu-title">Top up: ${esc(first.target.label)}</h3>
     <div class="tu-top">
       <ol class="tu-steps" aria-label="Steps"><li data-step="1" aria-current="step">Connect</li><li data-step="2">Amount</li><li data-step="3">Send</li></ol>
       <p class="tu-wallet" id="tu-wallet" hidden><span id="tu-wallet-text"></span><button type="button" class="link" data-act="change">Change</button></p>
@@ -183,20 +221,20 @@ function topupSection(s: InfraSnapshot): string {
     <p class="tu-detail soft" id="tu-detail"></p>
     <div class="tu-amount">
       <label for="tu-input">Amount</label>
-      <div class="tu-field"><input id="tu-input" type="text" inputmode="decimal" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="0.00" aria-describedby="tu-hint" /><span class="tu-unit">ETH</span></div>
-      <div class="tu-presets">${presets}<button type="button" class="tu-preset" id="tu-max" data-act="max" aria-pressed="false" disabled>Max</button></div>
+      <div class="tu-field"><input id="tu-input" type="text" inputmode="decimal" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="0.00" aria-describedby="tu-hint" /><span class="tu-unit" id="tu-unit">${esc(first.target.chain.symbol)}</span></div>
+      <div class="tu-presets" id="tu-presets">${presets}<button type="button" class="tu-preset" id="tu-max" data-act="max" aria-pressed="false" disabled>Max</button></div>
       <p class="tu-hint soft" id="tu-hint"></p>
     </div>
     <div class="tu-actions">
       <button type="button" class="go" id="tu-primary" hidden></button>
       <button type="button" class="link" id="tu-offer" hidden></button>
       <button type="button" class="link" id="tu-secondary" hidden></button>
-      <a id="tu-link" href="https://basescan.org/" hidden></a>
+      <a id="tu-link" href="${esc(first.target.chain.explorerUrl)}" hidden></a>
     </div>
     <div class="tu-manual">
       <h3>Or send from an exchange or another wallet</h3>
-      <p class="tu-addr"><code id="tu-addr">${esc(RELAYER_ADDRESS)}</code><button type="button" class="link" id="tu-copy">Copy</button></p>
-      <p class="soft">Send ETH on the Base network only. Once it arrives, press Refresh: the relayer balance and the accounts it can fund go up.</p>
+      <p class="tu-addr"><code id="tu-addr">${esc(first.target.address)}</code><button type="button" class="link" id="tu-copy">Copy</button></p>
+      <p class="soft" id="tu-net">Send ${esc(first.target.chain.symbol)} on the ${esc(first.target.chain.name)} network only. Once it arrives, press Refresh and the balance above goes up.</p>
     </div>
   </section>`;
 }
