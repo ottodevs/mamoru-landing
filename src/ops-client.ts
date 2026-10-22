@@ -213,6 +213,7 @@ export function opsClientScript(nonce: string): string {
     var cfg = null, dom = null, eth = null, bound = null, run = 0, pollTimer = null, refreshed = false;
     // The funding target the widget points at; kept across section changes like the wallet.
     var targetId = null, target = null;
+    function transferUnderWay() { return state.phase === "confirm" || state.phase === "signing" || state.phase === "sent"; }
     function chainHex() { return target ? String(target.chain.hex).toLowerCase() : L.BASE_CHAIN_HEX; }
 
     function paint() {
@@ -248,6 +249,10 @@ export function opsClientScript(nonce: string): string {
       if (v.link) { dom.link.href = v.link.href; dom.link.textContent = v.link.text; }
       // A wallet step in progress must not be repainted from under the reader.
       var busy = state.phase === "confirm" || state.phase === "signing" || state.phase === "connecting";
+      // While a transfer is under way its target cannot change: a pending one must be seen through, or sent twice.
+      var locked = transferUnderWay();
+      var funds = dom.root.querySelectorAll("button[data-fund]");
+      for (var f = 0; f < funds.length; f++) funds[f].disabled = locked;
       if (busy) main.setAttribute("data-busy", "1");
       else main.removeAttribute("data-busy");
     }
@@ -387,9 +392,16 @@ export function opsClientScript(nonce: string): string {
         return;
       }
       var mine = ++run;
+      var to = target.address, want = chainHex();
       set({ phase: "signing" });
-      request("eth_sendTransaction", [{ from: state.account, to: target.address, value: L.toHex(parsed.wei) }]).then(function (hash) {
-        if (mine !== run) return;
+      // The network is read again right before sending: the wallet may have switched since the review. The chain id
+      // also travels in the transaction, so a wallet that switches in between refuses it instead of sending elsewhere.
+      request("eth_chainId").then(function (chainId) {
+        if (mine !== run) return null;
+        if (String(chainId).toLowerCase() !== want) { set({ phase: "wrongnet" }); return null; }
+        return request("eth_sendTransaction", [{ from: state.account, to: to, value: L.toHex(parsed.wei), chainId: want }]);
+      }).then(function (hash) {
+        if (mine !== run || hash === null) return;
         set({ phase: "sent", hash: String(hash), slow: false });
         poll(mine, 0);
       }).catch(function (err) { if (mine === run) fail(err, "ready"); });
@@ -536,7 +548,7 @@ export function opsClientScript(nonce: string): string {
         if (node.id === "tu-copy") { copy(node); return; }
         var fund = node.getAttribute("data-fund");
         if (fund) {
-          if (state.phase === "confirm" || state.phase === "signing") return;
+          if (transferUnderWay()) return;
           select(fund, true);
           dom.title.scrollIntoView({ block: "nearest" });
           return;
