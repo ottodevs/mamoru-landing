@@ -4,6 +4,9 @@
 // figure says where it comes from, and a source that is not there yet is null, never a guessed zero.
 import type { D1Db } from "./d1-infra";
 import type { InfraSnapshot } from "./infra-snapshot";
+import { CAP_SOURCES, DEFAULT_CAP_USDC, type CapSource } from "./account-cap-model";
+import { newestOverrides, type CapOverrideRow } from "./account-caps-store";
+import { inEffect } from "./engine-settings-store";
 
 export type ConsoleEnv = "prod" | "all";
 
@@ -40,6 +43,40 @@ export type EngineOp = { accountKey: string; kind: string; state: string; at: st
 
 export type EngineHealth = { accountKey?: string; [field: string]: unknown };
 
+/**
+ * otto/mamoru-astro#25: one account's approval as the operator holds it (/metrics `authorizations`, ottodevs/mamoru#109),
+ * mirrored into operator_metrics_latest. Whole USDC, ISO times; a field the payload does not carry is null.
+ */
+export type Authorization = {
+  account: string;
+  /** Null when the payload does not say. */
+  active: boolean | null;
+  policyId: string | null;
+  policyVersion: string | null;
+  pools: string[];
+  validUntil: string | null;
+  grants: { grant: string; usedBps: number }[];
+  capUsdc: number | null;
+  capSource: CapSource | null;
+  signedCapUsdc: number | null;
+  holds: string[];
+  deactivated: string | null;
+};
+
+/** The environment's cap from the engine settings in effect (engine_settings_versions), for one account. */
+export type GeneralCap = { capUsdc: number; depth: boolean; version: number; canary: boolean };
+
+/** Everything the console knows about one account's cap: what the operator runs, what was asked, the general cap. */
+export type AccountCap = {
+  key: string;
+  accountKey: string;
+  env: string;
+  authorization: Authorization | null;
+  /** The newest row of account_cap_overrides for it, a removal included (capUsdc null); null without a row. */
+  override: CapOverrideRow | null;
+  general: GeneralCap | null;
+};
+
 export type Alert = { tone: "bad" | "warn" | "info"; title: string; detail: string; account?: string };
 
 export type DayPoint = { day: string; value: number };
@@ -66,6 +103,11 @@ export interface ConsoleModel {
   };
   relayer: null | { address: string; eth: number; usd: number | null; costPerAccountUsd: number | null; runway: number | null };
   alerts: Alert[];
+  /**
+   * otto/mamoru-astro#25. `reported`: the stored operator metrics carry `authorizations` (ottodevs/mamoru#109 deployed).
+   * `table`: account_cap_overrides exists. `byKey`: accounts in scope, by lowercase 8-character key.
+   */
+  caps: { reported: boolean; complete: boolean; table: boolean; byKey: Map<string, AccountCap> };
 }
 
 const missing = (e: unknown) => /no such (table|column)/i.test(e instanceof Error ? e.message : String(e));
@@ -107,7 +149,47 @@ type StoredOperatorMetrics = {
   rpc?: { last48h?: { hourStart: string; data?: Record<string, Record<string, { cuEstimate?: number }>> }[] };
   engines?: EngineHealth[];
   opsRecent?: EngineOp[];
+  authorizations?: unknown;
 };
+
+const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+/** A cap as the operator reports it: whole USDC within the bounds a row can hold, or unknown. Never trusted beyond them. */
+const capValue = (v: unknown): number | null => (typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 1_000_000 ? v : null);
+const bps = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null);
+
+/**
+ * Tolerant of anything: an entry without an account key is dropped, a malformed field reads as unknown. `complete` is
+ * false when any entry was dropped: then an account missing from the list is "not reported", never "no approval".
+ */
+export function parseAuthorizations(raw: unknown): { entries: Authorization[]; complete: boolean } | null {
+  if (!Array.isArray(raw)) return null;
+  const out: Authorization[] = [];
+  let complete = true;
+  for (const a of raw as Record<string, unknown>[]) {
+    if (!a || typeof a !== "object" || typeof a.account !== "string" || !a.account) {
+      complete = false;
+      continue;
+    }
+    const src = a.capSource;
+    out.push({
+      account: a.account.slice(0, 8),
+      active: typeof a.active === "boolean" ? a.active : null,
+      policyId: str(a.policyId),
+      policyVersion: a.policyVersion == null ? null : String(a.policyVersion),
+      pools: Array.isArray(a.pools) ? a.pools.filter((p): p is string => typeof p === "string") : [],
+      validUntil: typeof a.validUntil === "string" && Number.isFinite(Date.parse(a.validUntil)) ? a.validUntil : null,
+      grants: Array.isArray(a.grants)
+        ? (a.grants as Record<string, unknown>[]).flatMap((g) => (g && typeof g.grant === "string" && bps(g.usedBps) != null ? [{ grant: g.grant, usedBps: g.usedBps as number }] : []))
+        : [],
+      capUsdc: capValue(a.capUsdc),
+      capSource: typeof src === "string" && (CAP_SOURCES as readonly string[]).includes(src) ? (src as CapSource) : null,
+      signedCapUsdc: capValue(a.signedCapUsdc),
+      holds: Array.isArray(a.holds) ? a.holds.filter((h): h is string => typeof h === "string") : [],
+      deactivated: str(a.deactivated),
+    });
+  }
+  return { entries: out, complete };
+}
 
 /** Compute units of one hour: the operator's static per-method estimate, summed over providers and methods. */
 function cuOf(data: Record<string, Record<string, { cuEstimate?: number }>> | undefined): number {
@@ -116,14 +198,19 @@ function cuOf(data: Record<string, Record<string, { cuEstimate?: number }>> | un
   return total;
 }
 
-function parseOperator(row: OperatorRow | undefined): ConsoleModel["operator"] {
+function parsePayload(row: OperatorRow | undefined): StoredOperatorMetrics | null {
   if (!row) return null;
-  let p: StoredOperatorMetrics;
   try {
-    p = JSON.parse(row.payload_json) as StoredOperatorMetrics;
+    const p = JSON.parse(row.payload_json) as StoredOperatorMetrics;
+    return p && typeof p === "object" ? p : null;
   } catch {
     return null;
   }
+}
+
+function parseOperator(row: OperatorRow | undefined): ConsoleModel["operator"] {
+  const p = row ? parsePayload(row) : null;
+  if (!row || !p) return null;
   const last = Array.isArray(p.rpc?.last48h) ? p.rpc.last48h : [];
   return {
     generatedAt: row.generated_at,
@@ -156,14 +243,17 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     operator: null,
     relayer: relayerOf(infra, null),
     alerts: [],
+    caps: { reported: false, complete: false, table: false, byKey: new Map() },
   };
   if (!db) return empty;
 
-  const [snaps, accounts, metrics, operatorRows] = await Promise.all([
+  const [snaps, accounts, metrics, operatorRows, overrides, settings] = await Promise.all([
     rows<SnapRow>(db, `SELECT account_key, env, read_at, idle_usdc, lp_usdc, fees_usdc, total_usdc, positions_json FROM account_snapshot_latest`),
     rows<AccountRow>(db, `SELECT account_key, env, is_test, created_at FROM accounts ORDER BY created_at`),
     rows<MetricsRow>(db, `SELECT day, lp_usd, idle_usdc_usd FROM metrics_daily ORDER BY day`),
     rows<OperatorRow>(db, `SELECT payload_json, generated_at FROM operator_metrics_latest WHERE id = 1`),
+    newestOverrides(db),
+    inEffect(db),
   ]);
 
   const parsedOperator = parseOperator(operatorRows?.[0]);
@@ -267,9 +357,80 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     operator,
     relayer: relayerOf(infra, operator?.relayerWei ?? null),
     alerts: [],
+    caps: empty.caps,
   };
+  model.caps = capsOf(acctRows, parseAuthorizations(parsePayload(operatorRows?.[0])?.authorizations), overrides, settings);
   model.alerts = alertsOf(model, now, snaps === null);
   return model;
+}
+
+/** What the operator runs now for this account, as far as the console can tell; null when nothing says. */
+export function capNow(c: Pick<AccountCap, "authorization" | "general">): number | null {
+  return c.authorization?.capUsdc ?? c.general?.capUsdc ?? null;
+}
+
+/**
+ * One account's cap, read fresh for the cap route (otto/mamoru-astro#25): the operator's report, the newest override
+ * and the general cap. `table` is false when account_cap_overrides is not there.
+ */
+export async function loadAccountCap(db: D1Db, accountKey: string, env: string): Promise<{ cap: AccountCap; table: boolean; reportedAt: string | null }> {
+  const [operatorRows, overrides, settings] = await Promise.all([
+    rows<OperatorRow>(db, `SELECT payload_json, generated_at FROM operator_metrics_latest WHERE id = 1`),
+    newestOverrides(db),
+    inEffect(db),
+  ]);
+  const key = accountKey.slice(0, 8);
+  const auth = parseAuthorizations(parsePayload(operatorRows?.[0])?.authorizations)?.entries ?? [];
+  return {
+    cap: {
+      key,
+      accountKey,
+      env,
+      authorization: auth.find((a) => a.account.toLowerCase() === key.toLowerCase()) ?? null,
+      override: overrides?.find((o) => o.accountKey.toLowerCase() === accountKey.toLowerCase()) ?? null,
+      general: generalCapOf(settings, env, accountKey),
+    },
+    table: overrides !== null,
+    reportedAt: operatorRows?.[0]?.generated_at ?? null,
+  };
+}
+
+/** The environment's cap for one account: its canary when the newest canary names it, else the environment-wide one. */
+function generalCapOf(settings: Awaited<ReturnType<typeof inEffect>>, env: string, accountKey: string): GeneralCap | null {
+  if (env !== "prod" && env !== "beta") return null;
+  const { wide, canary } = settings[env];
+  const lower = accountKey.toLowerCase();
+  const v = canary && canary.accountKeys?.some((k) => k.toLowerCase() === lower) ? canary : wide;
+  if (!v) return null;
+  return { capUsdc: v.settings.capUsdc ?? DEFAULT_CAP_USDC, depth: v.settings.depth != null, version: v.id, canary: v === canary };
+}
+
+function capsOf(
+  acctRows: AccountRow[],
+  parsed: { entries: Authorization[]; complete: boolean } | null,
+  overrides: CapOverrideRow[] | null,
+  settings: Awaited<ReturnType<typeof inEffect>>,
+): ConsoleModel["caps"] {
+  const auth = new Map((parsed?.entries ?? []).map((a) => [a.account.toLowerCase(), a]));
+  const over = new Map((overrides ?? []).map((o) => [o.accountKey.toLowerCase(), o]));
+  const byKey = new Map<string, AccountCap>();
+  // Two accounts sharing the first 8 characters cannot be told apart by the operator's key: neither is shown, and the
+  // cap route refuses an ambiguous key the same way.
+  const seen = new Map<string, number>();
+  for (const a of acctRows) seen.set(a.account_key.slice(0, 8).toLowerCase(), (seen.get(a.account_key.slice(0, 8).toLowerCase()) ?? 0) + 1);
+  for (const a of acctRows) {
+    const key = a.account_key.slice(0, 8);
+    if (seen.get(key.toLowerCase())! > 1) continue;
+    byKey.set(key.toLowerCase(), {
+      key,
+      accountKey: a.account_key,
+      env: a.env ?? "prod",
+      authorization: auth.get(key.toLowerCase()) ?? null,
+      override: over.get(a.account_key.toLowerCase()) ?? null,
+      general: generalCapOf(settings, a.env ?? "prod", a.account_key),
+    });
+  }
+  return { reported: parsed !== null, complete: parsed?.complete ?? false, table: overrides !== null, byKey };
 }
 
 function relayerOf(infra: InfraSnapshot | null, operatorWei: string | null): ConsoleModel["relayer"] {

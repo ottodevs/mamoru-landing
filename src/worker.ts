@@ -98,7 +98,11 @@ import {
   type FlagChangeRow,
 } from "./ops-flags-store";
 import { accountsView, costsView, engineView, moreView, pulseSection, yieldView as yieldConsoleView } from "./console-views";
-import { loadConsole, parseConsoleEnv } from "./console-data";
+import { capNow, loadAccountCap, loadConsole, parseConsoleEnv } from "./console-data";
+import { type CapConfirm } from "./console-views";
+import { DEFAULT_CAP_USDC, parseCapInput, usdc } from "./account-cap-model";
+import { appendCapOverride, CapConflict, CapOutcomeUnknown, CapTableMissing, newestOverrideOf, resolveAccountKey } from "./account-caps-store";
+import { checkCapConfirmToken, issueCapConfirmToken } from "./account-caps-confirm";
 import { archiveTarget } from "./archive";
 import { archiveBar, archiveSection } from "./ops-archive";
 import {
@@ -668,7 +672,7 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
   const consoleViews: Record<string, (m: Awaited<ReturnType<typeof consoleModel>>, now: Date) => SectionView> = {
     "/ops": pulseSection,
     "/ops/yield": yieldConsoleView,
-    "/ops/accounts": accountsView,
+    "/ops/accounts": (m, now) => accountsView(m, now, { csrf: session.csrf }),
     "/ops/engine": engineView,
     "/ops/costs": costsView,
   };
@@ -680,6 +684,82 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
   }
   if (sectionPath === "/ops/more" && request.method === "GET") {
     return flashed(moreView(OPS_SECTIONS));
+  }
+
+  // ---- a cap per account (otto/mamoru-astro#25, account_cap_overrides from ottodevs/mamoru#109) ----
+  if (url.pathname === "/ops/accounts/cap" && request.method === "POST") {
+    const accountsPage = async (notice: { text: string; tone: "plain" | "bad" } | null, status: number, confirm?: CapConfirm): Promise<Response> => {
+      let view: SectionView;
+      try {
+        view = accountsView(await consoleModel(), new Date(), { csrf: session.csrf, ...(confirm ? { confirm } : {}) });
+      } catch {
+        view = { section: "accounts", title: "Accounts", html: "" };
+        if (notice) notice = { ...notice, text: `${notice.text} (The page could not be read; reload it.)` };
+      }
+      return respond({ ...(notice ? withNotice(view, notice.text, notice.tone) : view), status });
+    };
+    const no = (text: string, status: number) => accountsPage({ text: `Not applied: ${text}`, tone: "bad" }, status);
+    if (!csrfOk || !form) return accountsPage({ text: FLASH_COPY.bad, tone: "bad" }, 403);
+    const db = env.MAMORU_DB;
+    if (!db) return no("the database is not connected.", 503);
+    const short = String(form.get("key") ?? "").trim();
+    const FAILED = Symbol("read failed");
+    const read = <T,>(work: Promise<T>): Promise<T | typeof FAILED> => work.catch(() => FAILED);
+    const resolved = await read(resolveAccountKey(db, short));
+    if (resolved === FAILED) return no("the accounts could not be read.", 503);
+    if (resolved.kind === "none") return no("no account starts with that key.", 400);
+    if (resolved.kind === "many") return no(`${resolved.count} accounts start with ${short}; nothing was written.`, 409);
+    const accountEnv = resolved.env;
+    if (accountEnv !== "prod" && accountEnv !== "beta") return no("that account has no prod or beta environment.", 400);
+    const act = String(form.get("action") ?? "");
+    if (act !== "set" && act !== "clear") return no("unknown action.", 400);
+    const capUsdc = act === "clear" ? null : parseCapInput(String(form.get("cap") ?? ""));
+    if (act === "set" && capUsdc === null) return no("the amount must be a whole number of USDC from 1 to 1,000,000.", 400);
+    const reason = String(form.get("reason") ?? "").trim();
+    if (!reason) return no("say why.", 400);
+    // Read fresh on every call: the base id and the confirm token both commit to the newest row of this account, so
+    // a row written by anyone after the form or the confirm screen was shown refuses this write.
+    const newest = await read(newestOverrideOf(db, resolved.accountKey));
+    if (newest === FAILED) return no("the account caps could not be read.", 503);
+    if (newest === undefined) return no("the account caps table is not set up on this database yet (ottodevs/mamoru#109).", 503);
+    const expectedMaxId = newest?.id ?? 0;
+    const base = String(form.get("base") ?? "");
+    if (!/^[0-9]{1,16}$/.test(base) || Number(base) !== expectedMaxId) return no("this account's cap changed since the form was shown. Review it again below.", 409);
+    const loaded = await read(loadAccountCap(db, resolved.accountKey, accountEnv));
+    if (loaded === FAILED) return no("the account's current cap could not be read.", 503);
+    const { cap } = loaded;
+    const from = capNow(cap);
+    const to = capUsdc ?? cap.general?.capUsdc ?? null;
+    // More money per account is the risky direction: it needs the token the confirm screen issued for exactly this
+    // account, amount and newest row. Unknown on either side counts as a raise.
+    if (from === null || to === null || to > from) {
+      const secret = env.OPS_SESSION_SECRET ?? "";
+      const token = String(form.get("confirm_token") ?? "");
+      if (!token || !(await checkCapConfirmToken(secret, session.csrf, token, resolved.accountKey, capUsdc, expectedMaxId))) {
+        const lines: string[] = [];
+        if (to !== null && to > DEFAULT_CAP_USDC && cap.general && !cap.general.depth)
+          lines.push(`This account's engine settings have no depth sizing: the engine will refuse a cap above ${DEFAULT_CAP_USDC} and keep the code default.`);
+        else if (to !== null && to > DEFAULT_CAP_USDC) lines.push(`A cap above ${DEFAULT_CAP_USDC} runs only with depth sizing and a target-weights policy; otherwise the engine keeps the code default and says so here.`);
+        lines.push("Only approvals signed after this change can use it; the approval the account holds now keeps the limit it was signed for.");
+        if (token) lines.unshift("The earlier confirmation is out of date: the cap changed or it expired. Check again.");
+        const issued = await issueCapConfirmToken(secret, session.csrf, resolved.accountKey, capUsdc, expectedMaxId);
+        return accountsPage(null, 200, { key: resolved.accountKey.slice(0, 8), env: accountEnv, capUsdc, reason, base: expectedMaxId, token: issued, lines, from, to });
+      }
+    }
+    // The write decides the message; the page around it is read afterwards and can never turn a committed write into
+    // "Not applied".
+    let outcome: { status: number; text: string; tone: "plain" | "bad" };
+    try {
+      await appendCapOverride(db, { env: accountEnv, accountKey: resolved.accountKey, capUsdc, author: session.email, reason, expectedMaxId });
+      const what = capUsdc == null ? `is back on the general cap${cap.general ? ` (${usdc(cap.general.capUsdc)})` : ""}` : `may now run up to ${usdc(capUsdc)}`;
+      outcome = { status: 200, tone: "plain", text: `Account ${resolved.accountKey.slice(0, 8)} ${what}. The operator picks it up on its next settings poll, and it only affects approvals signed after it.` };
+    } catch (e) {
+      if (e instanceof CapConflict) outcome = { status: 409, tone: "bad", text: "Not applied: someone changed this account's cap meanwhile. Review it again below." };
+      else if (e instanceof CapTableMissing) outcome = { status: 503, tone: "bad", text: "Not applied: the account caps table is not set up on this database yet (ottodevs/mamoru#109)." };
+      else if (e instanceof CapOutcomeUnknown) outcome = { status: 503, tone: "bad", text: "Unknown whether this was written: the database did not say. Check the account's cap below before trying again." };
+      else outcome = { status: 400, tone: "bad", text: `Not applied: ${(e as Error).message}.` };
+    }
+    return accountsPage({ text: outcome.text, tone: outcome.tone }, outcome.status);
   }
 
 

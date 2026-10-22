@@ -2,8 +2,9 @@
 // washi paper, ink, one emerald accent, Noto Serif figures and IBM Plex Mono labels. Charts ship their data as a
 // `data-c` attribute and are drawn by the console client at the container's real width (console-client.ts);
 // without script every chart still has its figures in a <details> table.
-import { type ConsoleEnv, type ConsoleModel, type AccountYield, money, pct, poolLabel } from "./console-data";
-import type { SectionId, SectionView } from "./ops";
+import { type ConsoleEnv, type ConsoleModel, type AccountYield, type AccountCap, capNow, money, pct, poolLabel } from "./console-data";
+import { capSourceWords, DEFAULT_CAP_USDC, usdc } from "./account-cap-model";
+import { csrfField, type SectionId, type SectionView } from "./ops";
 import { esc } from "./text";
 
 const int = (n: number) => n.toLocaleString("en-US");
@@ -68,8 +69,155 @@ function alertsList(m: ConsoleModel): string {
     .join("")}</ul>`;
 }
 
+// ---- authorization and cap per account (otto/mamoru-astro#25) ----
+
+/** What the confirm screen shows and re-submits when a cap is raised. */
+export type CapConfirm = { key: string; env: string; capUsdc: number | null; reason: string; base: number; token: string; lines: string[]; from: number | null; to: number | null };
+
+/** Options of the Accounts view: the session's CSRF token turns the cap form on. */
+export type AccountsOpts = { csrf?: string; confirm?: CapConfirm };
+
+const HOLD_WORDS: Record<string, string> = {
+  SESSION_EXPIRED: "approval expired",
+  SESSION_RENEWAL_DUE: "renewal due",
+  SESSION_MISSING: "grants missing",
+  SESSION_USAGE_SPENT: "allowance used up",
+};
+const holdWords = (h: string) => HOLD_WORDS[h] ?? h.toLowerCase().replace(/_/g, " ");
+
+/** The approval's state in one chip, or null before the operator reports approvals at all. */
+function authChip(m: ConsoleModel, c: AccountCap | undefined): string {
+  if (!m.caps.reported) return "";
+  const a = c?.authorization;
+  if (!a) return m.caps.complete ? chip("No approval") : "";
+  if (a.deactivated) return chip("Stopped", "bad");
+  if (a.holds.includes("SESSION_EXPIRED")) return chip("Approval expired", "bad");
+  if (a.holds.length) return chip(holdWords(a.holds[0]!), "warn");
+  return a.active === true ? chip("Approved", "good") : a.active === false ? chip("Not active") : chip("State not reported");
+}
+
+function untilWords(iso: string, now: Date): string {
+  const days = (new Date(iso).getTime() - now.getTime()) / 864e5;
+  const when = dayLabel(iso);
+  if (days < 0) return `${when}, ended ${Math.max(1, Math.round(-days))} day${Math.round(-days) === 1 ? "" : "s"} ago`;
+  if (days < 1) return `${when}, ends within a day`;
+  return `${when}, ${Math.floor(days)} day${Math.floor(days) === 1 ? "" : "s"} left`;
+}
+
+function grantName(g: string): string {
+  const [kind = g] = g.split(":");
+  return kind.replace(/-/g, " ");
+}
+
+/** Pools the approval names, each with the grants on it and how much of each grant's allowance is used. */
+function poolsWithGrants(a: NonNullable<AccountCap["authorization"]>): string {
+  const poolOf = (g: string) => {
+    const rest = g.split(":").slice(1).join(":");
+    return rest.startsWith("pool:") ? rest : null;
+  };
+  const pools = [...new Set([...a.pools, ...a.grants.map((g) => poolOf(g.grant)).filter((p): p is string => !!p)])];
+  const grantRow = (g: { grant: string; usedBps: number }) => {
+    const used = Math.max(0, Math.min(100, g.usedBps / 100));
+    return `<li><span>${esc(grantName(g.grant))}</span><span class="c-meter${used >= 90 ? " bad" : used >= 60 ? " warn" : ""}"><i style="width:${used.toFixed(1)}%"></i></span><span class="n">${esc(pct(used, 0))} used</span></li>`;
+  };
+  const blocks = pools.map((p) => {
+    const n = poolLabel(p);
+    const gs = a.grants.filter((g) => poolOf(g.grant) === p);
+    return `<li class="c-pos"><div><b>${esc(n.pair)}</b><span>${esc(n.fee)} fee tier</span></div>${gs.length ? `<ul class="c-grants">${gs.map(grantRow).join("")}</ul>` : `<span class="dim">no grant reported</span>`}</li>`;
+  });
+  const loose = a.grants.filter((g) => !poolOf(g.grant));
+  if (loose.length) blocks.push(`<li class="c-pos"><div><b>Other grants</b><span>not tied to one pool</span></div><ul class="c-grants">${loose.map(grantRow).join("")}</ul></li>`);
+  return blocks.length ? `<ul class="c-poslist">${blocks.join("")}</ul>` : `<p class="c-empty">The approval names no pool.</p>`;
+}
+
+/** The plain lines under the cap: what was asked, what runs, why they differ. */
+function capLines(m: ConsoleModel, c: AccountCap): string[] {
+  const out: string[] = [];
+  const a = c.authorization;
+  const o = c.override;
+  const asked = o ? `${o.capUsdc == null ? "Back to the general cap" : `Its own cap of ${usdc(o.capUsdc)}`}, set by ${o.author} on ${timeLabel(o.createdAt)}: ${o.reason}` : null;
+  if (asked) out.push(asked);
+  if (!a) return out;
+  const reportedAfter = m.operator && o ? m.operator.generatedAt >= o.createdAt : false;
+  if (o && o.capUsdc != null && (a.capSource !== "override" || a.capUsdc !== o.capUsdc)) {
+    if (!reportedAfter) out.push(`Not picked up yet: the engine has not reported since. It still runs ${a.capUsdc != null ? usdc(a.capUsdc) : "an unknown cap"}.`);
+    else if (a.capSource === "default" && o.capUsdc > DEFAULT_CAP_USDC)
+      out.push(`Asked for ${usdc(o.capUsdc)}, but the engine keeps the code default of ${a.capUsdc != null ? usdc(a.capUsdc) : usdc(DEFAULT_CAP_USDC)}: a cap above ${DEFAULT_CAP_USDC} needs depth sizing and a target-weights policy on this account.`);
+    else out.push(`Asked for ${usdc(o.capUsdc)}, but the engine runs ${a.capUsdc != null ? usdc(a.capUsdc) : "an unknown cap"} (${a.capSource ? capSourceWords(a.capSource) : "source not reported"}).`);
+  }
+  if (o && o.capUsdc == null && a.capSource === "override") out.push(reportedAfter ? "The engine still reports its own cap." : "Not picked up yet: the engine has not reported since.");
+  if (a.capUsdc != null && a.signedCapUsdc != null && a.capUsdc > a.signedCapUsdc)
+    out.push(`The approval it holds was signed for ${usdc(a.signedCapUsdc)}. The ${usdc(a.capUsdc)} cap applies to approvals signed from now on, at the next renewal.`);
+  return out;
+}
+
+function capForms(m: ConsoleModel, c: AccountCap, csrf: string): string {
+  if (!m.caps.table) return `<p class="c-empty">An own cap can be set here once the account caps table exists on this database (ottodevs/mamoru#109).</p>`;
+  const action = `/ops/accounts/cap${m.env === "all" ? "?env=all" : ""}`;
+  const base = c.override?.id ?? 0;
+  const hidden = (act: string) => `${csrfField(csrf)}<input type="hidden" name="key" value="${esc(c.key)}" /><input type="hidden" name="base" value="${base}" /><input type="hidden" name="action" value="${act}" />`;
+  const id = esc(c.key);
+  const set = `<form method="post" action="${action}" class="c-capform" data-ops-form data-ops-no-retry>${hidden("set")}
+<label for="cap-${id}">Authorize up to</label><span class="c-capin"><input id="cap-${id}" name="cap" inputmode="numeric" autocomplete="off" required maxlength="9" placeholder="e.g. 2,000" /> USDC</span>
+<label for="cap-why-${id}">Why</label><input id="cap-why-${id}" name="reason" required maxlength="500" autocomplete="off" placeholder="what this test needs" />
+<button type="submit">Apply</button></form>`;
+  const back = c.override && c.override.capUsdc != null
+    ? `<form method="post" action="${action}" class="c-capform back" data-ops-form data-ops-no-retry>${hidden("clear")}
+<label for="cap-back-${id}">Why</label><input id="cap-back-${id}" name="reason" required maxlength="500" autocomplete="off" placeholder="test finished" />
+<button type="submit" class="quiet">Back to the general cap${c.general ? ` (${esc(usdc(c.general.capUsdc))})` : ""}</button></form>`
+    : "";
+  return `${set}${back}<p class="c-foot">Whole USDC from 1 to 1,000,000. Raising it asks again before it writes. The operator picks a change up on its next settings poll, and it only affects approvals signed after it.</p>`;
+}
+
+/** The Authorization block of one account's drawer. */
+function authorizationSheet(m: ConsoleModel, c: AccountCap | undefined, now: Date, csrf: string | undefined): string {
+  if (!c) return sheet("Authorization", null, `<p class="c-empty">Not reported yet.</p>`);
+  const a = c.authorization;
+  const general = c.general
+    ? `General cap for ${c.env}: ${usdc(c.general.capUsdc)}, settings version ${c.general.version}${c.general.canary ? " (canary)" : ""}${c.general.depth ? ", with depth sizing" : ", without depth sizing"}.`
+    : "General cap: not read (no engine settings in effect for this environment).";
+  const lines = capLines(m, c);
+  const linesHtml = lines.length ? `<ul class="c-caplines">${lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>` : "";
+  const form = csrf ? capForms(m, c, csrf) : `<p class="c-foot">To change this account's cap, open it from <a href="/ops/accounts${m.env === "all" ? "?env=all" : ""}">Accounts</a>.</p>`;
+  if (!a) {
+    const why = m.caps.reported && m.caps.complete ? "The engine reports no approval for this account." : "Not reported yet: the engine's approvals show here once it reports them (ottodevs/mamoru#109).";
+    return sheet("Authorization", null, `<p class="c-empty">${esc(why)}</p>${linesHtml}<p class="c-foot">${esc(general)}</p>${form}`);
+  }
+  const state = [authChip(m, c), ...a.holds.slice(1).map((h) => chip(holdWords(h), "warn")), a.deactivated ? chip(`code ${a.deactivated}`, "bad") : ""].join(" ");
+  const figs = `<div class="c-figs two">${fig("Cap in effect", a.capUsdc != null ? usdc(a.capUsdc) : "n/a", a.capSource ? capSourceWords(a.capSource) : "source not reported")}${fig("Signed for", a.signedCapUsdc != null ? usdc(a.signedCapUsdc) : "n/a", "the approval it holds now")}</div>`;
+  const policy = `${a.policyId ?? "policy not reported"}${a.policyVersion ? `, version ${a.policyVersion}` : ""}`;
+  const meta = `<dl class="c-dl"><dt>Policy</dt><dd>${esc(policy)}</dd><dt>Valid until</dt><dd>${esc(a.validUntil ? untilWords(a.validUntil, now) : "no grant held")}</dd><dt>State</dt><dd>${state}</dd></dl>`;
+  return sheet("Authorization", m.operator ? `As the engine reported it ${ago(m.operator.generatedAt, now)}` : null, `${figs}${linesHtml}${meta}${poolsWithGrants(a)}<p class="c-foot">${esc(general)}</p>${form}`);
+}
+
+/** Accounts with a cap of their own (the newest row is not a removal), for the Accounts view. */
+function ownCapsSheet(m: ConsoleModel, drawerKeys: Set<string>): string {
+  if (!m.caps.table) return sheet("Accounts with their own cap", null, `<p class="c-empty">Not set up yet: the account caps table is not on this database (ottodevs/mamoru#109).</p>`);
+  const own = [...m.caps.byKey.values()].filter((c) => c.override && c.override.capUsdc != null).sort((x, y) => y.override!.id - x.override!.id);
+  if (!own.length) return sheet("Accounts with their own cap", null, `<p class="c-empty">None. Every account runs the general cap of its environment.</p>`);
+  const row = (c: AccountCap) => {
+    const o = c.override!;
+    const a = c.authorization;
+    const running = a?.capUsdc != null ? `${usdc(a.capUsdc)}, ${a.capSource ? capSourceWords(a.capSource) : "source not reported"}` : a ? "cap not reported" : m.caps.reported && m.caps.complete ? "no approval reported" : "not reported yet";
+    const keyHtml = drawerKeys.has(c.key) ? `<button type="button" class="c-linkish" data-account="${esc(c.key)}">${esc(c.key)}</button>` : `<span class="c-mono">${esc(c.key)}</span>`;
+    return `<li>${keyHtml}<div><b>${esc(usdc(o.capUsdc!))} asked</b><span>${esc(`runs ${running}`)}${c.env !== "prod" ? ` · ${esc(c.env)}` : ""}</span><span>${esc(`${o.author}, ${timeLabel(o.createdAt)}`)}</span></div>${!a && m.caps.reported && m.caps.complete ? chip("No approval") : a?.capUsdc == null ? chip("Not reported") : a.capSource === "override" && a.capUsdc === o.capUsdc ? chip("In effect", "good") : chip("Not in effect", "warn")}</li>`;
+  };
+  return sheet("Accounts with their own cap", `${own.length} account${own.length === 1 ? "" : "s"} above or below the general cap`, `<ul class="c-feed c-owncaps">${own.map(row).join("")}</ul>`);
+}
+
+/** The confirm screen for a raise: what changes, and the same fields again with the token. */
+function capConfirmSheet(m: ConsoleModel, c: CapConfirm, csrf: string): string {
+  const action = `/ops/accounts/cap${m.env === "all" ? "?env=all" : ""}`;
+  const hidden = (name: string, value: string) => `<input type="hidden" name="${name}" value="${esc(value)}" />`;
+  const what = c.capUsdc == null ? "back to the general cap" : `up to ${usdc(c.capUsdc)}`;
+  return `<section class="c-sheet c-confirm" aria-labelledby="cap-confirm"><header class="c-sheet-h"><h2 id="cap-confirm">Confirm: authorize ${esc(c.key)} ${esc(what)}</h2><p>${esc(`It runs ${c.from != null ? usdc(c.from) : "an unknown cap"} now; this allows ${c.to != null ? usdc(c.to) : "an unknown cap"}.`)}</p></header>
+<ul class="c-caplines">${c.lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
+<form method="post" action="${action}" data-ops-form data-ops-no-retry>${csrfField(csrf)}${hidden("key", c.key)}${hidden("action", c.capUsdc == null ? "clear" : "set")}${c.capUsdc == null ? "" : hidden("cap", String(c.capUsdc))}${hidden("reason", c.reason)}${hidden("base", String(c.base))}${hidden("confirm_token", c.token)}
+<button type="submit">Yes, authorize ${esc(what)}</button> <a href="/ops/accounts${m.env === "all" ? "?env=all" : ""}">Cancel</a></form></section>`;
+}
+
 /** One hidden template per account: the drawer the client opens from any view. */
-function drawers(m: ConsoleModel, now: Date): string {
+function drawers(m: ConsoleModel, now: Date, csrf?: string): string {
   return m.accounts
     .map((a) => {
       const pos = a.positions
@@ -89,6 +237,7 @@ function drawers(m: ConsoleModel, now: Date): string {
 <p class="c-k">Account ${a.env !== "prod" ? esc(a.env) : ""}</p><h2 class="c-acct">${esc(a.key)}</h2>
 <div class="c-figs two">${fig("Earned", money(a.fees), a.since ? `since ${dayLabel(a.since)}` : "")}${fig("Fee APR", pct(a.apr), `${money(a.lp)} placed, before gas`)}</div>
 ${sheet("Positions", `${a.positions.filter((p) => p.inRange).length} of ${a.positions.length} in range`, a.positions.length ? `<ul class="c-poslist">${pos}</ul>` : `<p class="c-empty">No position open. ${a.idle >= 0.01 ? money(a.idle) + " is waiting to be placed." : ""}</p>`)}
+${authorizationSheet(m, m.caps.byKey.get(a.key.toLowerCase()), now, csrf)}
 ${sheet("Engine activity", m.operator ? "Newest first" : "Not connected yet", ops ? `<ul class="c-feed">${ops}</ul>` : `<p class="c-empty">No recent operations reported.</p>`)}
 </div></template>`;
     })
@@ -175,7 +324,7 @@ ${harvestFig(m)}
   return view("yield", "Yield", head("Yield", "/ops/yield", m) + figs + body + daily + drawers(m, now));
 }
 
-export function accountsView(m: ConsoleModel, now: Date): SectionView {
+export function accountsView(m: ConsoleModel, now: Date, opts: AccountsOpts = {}): SectionView {
   const l = m.lifecycle;
   const part = (n: number, cls: string) => (n ? `<span class="${cls}" style="width:${((n / Math.max(1, l.total)) * 100).toFixed(2)}%"></span>` : "");
   const stand = `<div class="c-stack tall" aria-hidden="true">${part(l.earning, "emerald")}${part(l.waiting, "umber")}${part(l.signedUp, "wash")}</div>
@@ -188,7 +337,9 @@ export function accountsView(m: ConsoleModel, now: Date): SectionView {
     ? `<ul class="c-lb plain">${shown
         .map((a) => {
           const state = a.lp > 0.01 ? chip("Earning", "good") : a.idle >= 0.2 ? chip("Funds waiting", "warn") : chip("No deposit");
-          return `<li><button type="button" class="c-lb-row compact" data-account="${esc(a.key)}"><span class="c-mono">${esc(a.key)}</span>${state}<span class="n">${esc(money(a.total))}</span><span class="n wide">${esc(ago(a.readAt, now))}</span></button></li>`;
+          const cap = m.caps.byKey.get(a.key.toLowerCase());
+          const own = cap?.override?.capUsdc != null ? chip(`Own cap ${cap.override.capUsdc.toLocaleString("en-US")}`, "em") : "";
+          return `<li><button type="button" class="c-lb-row compact" data-account="${esc(a.key)}"><span class="c-mono">${esc(a.key)}</span><span class="c-chips">${state}${authChip(m, cap)}${own}</span><span class="n">${esc(money(a.total))}</span><span class="n wide">${esc(ago(a.readAt, now))}</span></button></li>`;
         })
         .join("")}</ul>${folded ? `<p class="c-foot">${folded} more Safe${folded === 1 ? "" : "s"} with nothing deposited yet.</p>` : ""}`
     : `<p class="c-empty">No account has been read yet.</p>`;
@@ -196,9 +347,11 @@ export function accountsView(m: ConsoleModel, now: Date): SectionView {
     "accounts",
     "Accounts",
     head("Accounts", "/ops/accounts", m) +
+      (opts.confirm && opts.csrf ? capConfirmSheet(m, opts.confirm, opts.csrf) : "") +
       `<div class="c-grid two">${sheet("Where every account stands", `${int(l.total)} accounts`, stand)}${sheet("From sign-up to earning", "Conversion so far", funnel)}</div>` +
       `<div class="c-grid hero">${sheet("Sign-ups per day", "Since launch", signupChart(m, 170))}${sheet("Accounts with money in", "Every Safe the ledger reads that holds funds", list)}</div>` +
-      drawers(m, now),
+      ownCapsSheet(m, new Set(m.accounts.map((a) => a.key))) +
+      drawers(m, now, opts.csrf),
   );
 }
 
