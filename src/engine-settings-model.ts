@@ -10,6 +10,8 @@ export type EngineSettings = {
   depth: { impactBps: number; shareBps: number; stablesImpactBps?: number } | null;
   capUsdc: number | null;
   guard: { enabled: boolean; btc: { fallBps: number; volBps: number }; eth: { fallBps: number; volBps: number } };
+  /** otto/mamoru#195: the smallest entry also covers this many times its swap and mint gas. Absent = off. */
+  minEntry?: { gasMultiple: number };
 };
 
 export const DEFAULT_CAP_USDC = 100;
@@ -21,6 +23,7 @@ export const BOUNDS = {
   capUsdc: { min: 1, max: 1_000_000 },
   fallBps: { min: 100, max: 3000 },
   volBps: { min: 1000, max: 50_000 },
+  gasMultiple: { min: 1, max: 50 },
 } as const;
 
 export const DEFAULT_SETTINGS: EngineSettings = {
@@ -50,6 +53,10 @@ export function validateSettings(s: EngineSettings): string[] {
     inRange(errors, "capUsdc", s.capUsdc, BOUNDS.capUsdc);
     if (isInt(s.capUsdc) && s.capUsdc > DEFAULT_CAP_USDC && !s.depth) errors.push(`capUsdc above ${DEFAULT_CAP_USDC} needs depth sizing`);
   }
+  if (s.minEntry !== undefined) {
+    if (!s.minEntry || typeof s.minEntry !== "object") errors.push("minEntry must be { gasMultiple }");
+    else inRange(errors, "minEntry.gasMultiple", s.minEntry.gasMultiple, BOUNDS.gasMultiple);
+  }
   for (const side of ["btc", "eth"] as const) {
     inRange(errors, `guard.${side}.fallBps`, s.guard[side].fallBps, BOUNDS.fallBps);
     inRange(errors, `guard.${side}.volBps`, s.guard[side].volBps, BOUNDS.volBps);
@@ -70,6 +77,7 @@ export function riskyChanges(from: EngineSettings, to: EngineSettings): string[]
     }
   }
   if (from.depth && !to.depth) out.push("depth sizing turns off");
+  if (from.minEntry && (!to.minEntry || to.minEntry.gasMultiple < from.minEntry.gasMultiple)) out.push("smaller entries go through, where gas is a larger share of what they place");
   if (from.depth && to.depth) {
     if (to.depth.impactBps > from.depth.impactBps) out.push("entries may move the pool price more");
     if (to.depth.shareBps > from.depth.shareBps) out.push("entries may take a bigger share of a pool");
@@ -103,6 +111,7 @@ function int(form: FormData, name: string): number | null {
 export function settingsFromForm(form: FormData): EngineSettings {
   const depthOn = form.get("depth_on") === "1";
   const stables = int(form, "depth_stables");
+  const gas = int(form, "min_entry_gas");
   return {
     depth: depthOn
       ? { impactBps: int(form, "depth_impact") ?? Number.NaN, shareBps: int(form, "depth_share") ?? Number.NaN, ...(stables === null ? {} : { stablesImpactBps: stables }) }
@@ -113,6 +122,8 @@ export function settingsFromForm(form: FormData): EngineSettings {
       btc: { fallBps: int(form, "btc_fall") ?? Number.NaN, volBps: int(form, "btc_vol") ?? Number.NaN },
       eth: { fallBps: int(form, "eth_fall") ?? Number.NaN, volBps: int(form, "eth_vol") ?? Number.NaN },
     },
+    // Blank is off, and then the key is left out so the stored JSON (and its hash) stays as before #195.
+    ...(gas === null ? {} : { minEntry: { gasMultiple: gas } }),
   };
 }
 

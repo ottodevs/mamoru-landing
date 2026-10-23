@@ -61,6 +61,7 @@ function formFor(s: EngineSettings, extra: Record<string, string>): URLSearchPar
     btc_vol: String(s.guard.btc.volBps),
     eth_fall: String(s.guard.eth.fallBps),
     eth_vol: String(s.guard.eth.volBps),
+    ...(s.minEntry ? { min_entry_gas: String(s.minEntry.gasMultiple) } : {}),
     reason: "test",
     ...extra,
   });
@@ -82,6 +83,7 @@ describe("engine settings model (copy of packages/policy/src/engine-settings.ts)
       capUsdc: { min: 1, max: 1_000_000 },
       fallBps: { min: 100, max: 3000 },
       volBps: { min: 1000, max: 50_000 },
+      gasMultiple: { min: 1, max: 50 },
     });
     expect(canonicalJson(DEFAULT_SETTINGS)).toBe('{"capUsdc":null,"depth":null,"guard":{"btc":{"fallBps":700,"volBps":8000},"enabled":false,"eth":{"fallBps":900,"volBps":10000}}}');
   });
@@ -95,6 +97,20 @@ describe("engine settings model (copy of packages/policy/src/engine-settings.ts)
     expect(settingsFromForm(f)).toEqual(DEPTH);
     f.set("cap", "12.5");
     expect(validateSettings(settingsFromForm(f)).join()).toContain("capUsdc must be a whole number");
+  });
+
+  // otto/mamoru#195: the gas multiple of the smallest entry.
+  test("minEntry: off by default and left out of the JSON, round-trips through the form, lowering it is risky", () => {
+    const on: EngineSettings = { ...DEPTH, minEntry: { gasMultiple: 5 } };
+    expect(validateSettings(on)).toEqual([]);
+    expect(validateSettings({ ...on, minEntry: { gasMultiple: 51 } })).toEqual(["minEntry.gasMultiple must be a whole number from 1 to 50"]);
+    const f = new FormData();
+    for (const [k, v] of formFor(on, {})) f.set(k, v);
+    expect(settingsFromForm(f)).toEqual(on);
+    f.delete("min_entry_gas");
+    expect(canonicalJson(settingsFromForm(f))).not.toContain("minEntry");
+    expect(riskyChanges(on, DEPTH)).toEqual(["smaller entries go through, where gas is a larger share of what they place"]);
+    expect(riskyChanges(DEPTH, on)).toEqual([]);
   });
 });
 
