@@ -163,4 +163,50 @@ describe("lab-logic.ts (embedded client logic, same function the server-side bou
     expect(LAB.initialCursorIndex(series)).toBe(2);
     expect(LAB.initialCursorIndex([{ v: 1, h: 0 }])).toBe(0);
   });
+
+  // ---- "Ejecutar escenario" feedback (otto/mamoru-astro#28 follow-up, Ot 23 Oct) ----
+
+  test("specWords: the requested spec in words, always on the status card", () => {
+    expect(LAB.specWords("Caída feb 2025", "live", 2000, 1000)).toBe("Caída feb 2025 · Política actual · 2.000 ticks · 1.000 USDC");
+    expect(LAB.specWords("Caída feb 2025", "guard", 3000, 5000)).toBe("Caída feb 2025 · Con guarda de caídas · 3.000 ticks · 5.000 USDC");
+  });
+
+  test("jobStatusText: queued and running show the elapsed seconds", () => {
+    expect(LAB.jobStatusText({ status: "queued", elapsedSec: 3, variantLabel: "", windowLabel: "", alreadyExisted: false })).toBe("En cola · 3 s");
+    expect(LAB.jobStatusText({ status: "running", elapsedSec: 8, variantLabel: "", windowLabel: "", alreadyExisted: false })).toBe("Calculando con el motor de producción · 8 s");
+  });
+
+  test("jobStatusText: done (new) names the strategy and the window it was added to", () => {
+    const text = LAB.jobStatusText({ status: "done", elapsedSec: 9, variantLabel: "Rango ×2", windowLabel: "Caída feb 2025", alreadyExisted: false });
+    expect(text).toBe("Listo en 9 s: «Rango ×2» añadida a Caída feb 2025.");
+  });
+
+  test("jobStatusText: done (already existed) never claims it was just added, and still names where it is", () => {
+    const text = LAB.jobStatusText({ status: "done", elapsedSec: 0, variantLabel: "Rango ×2", windowLabel: "Caída feb 2025", alreadyExisted: true });
+    expect(text).toBe("Ya estaba calculado: «Rango ×2» en Caída feb 2025. Te lo he seleccionado.");
+    expect(text).not.toContain("Listo en");
+  });
+
+  test("jobSubText: only queued has a sub-line, and only past 60s does it say the runner hasn't answered", () => {
+    expect(LAB.jobSubText("queued", 5)).toBe("El runner de lady lo recoge en unos segundos.");
+    expect(LAB.jobSubText("queued", 61)).toBe("El runner de lady lo recoge en unos segundos. El runner no ha respondido todavía.");
+    expect(LAB.jobSubText("queued", 60)).not.toContain("todavía"); // boundary: 60 itself is not yet "past" 60
+    expect(LAB.jobSubText("running", 90)).toBe("");
+    expect(LAB.jobSubText("done", 0)).toBe("");
+  });
+
+  test("jobFailedText: the daily/queued limits get their own sentence with the real numbers", () => {
+    expect(LAB.jobFailedText("LAB_JOB_LIMIT_DAILY")).toBe("Has llegado a 20 escenarios hoy");
+    expect(LAB.jobFailedText("LAB_JOB_LIMIT_QUEUED")).toBe("Ya tienes 3 en cola");
+  });
+
+  test("jobFailedText: known codes map to a plain-Spanish reason, unknown codes still say something", () => {
+    expect(LAB.jobFailedText("LAB_JOB_LEASE_LOST")).toBe("Falló: el runner perdió el trabajo; vuelve a intentarlo");
+    expect(LAB.jobFailedText("LAB_NETWORK")).toBe("Falló: sin conexión con el servidor");
+    expect(LAB.jobFailedText("LAB_CSRF_INVALID")).toBe("Falló: la sesión caducó: recarga la página");
+    expect(LAB.jobFailedText("LAB_DATASET_MISSING")).toBe("Falló: esta ventana no tiene datos para esa base");
+    expect(LAB.jobFailedText("LAB_HOLDOUT_DENIED")).toContain("reserva de prueba");
+    expect(LAB.jobFailedText("LAB_RUN_WRITE_FAILED")).toContain("vuelve a intentarlo");
+    expect(LAB.jobFailedText("SOMETHING_UNKNOWN")).toBe("Falló: SOMETHING_UNKNOWN");
+  });
 });

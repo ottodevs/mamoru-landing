@@ -616,20 +616,10 @@ export function opsClientScript(nonce: string): string {
     var POOL_ORDER = ["pool:WETH/USDC/3000", "pool:USDC/cbBTC/500", "pool:USDC/USDT/100"];
     var KIND = { enter_swap: "cambia tokens para entrar", enter_mint: "entra en el pool", harvest: "cobra las comisiones", rerange: "el precio salió del rango y recentra", reduce: "reduce la posición" };
     var REASON = { DECIDE_IN_RANGE: "En rango, no hace nada", DECIDE_ENTER: "Entra", DECIDE_HARVEST: "Cobra comisiones", DECIDE_RANGE_ADJUST: "Recentra", EHG_PRICE_DIVERGENCE: "Espera: precio raro frente al TWAP", DECIDE_WAIT_DEPTH: "Espera profundidad" };
-    var ERROR_WORDS = {
-      LAB_JOB_LEASE_LOST: "el runner perdió este trabajo",
-      LAB_SPEC_INVALID: "el escenario pedido no es válido",
-      LAB_DATASET_MISSING: "esta ventana no tiene datos para esa base",
-      LAB_JOB_TIMEOUT: "se agotó el tiempo del trabajo",
-      LAB_RUN_INVALID: "el runner devolvió un resultado con forma inválida",
-      LAB_JOB_LIMIT: "se alcanzó el límite de trabajos",
-      LAB_SERVICE_UNAVAILABLE: "el banco no está disponible ahora mismo",
-      LAB_NETWORK: "no hubo respuesta del servidor",
-    };
     var dF = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short", timeZone: "UTC" });
     var tF = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
 
-    var root = null, scope = null, csrf = "", state = null, geo = {}, playTimer = null, jobTimer = null, loadToken = 0;
+    var root = null, scope = null, csrf = "", state = null, geo = {}, playTimer = null, jobTimer = null, jobTickTimer = null, loadToken = 0;
 
     function esc(s) {
       return String(s).replace(/[&<>"']/g, function (c) {
@@ -667,8 +657,13 @@ export function opsClientScript(nonce: string): string {
       return {
         windows: [], w: 0, selectedHash: null, pool: POOL_ORDER[0], at: 0, playing: false, speed: 1, tab: "ev", rtab: "probar",
         runFull: null, runFullHash: null, baselineFull: null, baselineHash: null,
-        job: null, jobStart: 0, probe: { base: "live", width: 2000, deposit: 1000 },
+        probe: { base: "live", width: 2000, deposit: 1000 },
         initialCursorSet: false,
+        // "Ejecutar escenario" feedback (otto/mamoru-astro#28 follow-up): job is the last/current job this
+        // session knows about; jobSpec/jobWindowIndex are captured at submit time so a retry or a late
+        // completion is attributed correctly even if the viewer has since switched windows.
+        job: null, jobSpec: null, jobWindowIndex: 0, jobStartMs: 0, jobSending: false, jobWasInstant: false,
+        jobAlreadyExisted: false, jobVariantLabel: "", jobDismissed: false,
       };
     }
     function windowOf() { return state.windows[state.w] || null; }
@@ -1152,7 +1147,8 @@ export function opsClientScript(nonce: string): string {
         '<input id="lab-deposit" type="range" min="' + LAB.DEPOSIT_MIN + '" max="' + LAB.DEPOSIT_MAX + '" step="100" value="' + state.probe.deposit + '" />' +
         '<div class="lab-scale"><span>' + esc(LAB.int(LAB.DEPOSIT_MIN)) + '</span><span>' + esc(LAB.int(LAB.DEPOSIT_MAX)) + ' USDC</span></div></div>' +
         '<div class="lab-field lab-later"><label>Choque de precio sintético</label><input type="range" disabled /></div>' +
-        '<button type="button" class="lab-run" id="lab-run"' + (w ? "" : " disabled") + '>Ejecutar escenario</button>' +
+        '<button type="button" class="lab-run" id="lab-run"' + (w ? "" : " disabled") + '><span id="lab-run-label">Ejecutar escenario</span></button>' +
+        '<div id="lab-job-status"></div>' +
         '<p class="lab-note">"Ejecutar escenario" encola un trabajo para el runner; esta columna muestra su estado y selecciona la estrategia cuando termina. Lo marcado «más adelante» necesita el generador de escenarios.</p>';
       var baseSeg = $("lab-base");
       ["live", "guard"].forEach(function (b) {
@@ -1167,36 +1163,65 @@ export function opsClientScript(nonce: string): string {
       });
       $("lab-width").oninput = function (e) { state.probe.width = Math.round(Number(e.target.value) / LAB.WIDTH_STEP) * LAB.WIDTH_STEP; $("lab-width-v").textContent = LAB.int(state.probe.width) + " ticks"; };
       $("lab-deposit").oninput = function (e) { state.probe.deposit = Math.round(Number(e.target.value)); $("lab-deposit-v").textContent = LAB.int(state.probe.deposit) + " USDC"; };
-      $("lab-run").onclick = runScenario;
-      renderJob();
+      $("lab-run").onclick = function () { runScenario(null); };
+      renderJobStatus();
     }
 
-    function runScenario() {
-      var w = windowOf();
-      if (!w) return;
-      var spec = { windowId: w.windowId, base: state.probe.base, widthTicks: state.probe.width, deposit: state.probe.deposit };
-      if (!LAB.validSpec(spec)) return;
-      var btn = $("lab-run");
-      if (btn) btn.disabled = true;
+    /* ---------- "Ejecutar escenario" feedback (otto/mamoru-astro#28 follow-up, Ot 23 Oct) ---------- */
+    // Ot clicked it in prod on a spec that already existed: the job came back "done" at once, the old code
+    // just hid the (misplaced) status line, nothing changed on screen, and the button looked normal again a
+    // blink later. Every state the button/card can be in is driven from state.job* and rendered by
+    // renderJobStatus(), which runs on every poll tick, every second while a job is active, and on demand —
+    // never only once on a response.
+
+    function jobActive() {
+      return Boolean(state.jobSending || (state.job && (state.job.status === "queued" || state.job.status === "running")));
+    }
+    function stopJobTicker() {
+      clearInterval(jobTickTimer);
+      jobTickTimer = null;
+    }
+    function startJobTicker() {
+      if (jobTickTimer) return;
+      jobTickTimer = setInterval(renderJobStatus, 1000);
+    }
+
+    /** explicitSpec is set only by the "Reintentar" button, re-running exactly the spec that just failed. */
+    function runScenario(explicitSpec) {
+      var w = explicitSpec ? null : windowOf();
+      var spec = explicitSpec || (w && { windowId: w.windowId, base: state.probe.base, widthTicks: state.probe.width, deposit: state.probe.deposit });
+      if (!spec || !LAB.validSpec(spec)) return;
+      var windowIndex = 0;
+      for (var i = 0; i < state.windows.length; i++) if (state.windows[i].windowId === spec.windowId) windowIndex = i;
+      state.jobSpec = spec;
+      state.jobWindowIndex = windowIndex;
+      state.jobSending = true;
+      state.jobDismissed = false;
+      state.job = null;
+      state.jobStartMs = Date.now();
+      renderJobStatus();
       var body = new URLSearchParams({ csrf: csrf, windowId: spec.windowId, base: spec.base, widthTicks: String(spec.widthTicks), deposit: String(spec.deposit) }).toString();
       api("/ops/lab/api/jobs", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: body })
         .then(function (r) {
-          if (btn) btn.disabled = false;
+          state.jobSending = false;
           if (!r.ok || !r.body || !r.body.job) {
             state.job = { status: "failed", errorCode: (r.body && r.body.error) || "LAB_NETWORK" };
-            renderJob();
+            stopJobTicker();
+            renderJobStatus();
             return;
           }
           state.job = r.body.job;
-          state.jobStart = Date.now();
-          renderJob();
-          if (state.job.status === "done") onJobDone(state.job);
-          else pollJob(state.job.id, 0);
+          state.jobWasInstant = state.job.status === "done";
+          if (state.job.status === "done") { onJobDone(state.job); return; }
+          startJobTicker();
+          renderJobStatus();
+          pollJob(state.job.id, 0);
         })
         .catch(function () {
-          if (btn) btn.disabled = false;
+          state.jobSending = false;
           state.job = { status: "failed", errorCode: "LAB_NETWORK" };
-          renderJob();
+          stopJobTicker();
+          renderJobStatus();
         });
     }
     function pollJob(id, attempt) {
@@ -1206,37 +1231,125 @@ export function opsClientScript(nonce: string): string {
           if (!state.job || state.job.id !== id) return;
           if (!r.ok || !r.body || !r.body.job) { pollJob(id, attempt + 1); return; }
           state.job = r.body.job;
-          renderJob();
-          if (state.job.status === "queued" || state.job.status === "running") pollJob(id, attempt + 1);
-          else if (state.job.status === "done") onJobDone(state.job);
+          if (state.job.status === "queued" || state.job.status === "running") { renderJobStatus(); pollJob(id, attempt + 1); return; }
+          stopJobTicker();
+          if (state.job.status === "done") onJobDone(state.job);
+          else renderJobStatus();
         });
       }, LAB.pollDelayMs(attempt));
     }
+    /** The window this job's spec belongs to — not necessarily the one currently in view. */
+    function jobWindow() {
+      return state.windows[state.jobWindowIndex] || null;
+    }
     function onJobDone(job) {
-      var w = windowOf();
-      if (!w) return;
+      stopJobTicker();
+      var w = jobWindow();
+      if (!w) { renderJobStatus(); return; }
+      // Decided before the list is refreshed: either signal means this exact result already existed before
+      // this click, not something the click itself computed just now.
+      var alreadyExisted = state.jobWasInstant || w.runs.some(function (r) { return r.resultHash === job.resultHash; });
       api("/ops/lab/api/runs?window=" + encodeURIComponent(w.windowId)).then(function (rr) {
         w.runs = (rr.body && rr.body.runs) || w.runs;
+        var match = w.runs.filter(function (r) { return r.resultHash === job.resultHash; })[0];
+        state.jobAlreadyExisted = alreadyExisted;
+        state.jobVariantLabel = match ? match.variantLabel : "";
+        state.w = state.jobWindowIndex;
         state.selectedHash = job.resultHash || state.selectedHash;
-        state.job = null;
         state.at = 0;
         renderAll();
+        flashSelectedStrategy();
+        if (window.innerWidth <= 820) {
+          var headline = $("lab-headline");
+          if (headline && headline.scrollIntoView) {
+            var reduced = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+            headline.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+          }
+        }
       });
     }
-    function renderJob() {
-      var box = $("lab-job");
-      if (!box) return;
-      if (!state.job) { box.hidden = true; return; }
-      box.hidden = false;
-      box.className = "lab-jobline" + (state.job.status === "failed" ? " lab-failed" : "");
-      if (state.job.status === "queued" || state.job.status === "running") {
-        var secs = Math.max(0, Math.round((Date.now() - state.jobStart) / 1000));
-        box.textContent = (state.job.status === "queued" ? "En cola" : "Corriendo") + "… " + secs + " s";
-      } else if (state.job.status === "failed") {
-        box.textContent = "Falló: " + (ERROR_WORDS[state.job.errorCode] || state.job.errorCode || "motivo desconocido");
-      } else {
-        box.hidden = true;
+    function flashSelectedStrategy() {
+      var el = scope.querySelector('.lab-var[aria-pressed="true"]');
+      if (!el) return;
+      el.classList.remove("lab-flash");
+      // Force a reflow so re-adding the class restarts the animation even if it was just removed.
+      void el.offsetWidth;
+      el.classList.add("lab-flash");
+      setTimeout(function () { if (el) el.classList.remove("lab-flash"); }, 1300);
+    }
+    function dismissJobStatus() {
+      state.jobDismissed = true;
+      renderJobStatus();
+    }
+    function jobElapsedSec() {
+      return Math.max(0, Math.round((Date.now() - state.jobStartMs) / 1000));
+    }
+    /** Updates the Run button's state, the detail card right under it, and the compact left-column chip. Safe
+     * to call every second and on every poll: it only ever touches these three pieces, never the sliders. */
+    function renderJobStatus() {
+      var btn = $("lab-run");
+      var label = $("lab-run-label");
+      var card = $("lab-job-status");
+      var chip = $("lab-job-chip");
+      if (!btn || !card || !chip) return;
+      var w = windowOf();
+      var active = jobActive();
+      btn.disabled = active || !w;
+      btn.setAttribute("aria-busy", String(active));
+      if (label) label.textContent = state.jobSending ? "Enviando…" : active ? "Calculando…" : "Ejecutar escenario";
+      var spin = btn.querySelector(".lab-spinner");
+      if (active && !spin && label) {
+        var s = document.createElement("span");
+        s.className = "lab-spinner";
+        s.setAttribute("aria-hidden", "true");
+        btn.insertBefore(s, label);
+      } else if (!active && spin) {
+        spin.remove();
       }
+
+      if (!state.jobSpec || (!state.jobSending && !state.job)) { card.innerHTML = ""; chip.hidden = true; return; }
+      var jw = jobWindow();
+      var windowLabel = jw ? LAB.windowShortLabel(jw.regime, jw.from, jw.to) : state.jobSpec.windowId;
+      var specLine = LAB.specWords(windowLabel, state.jobSpec.base, state.jobSpec.widthTicks, state.jobSpec.deposit);
+
+      if (state.jobSending) {
+        card.innerHTML = '<div class="lab-status-card" role="status" aria-live="polite"><div class="lab-status-spec">' + esc(specLine) + '</div><div class="lab-status-text">Enviando…</div></div>';
+        chip.hidden = true;
+        return;
+      }
+      var status = state.job.status;
+      if (status === "queued" || status === "running") {
+        var secs = jobElapsedSec();
+        var text = LAB.jobStatusText({ status: status, elapsedSec: secs, variantLabel: "", windowLabel: windowLabel, alreadyExisted: false });
+        var sub = LAB.jobSubText(status, secs);
+        card.innerHTML =
+          '<div class="lab-status-card" role="status" aria-live="polite"><div class="lab-status-spec">' + esc(specLine) + '</div><div class="lab-status-text">' + esc(text) + "</div>" +
+          '<div class="lab-progress"><i></i></div>' +
+          (sub ? '<div class="lab-status-sub">' + esc(sub) + "</div>" : "") +
+          "</div>";
+        chip.hidden = false;
+        chip.innerHTML = '<span class="lab-spinner" aria-hidden="true"></span><span>' + esc(status === "queued" ? "En cola" : "Calculando") + "… " + secs + " s</span>";
+        return;
+      }
+      chip.hidden = true;
+      if (state.jobDismissed) { card.innerHTML = ""; return; }
+      if (status === "failed") {
+        var failText = LAB.jobFailedText(state.job.errorCode);
+        card.innerHTML =
+          '<div class="lab-status-card lab-failed" role="status" aria-live="polite"><button type="button" class="lab-status-close" id="lab-job-dismiss" aria-label="Descartar">×</button>' +
+          '<div class="lab-status-spec">' + esc(specLine) + '</div><div class="lab-status-text">' + esc(failText) + "</div>" +
+          '<button type="button" class="lab-retry" id="lab-job-retry">Reintentar</button></div>';
+        var retry = $("lab-job-retry");
+        if (retry) retry.onclick = function () { runScenario(state.jobSpec); };
+      } else {
+        // done
+        var doneText = LAB.jobStatusText({ status: "done", elapsedSec: jobElapsedSec(), variantLabel: state.jobVariantLabel, windowLabel: windowLabel, alreadyExisted: state.jobAlreadyExisted });
+        card.innerHTML =
+          '<div class="lab-status-card" role="status" aria-live="polite"><button type="button" class="lab-status-close" id="lab-job-dismiss" aria-label="Descartar">×</button>' +
+          '<div class="lab-status-spec">' + esc(specLine) + '</div><div class="lab-status-text">' + esc(doneText) + "</div></div>";
+      }
+      var dismiss = $("lab-job-dismiss");
+      if (dismiss) dismiss.onclick = dismissJobStatus;
     }
 
     /* ---------- playback ---------- */
@@ -1327,6 +1440,7 @@ export function opsClientScript(nonce: string): string {
       return function () {
         clearTimeout(playTimer);
         clearTimeout(jobTimer);
+        clearInterval(jobTickTimer);
         clearTimeout(resizeTimer);
         window.removeEventListener("resize", onResizeDebounced);
         loadToken++;
