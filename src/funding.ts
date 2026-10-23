@@ -101,9 +101,11 @@ export const FUNDING_TARGETS: readonly FundingTarget[] = [
     recipientName: "the relayer on Monad",
     address: MONAD_RELAYER_ADDRESS,
     chain: MONAD,
-    pays: "Activations on Monad, about 1.4 MON each at today's gas. Monad cannot start without it.",
-    lowWei: 5n * E18,
-    presets: ["5", "10", "25"],
+    // Monad charges the full gas limit and reverts a MON transfer that leaves the sender under 10 MON (its reserve
+    // balance rule), so one activation needs ~5.8 MON on top of a 10 MON floor (ottodevs/mamoru#124).
+    pays: "Activations on Monad: about 6 MON each, and it must always keep 10 MON. Below 16 MON no account can start.",
+    lowWei: 16n * E18,
+    presets: ["10", "20", "30"],
     priceAsEth: false,
     ticket: { label: "otto/mamoru#68", href: FORGEJO + "68" },
   },
