@@ -226,3 +226,150 @@ describe("lab-logic.ts (embedded client logic, same function the server-side bou
     expect(LAB.isCurrentJobGen(0, 0)).toBe(true);
   });
 });
+
+describe("lab-logic.ts: \"Preguntar al Lab\" (otto/mamoru-astro#30, spec 008 phase 2)", () => {
+  test("questionValid: 1..600 chars after trimming, matching lab-spec.ts's validateQuestion bounds", () => {
+    expect(LAB.questionValid("¿Cuánto rendirá?")).toBe(true);
+    expect(LAB.questionValid("   ")).toBe(false);
+    expect(LAB.questionValid("")).toBe(false);
+    expect(LAB.questionValid("a".repeat(600))).toBe(true);
+    expect(LAB.questionValid("a".repeat(601))).toBe(false);
+  });
+
+  test("suggestionQuestions: three questions, every one phrased from the given window label", () => {
+    const qs = LAB.suggestionQuestions("Caída de febrero 2025");
+    expect(qs).toHaveLength(3);
+    for (const q of qs) expect(q).toContain("Caída de febrero 2025");
+    expect(qs[1]).toContain("doble de ancho");
+  });
+
+  test("metricLabel: the closed AL-20a enum maps to its Spanish label; operations.<kind> is dynamic", () => {
+    expect(LAB.metricLabel("vsHodl")).toBe("Vs. mantener la mezcla");
+    expect(LAB.metricLabel("end")).toBe("Saldo final");
+    expect(LAB.metricLabel("operations.harvest")).toBe("Operaciones: harvest");
+    expect(LAB.metricLabel("totally-unknown")).toBe("totally-unknown"); // never throws on a surprise key
+  });
+
+  test("fmtClaimValue: USDC deltas are signed, absolute USDC magnitudes are not, percentages per AL-21's rounding", () => {
+    expect(LAB.fmtClaimValue(-16.44, "vsHodl")).toBe("−16,44 USDC");
+    expect(LAB.fmtClaimValue(16.44, "vsHodl")).toBe("+16,44 USDC");
+    expect(LAB.fmtClaimValue(983.56, "end")).toBe("983,56 USDC");
+    expect(LAB.fmtClaimValue(9.4, "priceMove")).toBe("+9,4 %");
+    expect(LAB.fmtClaimValue(-9.4, "priceMove")).toBe("−9,4 %");
+    expect(LAB.fmtClaimValue(1.2, "maxDrawdown")).toBe("−1,2 %");
+    expect(LAB.fmtClaimValue(90, "timeInRange")).toBe("90,0 %");
+    expect(LAB.fmtClaimValue(3, "days")).toBe("3 días");
+    expect(LAB.fmtClaimValue(1, "days")).toBe("1 día");
+    expect(LAB.fmtClaimValue(2, "operations.harvest")).toBe("2 operaciones");
+  });
+
+  const runA = { resultHash: "hash-a", windowId: "feb2025", variantLabel: "Política actual", metrics: { end: 983.56, vsHodl: -16.44 }, deposit: 1000 };
+  const runB = { resultHash: "hash-b", windowId: "feb2025", variantLabel: "Rango ×2", metrics: { end: 996.74, vsHodl: -3.26 }, deposit: 1000 };
+
+  test("verdictSentence: against hold/usdc, word for word the AL-20b templates (contract.ts's writeVerdictSentence)", () => {
+    expect(LAB.verdictSentence(runA, "hold")).toBe("Terminó 16,44 USDC por debajo de mantener la mezcla (hold).");
+    expect(LAB.verdictSentence(runB, "usdc")).toBe("Terminó 3,26 USDC por debajo de quedarte en USDC.");
+    const flat = { resultHash: "h", windowId: "w", variantLabel: "x", metrics: { end: 1000.004, vsHodl: 0.004 }, deposit: 1000 };
+    expect(LAB.verdictSentence(flat, "hold")).toBe("Terminó igual que mantener la mezcla (diferencia menor a 0.01 USDC).");
+    expect(LAB.verdictSentence(flat, "usdc")).toBe("Terminó igual que quedarte en USDC (diferencia menor a 0.01 USDC).");
+  });
+
+  test("verdictSentence: against another run, direction and magnitude from the end-balance delta, names the other run's variant", () => {
+    expect(LAB.verdictSentence(runB, "hash-a", runA)).toBe("Terminó 13,18 USDC por encima de Política actual.");
+    expect(LAB.verdictSentence(runA, "hash-b", runB)).toBe("Terminó 13,18 USDC por debajo de Rango ×2.");
+  });
+
+  test("verdictSentence: the missing-other-run fallback never throws", () => {
+    expect(LAB.verdictSentence(runA, "hash-missing", undefined)).toContain("falta el otro resultado");
+  });
+
+  test("isVerdictBaseline: only 'hold'/'usdc' are baselines, a runId is not", () => {
+    expect(LAB.isVerdictBaseline("hold")).toBe(true);
+    expect(LAB.isVerdictBaseline("usdc")).toBe(true);
+    expect(LAB.isVerdictBaseline("hash-a")).toBe(false);
+  });
+
+  test("answerHeadlineBlock (AL-21a): the first verdict wins over any claim; with no verdict, the first claim; with neither, null", () => {
+    const claim = { type: "claim", metric: "end", runId: "hash-a", value: 983.56 } as const;
+    const verdict = { type: "verdict", runId: "hash-a", against: "hold" } as const;
+    const text = { type: "text", md: "hola" } as const;
+    expect(LAB.answerHeadlineBlock([claim, verdict])).toBe(verdict);
+    expect(LAB.answerHeadlineBlock([claim])).toBe(claim);
+    expect(LAB.answerHeadlineBlock([text])).toBe(null);
+    expect(LAB.answerHeadlineBlock([])).toBe(null);
+  });
+
+  test("stripRefTokens (AL-20): {{cN}}/{{vN}} reference tokens are removed, not resolved, extra whitespace collapsed", () => {
+    expect(LAB.stripRefTokens("Con {{c0}} de comisiones y {{v0}} frente a mantener.")).toBe("Con de comisiones y frente a mantener.");
+    expect(LAB.stripRefTokens("sin tokens")).toBe("sin tokens");
+  });
+
+  test("answerBlocksHtml: headline + chips + verdict sentence + chart button, every untrusted string escaped", () => {
+    const blocks = [
+      { type: "claim" as const, metric: "end", runId: "hash-a", value: 983.56 },
+      { type: "verdict" as const, runId: "hash-a", against: "hold" },
+      { type: "chart" as const, kind: "equity", runIds: ["hash-a"] },
+      { type: "text" as const, md: "<script>alert(1)</script> el resultado fue {{v0}}." },
+    ];
+    const runs = { "hash-a": runA };
+    const html = LAB.answerBlocksHtml(blocks, runs, false);
+    // headline = the verdict (AL-21a), rendered as a sentence, not the claim chip
+    expect(html).toContain("Terminó 16,44 USDC por debajo de mantener la mezcla (hold).");
+    // the claim still renders too, as a chip, elsewhere in the output
+    expect(html).toContain("983,56 USDC");
+    expect(html).toContain("Saldo final");
+    // the chart renders as an "open in the bench" button carrying the run/window to open
+    expect(html).toContain("Ver en el banco");
+    expect(html).toContain('data-run-id="hash-a"');
+    expect(html).toContain('data-window-id="feb2025"');
+    // prose is under the "not verified" label, and never unescaped
+    expect(html).toContain("Explicación del agente");
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).not.toContain("{{v0}}"); // the reference token itself never leaks into the rendered prose
+  });
+
+  test("answerBlocksHtml: LAB_ANSWER_PARTIAL renders the partial notice; no blocks renders nothing", () => {
+    const blocks = [{ type: "claim" as const, metric: "end", runId: "hash-a", value: 983.56 }];
+    const withPartial = LAB.answerBlocksHtml(blocks, { "hash-a": runA }, true);
+    expect(withPartial).toContain("Respuesta parcial: solo se muestra lo verificado.");
+    const withoutPartial = LAB.answerBlocksHtml(blocks, { "hash-a": runA }, false);
+    expect(withoutPartial).not.toContain("Respuesta parcial");
+    expect(LAB.answerBlocksHtml([], {}, false)).toBe("");
+  });
+
+  test("answerBlocksHtml: a verdict citing a run the caller never resolved fails safe, never throws", () => {
+    const blocks = [{ type: "verdict" as const, runId: "hash-unknown", against: "hold" }];
+    expect(() => LAB.answerBlocksHtml(blocks, {}, false)).not.toThrow();
+    expect(LAB.answerBlocksHtml(blocks, {}, false)).toContain("falta el resultado");
+  });
+
+  test("answerFooterText: model, tokens in→out, runs, seconds, and shadow cost only when the server could price it", () => {
+    const cost = { modelCalls: [{ model: "qwen3", promptTokens: 1200, completionTokens: 340 }], runs: [{}, {}], wallMs: 4300 };
+    const withShadow = LAB.answerFooterText(cost, 0.0021);
+    expect(withShadow).toContain("qwen3");
+    expect(withShadow).toContain("1.200→340 tok");
+    expect(withShadow).toContain("2 runs");
+    expect(withShadow).toContain("4.3 s");
+    expect(withShadow).toContain("$0.0021 sombra");
+    const withoutShadow = LAB.answerFooterText(cost, null);
+    expect(withoutShadow).not.toContain("sombra");
+    expect(LAB.answerFooterText(null, null)).toBe("");
+  });
+
+  test("askStatusHeadline/askSubText: separate copy from the bench's jobStatusText, no number in the headline", () => {
+    expect(LAB.askStatusHeadline("queued")).toBe("En cola");
+    expect(LAB.askStatusHeadline("running")).toBe("Pensando");
+    expect(LAB.askStatusHeadline("queued")).not.toMatch(/\d/);
+    expect(LAB.askSubText("queued", 10)).toContain("recoge");
+    expect(LAB.askSubText("running", 10)).toBe("");
+  });
+
+  test("askFailedText/askSendErrorText: a queued turn that later failed reads differently from a request the server never queued", () => {
+    expect(LAB.askFailedText("LAB_JOB_TIMEOUT")).toContain("se agotó el tiempo del turno");
+    expect(LAB.askFailedText("LAB_RUN_MISSING")).toContain("no llegó a guardarse");
+    expect(LAB.askSendErrorText("LAB_JOB_LIMIT_DAILY")).toBe("Has llegado a 20 preguntas hoy");
+    expect(LAB.askSendErrorText("LAB_ASK_INVALID")).toContain("600 caracteres");
+    expect(LAB.askSendErrorText("LAB_THREAD_NOT_FOUND")).toContain("hilo");
+  });
+});

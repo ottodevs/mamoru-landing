@@ -6,8 +6,10 @@
 import type { D1Db } from "./d1-infra";
 import { verifyRunnerRequest } from "./lab-runner-auth";
 import {
+  agentThreadHistory,
   claimJobById,
   failExhaustedLeases,
+  finishAgentJobDone,
   finishJobDoneWithRun,
   finishJobFailed,
   jobById,
@@ -62,7 +64,17 @@ async function handleClaim(db: D1Db): Promise<Response> {
   if (!candidate) return new Response(null, { status: 204 });
   const claimed = await claimJobById(db, candidate.id, nowIso);
   if (!claimed) return new Response(null, { status: 204 });
-  return json({ job: { id: candidate.id, spec: claimed.spec, leaseId: claimed.leaseId } });
+  if (claimed.kind === "agent") {
+    // AL-03: the thread's earlier *done* turns, oldest first, each with its verified answer -- never raw tool
+    // output -- so a follow-up ("y con el rango el doble de ancho?") has context. `spec` rides along too (it
+    // carries `windowId` when the screen passed one as context, otherwise `{}`): additive, the literal fields
+    // the runner contract names (id, kind, leaseId, threadId, question, history) are all present regardless.
+    const history = await agentThreadHistory(db, claimed.threadId ?? "");
+    return json({
+      job: { id: candidate.id, kind: "agent", leaseId: claimed.leaseId, threadId: claimed.threadId, question: claimed.question, history, spec: claimed.spec },
+    });
+  }
+  return json({ job: { id: candidate.id, kind: "bench", spec: claimed.spec, leaseId: claimed.leaseId } });
 }
 
 /** The runner contract (spec 008 B-05, ottodevs/mamoru apps/mamoru-lab-runner) sends `jobId`; `id` is still read. */
@@ -81,20 +93,57 @@ async function handleHeartbeat(db: D1Db, body: unknown): Promise<Response> {
   return json({ ok: true });
 }
 
+/**
+ * The agent half of `/ops/lab/runner/result` (otto/mamoru-astro#30, AL-21): stores the verified answer/
+ * verifier/cost and the job's citable runs in one fenced batch (`finishAgentJobDone`). `runHashes` were all
+ * POSTed to `/publish` earlier in the job (coordinator note), so citing a hash not yet in `lab_runs` is the
+ * runner's own bug, not a race -- refused whole with `LAB_RUN_MISSING`, nothing written.
+ */
+async function handleAgentResult(db: D1Db, b: { id: string; leaseId: string; answer?: unknown; verifier?: unknown; cost?: unknown; runHashes?: unknown }, nowIso: string): Promise<Response> {
+  if (!b.answer || typeof b.answer !== "object") return json({ error: "LAB_RUNNER_BAD_BODY" }, 400);
+  if (!Array.isArray(b.runHashes) || !b.runHashes.every((h) => typeof h === "string")) return json({ error: "LAB_RUNNER_BAD_BODY" }, 400);
+  const result = await finishAgentJobDone(db, {
+    id: b.id,
+    leaseId: b.leaseId,
+    nowIso,
+    answerJson: JSON.stringify(b.answer),
+    verifierJson: JSON.stringify(b.verifier ?? null),
+    costJson: JSON.stringify(b.cost ?? null),
+    runHashes: b.runHashes as string[],
+  });
+  if (!result.ok) {
+    return result.reason === "RUN_MISSING" ? json({ error: "LAB_RUN_MISSING" }, 409) : json({ error: "LAB_JOB_LEASE_LOST" }, 409);
+  }
+  return json({ ok: true, status: "done" });
+}
+
 async function handleResult(db: D1Db, body: unknown): Promise<Response> {
-  const raw = (body ?? {}) as { jobId?: unknown; id?: unknown; leaseId?: unknown; run?: unknown; error?: unknown };
+  const raw = (body ?? {}) as {
+    jobId?: unknown;
+    id?: unknown;
+    leaseId?: unknown;
+    kind?: unknown;
+    run?: unknown;
+    error?: unknown;
+    answer?: unknown;
+    verifier?: unknown;
+    cost?: unknown;
+    runHashes?: unknown;
+  };
   const id = jobIdOf(raw);
   if (id === null || typeof raw.leaseId !== "string") return json({ error: "LAB_RUNNER_BAD_BODY" }, 400);
   const b = { ...raw, id, leaseId: raw.leaseId };
   const job = await jobById(db, b.id);
   if (!job || job.leaseId !== b.leaseId) return json({ error: "LAB_JOB_LEASE_LOST" }, 409);
   const nowIso = new Date().toISOString();
+  // Errors are unchanged across both kinds: a failed job is a failed job regardless of what it was trying to do.
   if (b.error !== undefined) {
     const code = typeof b.error === "string" && b.error ? b.error : "LAB_JOB_FAILED";
     const ok = await finishJobFailed(db, b.id, b.leaseId, code, nowIso);
     if (!ok) return json({ error: "LAB_JOB_LEASE_LOST" }, 409);
     return json({ ok: true, status: "failed", errorCode: code });
   }
+  if (job.kind === "agent") return handleAgentResult(db, b, nowIso);
   const check = validateRunResult(b.run);
   if (!check.ok) return json({ error: check.error }, 400);
   if (check.run.specKey !== job.specKey) return json({ error: "LAB_RUN_SPEC_MISMATCH" }, 400);

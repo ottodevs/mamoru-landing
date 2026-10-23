@@ -231,6 +231,12 @@ export interface JobRow {
   errorCode: string | null;
   createdAt: string;
   updatedAt: string;
+  /** otto/mamoru-astro#30 (spec 008 phase 2): NULL on a `kind: 'bench'` row, set on a `kind: 'agent'` row. */
+  threadId: string | null;
+  question: string | null;
+  answerJson: string | null;
+  verifierJson: string | null;
+  costJson: string | null;
 }
 
 type LabJobRaw = {
@@ -248,6 +254,11 @@ type LabJobRaw = {
   error_code: string | null;
   created_at: string;
   updated_at: string;
+  thread_id: string | null;
+  question: string | null;
+  answer_json: string | null;
+  verifier_json: string | null;
+  cost_json: string | null;
 };
 
 function toJob(r: LabJobRaw): JobRow {
@@ -272,10 +283,16 @@ function toJob(r: LabJobRaw): JobRow {
     errorCode: r.error_code,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    threadId: r.thread_id,
+    question: r.question,
+    answerJson: r.answer_json,
+    verifierJson: r.verifier_json,
+    costJson: r.cost_json,
   };
 }
 
-const JOB_COLUMNS = "id, kind, origin, requester, spec_json, spec_key, status, lease_id, lease_until, attempts, result_hash, error_code, created_at, updated_at";
+const JOB_COLUMNS =
+  "id, kind, origin, requester, spec_json, spec_key, status, lease_id, lease_until, attempts, result_hash, error_code, created_at, updated_at, thread_id, question, answer_json, verifier_json, cost_json";
 
 export async function jobById(db: D1Db, id: string): Promise<JobRow | null> {
   const row = await db.prepare(`SELECT ${JOB_COLUMNS} FROM lab_jobs WHERE id = ?`).bind(id).first<LabJobRaw>();
@@ -418,7 +435,11 @@ export async function oldestClaimable(db: D1Db): Promise<{ id: string } | null> 
  * with one runner in practice (B-12) this is a defensive path, not a retry loop). The new `lease_until` is
  * `unixepoch() + 120`, computed in SQL for the same reason as the comparisons above.
  */
-export async function claimJobById(db: D1Db, id: string, nowIso: string): Promise<{ leaseId: string; spec: LabSpec } | null> {
+export async function claimJobById(
+  db: D1Db,
+  id: string,
+  nowIso: string,
+): Promise<{ leaseId: string; spec: LabSpec; kind: string; threadId: string | null; question: string | null } | null> {
   const leaseId = crypto.randomUUID();
   const stmt = db
     .prepare(
@@ -430,7 +451,7 @@ export async function claimJobById(db: D1Db, id: string, nowIso: string): Promis
   const changes = res.meta?.changes ?? res.changes ?? 0;
   if (changes !== 1) return null;
   const job = await jobById(db, id);
-  return job ? { leaseId, spec: job.spec } : null;
+  return job ? { leaseId, spec: job.spec, kind: job.kind, threadId: job.threadId, question: job.question } : null;
 }
 
 /** AL-02a: a renewal only succeeds while it still matches the live lease. */
@@ -516,4 +537,293 @@ export async function recordNonce(db: D1Db, nonce: string, nowEpoch: number, win
   const insert = db.prepare("INSERT INTO lab_nonces (nonce, seen_at) VALUES (?, ?)").bind(nonce, nowEpoch) as WriteStatement;
   await insert.run();
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Agent Lab (otto/mamoru-astro#30, spec 008 phase 2): threads, agent jobs, their cited runs and shadow prices.
+// ---------------------------------------------------------------------------
+
+function parseJsonOrNull(s: string | null): unknown {
+  if (!s) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+// ---- lab_threads ----
+
+export interface ThreadRow {
+  id: string;
+  owner: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+type ThreadRaw = { id: string; owner: string; title: string; created_at: string; updated_at: string };
+function toThread(r: ThreadRaw): ThreadRow {
+  return { id: r.id, owner: r.owner, title: r.title, createdAt: r.created_at, updatedAt: r.updated_at };
+}
+
+/** AL-01: mine, newest first (by last activity, not just creation -- a follow-up bumps its thread). */
+export async function threadsByOwner(db: D1Db, owner: string): Promise<ThreadRow[]> {
+  const { results } = await db
+    .prepare("SELECT id, owner, title, created_at, updated_at FROM lab_threads WHERE owner = ? ORDER BY updated_at DESC")
+    .bind(owner)
+    .all<ThreadRaw>();
+  return results.map(toThread);
+}
+
+export async function threadById(db: D1Db, id: string): Promise<ThreadRow | null> {
+  const row = await db.prepare("SELECT id, owner, title, created_at, updated_at FROM lab_threads WHERE id = ?").bind(id).first<ThreadRaw>();
+  return row ? toThread(row) : null;
+}
+
+export async function insertThread(db: D1Db, opts: { id: string; owner: string; title: string; now: string }): Promise<void> {
+  const stmt = db
+    .prepare("INSERT INTO lab_threads (id, owner, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+    .bind(opts.id, opts.owner, opts.title, opts.now, opts.now) as WriteStatement;
+  await stmt.run();
+}
+
+/** Bumps `updated_at` when a follow-up question lands in an existing thread, so the picker's "newest first" reflects activity. */
+export async function touchThread(db: D1Db, id: string, now: string): Promise<void> {
+  const stmt = db.prepare("UPDATE lab_threads SET updated_at = ? WHERE id = ?").bind(now, id) as WriteStatement;
+  await stmt.run();
+}
+
+// ---- agent lab_jobs ----
+
+/**
+ * AL-01/AL-04: inserts a new `queued` agent job only if, in one statement, the requester is under the daily cap
+ * (shared with bench jobs -- `countJobsToday`'s query has no `kind` filter) and the queued-slot cap (same
+ * sharing). No spec_key dedupe (unlike the bench path): `spec_key` here is `agent:<jobId>`, unique by
+ * construction, so two different questions never collide and must not be deduped against each other.
+ */
+export async function insertQueuedAgentJobIfEligible(
+  db: D1Db,
+  opts: {
+    id: string;
+    requester: string;
+    threadId: string;
+    question: string;
+    windowId: string | null;
+    now: string;
+    sinceIso: string;
+    maxPerDay: number;
+    maxActive: number;
+  },
+): Promise<boolean> {
+  const specJson = JSON.stringify(opts.windowId ? { windowId: opts.windowId } : {});
+  const specKeyVal = `agent:${opts.id}`;
+  const stmt = db
+    .prepare(
+      `INSERT INTO lab_jobs (id, kind, origin, requester, spec_json, spec_key, status, lease_id, lease_until, attempts, result_hash, error_code, created_at, updated_at, thread_id, question)
+       SELECT ?, 'agent', 'ops', ?, ?, ?, 'queued', NULL, NULL, 0, NULL, NULL, ?, ?, ?, ?
+       WHERE (SELECT COUNT(*) FROM lab_jobs WHERE requester = ? AND created_at >= ?) < ?
+         AND (SELECT COUNT(*) FROM lab_jobs WHERE requester = ? AND status IN ('queued', 'running')) < ?`,
+    )
+    .bind(
+      opts.id,
+      opts.requester,
+      specJson,
+      specKeyVal,
+      opts.now,
+      opts.now,
+      opts.threadId,
+      opts.question,
+      opts.requester,
+      opts.sinceIso,
+      opts.maxPerDay,
+      opts.requester,
+      opts.maxActive,
+    ) as WriteStatement;
+  const res = await stmt.run();
+  return (res.meta?.changes ?? res.changes ?? 0) === 1;
+}
+
+/** Direct, unconditional insert -- tests only (mirrors bench's `insertJob`), never the screen API's own path. */
+export async function insertAgentJob(
+  db: D1Db,
+  opts: { id: string; requester: string; threadId: string; question: string; status: LabJobStatus; now: string },
+): Promise<void> {
+  const stmt = db
+    .prepare(
+      `INSERT INTO lab_jobs (id, kind, origin, requester, spec_json, spec_key, status, lease_id, lease_until, attempts, result_hash, error_code, created_at, updated_at, thread_id, question)
+       VALUES (?, 'agent', 'ops', ?, '{}', ?, ?, NULL, NULL, 0, NULL, NULL, ?, ?, ?, ?)`,
+    )
+    .bind(opts.id, opts.requester, `agent:${opts.id}`, opts.status, opts.now, opts.now, opts.threadId, opts.question) as WriteStatement;
+  await stmt.run();
+}
+
+export interface AgentJobRow {
+  id: string;
+  question: string;
+  status: LabJobStatus;
+  /** Parsed `answer_json` (the `{blocks: Block[]}` shape `packages/lab-agent/src/contract.ts` owns) -- opaque here. */
+  answer: unknown;
+  verifier: unknown;
+  cost: unknown;
+  errorCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** AL-50: a thread's turns, oldest first (a chat transcript reads top to bottom). */
+export async function agentJobsByThread(db: D1Db, threadId: string): Promise<AgentJobRow[]> {
+  const { results } = await db
+    .prepare(
+      "SELECT id, question, status, answer_json, verifier_json, cost_json, error_code, created_at, updated_at FROM lab_jobs WHERE thread_id = ? AND kind = 'agent' ORDER BY created_at ASC",
+    )
+    .bind(threadId)
+    .all<{
+      id: string;
+      question: string | null;
+      status: LabJobStatus;
+      answer_json: string | null;
+      verifier_json: string | null;
+      cost_json: string | null;
+      error_code: string | null;
+      created_at: string;
+      updated_at: string;
+    }>();
+  return results.map((r) => ({
+    id: r.id,
+    question: r.question ?? "",
+    status: r.status,
+    answer: parseJsonOrNull(r.answer_json),
+    verifier: parseJsonOrNull(r.verifier_json),
+    cost: parseJsonOrNull(r.cost_json),
+    errorCode: r.error_code,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  }));
+}
+
+/** The runner claim contract's `history` (AL-03): earlier *done* turns of the thread, oldest first, with their
+ * verified answer -- never raw tool output, never a turn that failed or is still in flight. */
+export async function agentThreadHistory(db: D1Db, threadId: string): Promise<{ question: string; answer: unknown }[]> {
+  const { results } = await db
+    .prepare("SELECT question, answer_json FROM lab_jobs WHERE thread_id = ? AND kind = 'agent' AND status = 'done' ORDER BY created_at ASC")
+    .bind(threadId)
+    .all<{ question: string | null; answer_json: string | null }>();
+  const out: { question: string; answer: unknown }[] = [];
+  for (const r of results) {
+    if (!r.question) continue;
+    out.push({ question: r.question, answer: parseJsonOrNull(r.answer_json) });
+  }
+  return out;
+}
+
+/** The lightweight run summary (no ops/series/reasons) for one `resultHash` -- claim/verdict rendering needs
+ * only this, never the full `run_json` (B-02's bench full result, up to 400 KB). */
+export async function runSummaryByHash(db: D1Db, hash: string): Promise<LabRunSummary | null> {
+  const row = await db.prepare("SELECT summary_json FROM lab_runs WHERE result_hash = ?").bind(hash).first<{ summary_json: string }>();
+  if (!row) return null;
+  try {
+    return JSON.parse(row.summary_json) as LabRunSummary;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * AL-21/the runner result contract: in one fenced D1 batch, stores the verified answer/verifier/cost and
+ * records which stored runs (`lab_job_runs`) this job's answer may cite -- mirrors `finishJobDoneWithRun`'s
+ * all-or-nothing shape. Every cited hash must already be in `lab_runs` (the runner POSTs runs to `/publish`
+ * before `/result`): checked up front, as a plain read (no concurrent writer deletes `lab_runs` rows, so this
+ * is race-free the same way the bench path's two-step claim-then-read is) -- if any hash is missing, nothing is
+ * written and the caller gets `RUN_MISSING` to turn into 409 `LAB_RUN_MISSING`.
+ */
+export async function finishAgentJobDone(
+  db: D1Db,
+  opts: { id: string; leaseId: string; nowIso: string; answerJson: string; verifierJson: string; costJson: string; runHashes: string[] },
+): Promise<{ ok: true } | { ok: false; reason: "LEASE_LOST" | "RUN_MISSING" }> {
+  const uniqueHashes = [...new Set(opts.runHashes)];
+  if (uniqueHashes.length) {
+    const placeholders = uniqueHashes.map(() => "?").join(",");
+    const { results } = await db
+      .prepare(`SELECT result_hash FROM lab_runs WHERE result_hash IN (${placeholders})`)
+      .bind(...uniqueHashes)
+      .all<{ result_hash: string }>();
+    if (results.length !== uniqueHashes.length) return { ok: false, reason: "RUN_MISSING" };
+  }
+  const updateStmt = db
+    .prepare(
+      `UPDATE lab_jobs SET status = 'done', answer_json = ?, verifier_json = ?, cost_json = ?, error_code = NULL, updated_at = ?
+       WHERE id = ? AND lease_id = ? AND status = 'running' AND lease_until IS NOT NULL AND lease_until >= unixepoch()`,
+    )
+    .bind(opts.answerJson, opts.verifierJson, opts.costJson, opts.nowIso, opts.id, opts.leaseId);
+  const runStmts = uniqueHashes.map((hash) =>
+    db
+      .prepare(
+        `INSERT INTO lab_job_runs (job_id, result_hash)
+         SELECT ?, ? WHERE EXISTS (SELECT 1 FROM lab_jobs WHERE id = ? AND lease_id = ? AND status = 'done')
+         ON CONFLICT(job_id, result_hash) DO NOTHING`,
+      )
+      .bind(opts.id, hash, opts.id, opts.leaseId),
+  );
+  const results = await (db as BatchableDb).batch([updateStmt, ...runStmts]);
+  const changes = results[0]?.meta?.changes ?? results[0]?.changes ?? 0;
+  return changes === 1 ? { ok: true } : { ok: false, reason: "LEASE_LOST" };
+}
+
+// ---- lab_prices (AL-40) ----
+
+export type ShadowPriceTable = {
+  models: Record<string, { inputPerMTok: number; outputPerMTok: number }> & { default?: { inputPerMTok: number; outputPerMTok: number } };
+  computeUsdPerCpuMs: number;
+  dataUsdPerJob: number;
+  settlementUsdPerJob: number;
+};
+
+/**
+ * Normalizes `lab_prices` rows (resource, unit, usd, valid_from) into a `ShadowPriceTable`, taking for each
+ * (resource, unit) pair the latest row with `valid_from <= asOfIso` (AL-40: "shadow prices... live in one
+ * config table with a date"). Returns `null` when nothing is configured yet, so callers can treat "shadow
+ * cost" as simply absent rather than zero (coordinator: "shadow cost if present").
+ */
+export async function loadShadowPriceTable(db: D1Db, asOfIso: string): Promise<ShadowPriceTable | null> {
+  const { results } = await db
+    .prepare("SELECT resource, unit, usd, valid_from FROM lab_prices WHERE valid_from <= ? ORDER BY valid_from ASC")
+    .bind(asOfIso)
+    .all<{ resource: string; unit: string; usd: number; valid_from: string }>();
+  if (!results.length) return null;
+  // Later rows (ASC order) overwrite earlier ones for the same (resource, unit): "the latest row <= asOf" wins.
+  const latest = new Map<string, number>();
+  for (const r of results) latest.set(`${r.resource}|${r.unit}`, r.usd);
+  const table: ShadowPriceTable = { models: {}, computeUsdPerCpuMs: 0, dataUsdPerJob: 0, settlementUsdPerJob: 0 };
+  for (const [key, usd] of latest) {
+    const [resource, unit] = key.split("|");
+    if (resource === "compute" && unit === "usd_per_cpu_ms") table.computeUsdPerCpuMs = usd;
+    else if (resource === "data" && unit === "usd_per_job") table.dataUsdPerJob = usd;
+    else if (resource === "settlement" && unit === "usd_per_job") table.settlementUsdPerJob = usd;
+    else if (resource.startsWith("model:")) {
+      const model = resource.slice("model:".length);
+      const entry = table.models[model] ?? (table.models[model] = { inputPerMTok: 0, outputPerMTok: 0 });
+      if (unit === "input_per_mtok") entry.inputPerMTok = usd;
+      else if (unit === "output_per_mtok") entry.outputPerMTok = usd;
+    }
+  }
+  return table;
+}
+
+export type CostMeterLike = {
+  modelCalls: { model: string; promptTokens: number; completionTokens: number }[];
+  runs: { cpuMs: number }[];
+  sweepCpuMs: number;
+};
+
+/** Port of `packages/lab-agent/src/cost-meter.ts`'s `shadowCost()` total (LLM + compute + data + settlement),
+ * kept in sync with that file -- it is the one place a metric key or a price formula is defined, not here. */
+export function shadowCostUsd(meter: CostMeterLike, prices: ShadowPriceTable): number {
+  const llm = meter.modelCalls.reduce((sum, c) => {
+    const p = prices.models[c.model] ?? prices.models.default ?? { inputPerMTok: 0, outputPerMTok: 0 };
+    return sum + (c.promptTokens / 1_000_000) * p.inputPerMTok + (c.completionTokens / 1_000_000) * p.outputPerMTok;
+  }, 0);
+  const cpuMs = meter.runs.reduce((sum, r) => sum + r.cpuMs, 0) + meter.sweepCpuMs;
+  const compute = cpuMs * prices.computeUsdPerCpuMs;
+  return llm + compute + prices.dataUsdPerJob + prices.settlementUsdPerJob;
 }

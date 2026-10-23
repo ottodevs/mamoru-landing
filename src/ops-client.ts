@@ -622,6 +622,7 @@ export function opsClientScript(nonce: string): string {
     var tF = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
 
     var root = null, scope = null, csrf = "", state = null, geo = {}, playTimer = null, jobTimer = null, jobTickTimer = null, loadToken = 0, jobGen = 0, lastJobShape = null;
+    var askTimer = null, askTickTimer = null, askGen = 0, askShape = null;
 
     function esc(s) {
       return String(s).replace(/[&<>"']/g, function (c) {
@@ -666,6 +667,13 @@ export function opsClientScript(nonce: string): string {
         // completion is attributed correctly even if the viewer has since switched windows.
         job: null, jobSpec: null, jobWindowIndex: 0, jobStartMs: 0, jobSending: false, jobWasInstant: false,
         jobAlreadyExisted: false, jobVariantLabel: "", jobDismissed: false, jobApplying: false, jobDoneElapsedSec: 0,
+        // "Preguntar al Lab" (otto/mamoru-astro#30): askThreads is the picker list; askThreadId/askJobs/askRuns
+        // are the thread currently open (askJobs oldest first, as the API returns them). Each job's own
+        // createdAt (server-assigned, or synthesized at send time) drives its elapsed-seconds display, not a
+        // single shared "pending started at" field — a job already in flight when a thread loads has no
+        // client-side send moment to measure from.
+        askLoaded: false, askThreads: [], askThreadId: null, askJobs: [], askRuns: {}, askSending: false,
+        askError: "",
       };
     }
     function windowOf() { return state.windows[state.w] || null; }
@@ -1133,6 +1141,7 @@ export function opsClientScript(nonce: string): string {
       scope.querySelectorAll(".lab-rtabs button").forEach(function (b) { b.setAttribute("aria-selected", String(b.getAttribute("data-lab-r") === t)); });
       $("lab-r-probar").hidden = t !== "probar";
       $("lab-r-preguntar").hidden = t !== "preguntar";
+      if (t === "preguntar") ensureAskLoaded();
     }
 
     /* ---------- right: Probar (B-07, B-08) ---------- */
@@ -1475,6 +1484,282 @@ export function opsClientScript(nonce: string): string {
       renderTicks();
       tickAll();
     }
+    /* ---------- right: Preguntar al Lab (otto/mamoru-astro#30, spec 008 phase 2) ---------- */
+
+    function pendingAskJob() {
+      for (var i = 0; i < state.askJobs.length; i++) {
+        var j = state.askJobs[i];
+        if (j.status === "queued" || j.status === "running") return j;
+      }
+      return null;
+    }
+    function stopAskTicker() {
+      clearInterval(askTickTimer);
+      askTickTimer = null;
+    }
+    function startAskTicker() {
+      if (askTickTimer) return;
+      askTickTimer = setInterval(tickAsk, 1000);
+    }
+    /** Elapsed time since the turn was created, from the job's own createdAt -- never a client-only timestamp:
+     * a job already queued/running when its thread is first loaded (not sent by this browser tab) has no
+     * client-side "sent at" moment to measure from, only what the server recorded. */
+    function askElapsedSec(job) {
+      var created = job.createdAt ? Date.parse(job.createdAt) : NaN;
+      if (isNaN(created)) return 0;
+      return Math.max(0, Math.round((Date.now() - created) / 1000));
+    }
+    /** Updates only the pending card's seconds/headline text in place -- never rebuilds the message list, same
+     * discipline as renderJobStatus (#28 follow-up): the live region's announced text changes only on a real
+     * state change, the ticking count lives in its own aria-hidden span. */
+    function tickAsk() {
+      var job = pendingAskJob();
+      if (!job) { stopAskTicker(); return; }
+      var secs = askElapsedSec(job);
+      var headlineEl = $("lab-ask-headline-" + job.id);
+      var secsEl = $("lab-ask-secs-" + job.id);
+      if (!headlineEl || !secsEl) return;
+      headlineEl.textContent = LAB.askStatusHeadline(job.status);
+      secsEl.textContent = " · " + secs + " s";
+      var sub = $("lab-ask-sub-" + job.id);
+      if (sub) sub.textContent = LAB.askSubText(job.status, secs);
+    }
+
+    function askAnswerBodyHtml(job) {
+      if (job.status === "queued" || job.status === "running") {
+        var secs = askElapsedSec(job);
+        var sub = LAB.askSubText(job.status, secs);
+        return (
+          '<div role="status" aria-live="polite"><span class="lab-verdict" id="lab-ask-headline-' + esc(job.id) + '">' + esc(LAB.askStatusHeadline(job.status)) +
+          '</span><span class="lab-ask-pending-secs" id="lab-ask-secs-' + esc(job.id) + '" aria-hidden="true"> · ' + secs + " s</span></div>" +
+          '<div class="lab-progress"><i></i></div>' +
+          (sub ? '<p class="lab-note" id="lab-ask-sub-' + esc(job.id) + '">' + esc(sub) + "</p>" : "")
+        );
+      }
+      if (job.status === "failed") {
+        return (
+          '<p class="lab-verdict">' + esc(LAB.askFailedText(job.errorCode || "")) + "</p>" +
+          '<button type="button" class="lab-retry" data-ask-retry="' + esc(job.question) + '">Reintentar</button>'
+        );
+      }
+      var blocks = (job.answer && job.answer.blocks) || [];
+      // AL-22: "flagged LAB_ANSWER_PARTIAL" -- the cost meter's own verifierOutcome ('ok'|'repaired'|'partial'|
+      // 'error', packages/lab-agent/src/cost-meter.ts) is the one reliable signal for this, not a guess at the
+      // separately-shaped "verifier" (VerifyResult) blob's fields.
+      var partial = Boolean(job.cost && job.cost.verifierOutcome === "partial");
+      var html = LAB.answerBlocksHtml(blocks, state.askRuns, partial);
+      if (!html) html = '<p class="lab-verdict">Sin respuesta verificable.</p>';
+      var footer = LAB.answerFooterText(job.cost, typeof job.shadowUsd === "number" ? job.shadowUsd : null);
+      if (footer) html += '<div class="lab-ask-footer">' + esc(footer) + "</div>";
+      return html;
+    }
+
+    function renderAskMessages() {
+      var box = $("lab-ask-messages");
+      if (!box) return;
+      if (!state.askJobs.length) {
+        box.innerHTML = '<p class="lab-ask-empty">Pregunta algo sobre el banco: una estrategia, una ventana, una comparación entre políticas.</p>';
+        return;
+      }
+      var html = "";
+      for (var i = 0; i < state.askJobs.length; i++) {
+        var job = state.askJobs[i];
+        html +=
+          '<div class="lab-msg lab-me"><p>' + esc(job.question) + "</p></div>" +
+          '<div class="lab-ans' + (job.status === "failed" ? " lab-failed" : "") + '">' + askAnswerBodyHtml(job) + "</div>";
+      }
+      box.innerHTML = html;
+      box.scrollTop = box.scrollHeight;
+      box.querySelectorAll("[data-ask-retry]").forEach(function (b) {
+        b.onclick = function () { sendAskQuestion(b.getAttribute("data-ask-retry")); };
+      });
+      box.querySelectorAll(".lab-ask-openbench").forEach(function (b) {
+        b.onclick = function () {
+          openRunFromAsk(b.getAttribute("data-run-id"), b.getAttribute("data-window-id"), b.getAttribute("data-compare") === "1");
+        };
+      });
+      if (pendingAskJob()) startAskTicker(); else stopAskTicker();
+    }
+
+    /** "Ver en el banco" (coordinator note): opens the window the cited run belongs to and selects it; for a
+     * comparison chart (kind=decomposition or >1 run) also switches to the Comparar tab so the highlighted row
+     * is immediately visible, not just selected off-screen. */
+    function openRunFromAsk(runId, windowId, compare) {
+      if (!runId || !windowId) return;
+      var idx = -1;
+      for (var i = 0; i < state.windows.length; i++) if (state.windows[i].windowId === windowId) idx = i;
+      if (idx === -1) return;
+      state.w = idx;
+      state.at = 0;
+      stopPlay();
+      state.selectedHash = runId;
+      renderAll();
+      if (compare) setTab("cmp");
+    }
+
+    function renderAskPicker() {
+      var sel = $("lab-ask-thread");
+      if (!sel) return;
+      var html = '<option value="">Nuevo hilo</option>';
+      for (var i = 0; i < state.askThreads.length; i++) {
+        var t = state.askThreads[i];
+        // A native <select> does not reliably text-overflow its own closed/selected value (only the open
+        // dropdown list respects CSS truncation consistently) -- the option text itself is shortened so a long
+        // thread title (up to 60 chars, threadTitleFromQuestion) cannot overflow the narrow right column.
+        var short = t.title.length > 36 ? t.title.slice(0, 35) + "…" : t.title;
+        html += '<option value="' + esc(t.id) + '" title="' + esc(t.title) + '"' + (t.id === state.askThreadId ? " selected" : "") + ">" + esc(short) + "</option>";
+      }
+      sel.innerHTML = html;
+      sel.value = state.askThreadId || "";
+    }
+
+    function renderAskSuggestions() {
+      var box = $("lab-ask-suggestions");
+      if (!box) return;
+      if (state.askJobs.length) { box.innerHTML = ""; return; } // only before the first turn of a thread
+      var w = windowOf();
+      var label = w ? LAB.windowHeadlineLabel(w.regime, w.from, w.to) : "esta ventana";
+      var qs = LAB.suggestionQuestions(label);
+      box.innerHTML = qs.map(function (q) { return '<button type="button" class="lab-ask-suggestion">' + esc(q) + "</button>"; }).join("");
+      box.querySelectorAll(".lab-ask-suggestion").forEach(function (b) {
+        b.onclick = function () { sendAskQuestion(b.textContent); };
+      });
+    }
+
+    function renderAskForm() {
+      var send = $("lab-ask-send");
+      var input = $("lab-ask-input");
+      var pending = Boolean(pendingAskJob()) || state.askSending;
+      if (send) send.disabled = pending || !input || !LAB.questionValid(input.value || "");
+      var err = $("lab-ask-err");
+      if (err) err.textContent = state.askError || "";
+    }
+
+    function renderAskPanel() {
+      renderAskPicker();
+      renderAskMessages();
+      renderAskSuggestions();
+      renderAskForm();
+    }
+
+    /** Loads one thread's full transcript, or clears to the "new thread, nothing sent yet" view when "id" is
+     * falsy. Called on thread-picker change, "Nuevo hilo", and right after a question creates a fresh thread. */
+    function loadAskThread(id) {
+      state.askThreadId = id || null;
+      if (!id) {
+        state.askJobs = [];
+        state.askRuns = {};
+        renderAskPanel();
+        return;
+      }
+      api("/ops/lab/api/threads/" + encodeURIComponent(id))
+        .then(function (r) {
+          if (!r.ok || !r.body) return;
+          state.askJobs = r.body.jobs || [];
+          state.askRuns = r.body.runs || {};
+          renderAskPanel();
+        });
+    }
+
+    function loadAskThreads() {
+      api("/ops/lab/api/threads").then(function (r) {
+        state.askThreads = (r.ok && r.body && r.body.threads) || [];
+        renderAskPicker();
+      });
+    }
+
+    /** First switch to the tab only (B-10-equivalent lazy load): no point fetching threads for a viewer who
+     * never opens "Preguntar al Lab" in this session. */
+    function ensureAskLoaded() {
+      if (state.askLoaded) return;
+      state.askLoaded = true;
+      loadAskThreads();
+      renderAskSuggestions();
+    }
+
+    /**
+     * myGen (same pattern as runScenario's jobGen, #28 follow-up): a poll response or the initial POST response
+     * landing after the viewer has since switched threads, started a new question, or torn the panel down is
+     * dropped rather than overwriting a different thread's state.
+     */
+    function sendAskQuestion(question) {
+      var q = (question || "").trim();
+      if (!LAB.questionValid(q) || state.askSending || pendingAskJob()) return;
+      var myGen = ++askGen;
+      var w = windowOf();
+      state.askSending = true;
+      state.askError = "";
+      renderAskForm();
+      var body = new URLSearchParams({ csrf: csrf, question: q, threadId: state.askThreadId || "", windowId: (w && w.windowId) || "" }).toString();
+      api("/ops/lab/api/ask", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: body })
+        .then(function (r) {
+          if (askGen !== myGen) return;
+          state.askSending = false;
+          if (!r.ok || !r.body || !r.body.job) {
+            state.askError = LAB.askSendErrorText((r.body && r.body.error) || "LAB_NETWORK");
+            renderAskForm();
+            return;
+          }
+          var input = $("lab-ask-input");
+          if (input) input.value = "";
+          var isNewThread = !state.askThreadId;
+          state.askThreadId = r.body.threadId;
+          // createdAt is synthesized here (the POST response carries no timestamp): close enough to the
+          // server's own value that the ticking elapsed count reads right until the first poll replaces this
+          // whole entry with the server's record.
+          state.askJobs.push({ id: r.body.job.id, question: q, status: "queued", answer: null, verifier: null, cost: null, errorCode: null, createdAt: new Date().toISOString() });
+          if (isNewThread) loadAskThreads(); // picks up the newly created thread's title
+          renderAskPanel();
+          pollAskThread(myGen);
+        })
+        .catch(function () {
+          if (askGen !== myGen) return;
+          state.askSending = false;
+          state.askError = LAB.askSendErrorText("LAB_NETWORK");
+          renderAskForm();
+        });
+    }
+
+    function pollAskThread(gen, attempt) {
+      clearTimeout(askTimer);
+      askTimer = setTimeout(function () {
+        if (gen !== askGen || !state.askThreadId) return;
+        api("/ops/lab/api/threads/" + encodeURIComponent(state.askThreadId))
+          .then(function (r) {
+            if (gen !== askGen) return;
+            if (!r.ok || !r.body) { pollAskThread(gen, (attempt || 0) + 1); return; }
+            state.askJobs = r.body.jobs || [];
+            state.askRuns = r.body.runs || {};
+            renderAskMessages();
+            renderAskForm();
+            if (pendingAskJob()) pollAskThread(gen, (attempt || 0) + 1);
+          })
+          .catch(function () {
+            if (gen !== askGen) return;
+            pollAskThread(gen, (attempt || 0) + 1);
+          });
+      }, LAB.pollDelayMs(attempt || 0));
+    }
+
+    function wireAsk() {
+      var sel = $("lab-ask-thread");
+      if (sel) sel.onchange = function () { loadAskThread(sel.value || null); };
+      var newBtn = $("lab-ask-new");
+      if (newBtn) newBtn.onclick = function () { loadAskThread(null); };
+      var form = $("lab-ask-form");
+      var input = $("lab-ask-input");
+      if (form) form.onsubmit = function (e) { e.preventDefault(); if (input) sendAskQuestion(input.value); };
+      if (input) {
+        input.oninput = renderAskForm;
+        input.onkeydown = function (e) {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            sendAskQuestion(input.value);
+          }
+        };
+      }
+    }
+
     function renderAll() {
       renderWindows();
       renderVariants();
@@ -1504,6 +1789,7 @@ export function opsClientScript(nonce: string): string {
       var next = $("lab-next"); if (next) next.onclick = function () { jump(1); };
       var prev = $("lab-prev"); if (prev) prev.onclick = function () { jump(-1); };
       var scrub = $("lab-scrub"); if (scrub) scrub.oninput = function (e) { stopPlay(); state.at = Number(e.target.value); tickAll(); };
+      wireAsk();
     }
 
     function init(s) {
@@ -1524,9 +1810,12 @@ export function opsClientScript(nonce: string): string {
         clearTimeout(playTimer);
         clearTimeout(jobTimer);
         clearInterval(jobTickTimer);
+        clearTimeout(askTimer);
+        clearInterval(askTickTimer);
         clearTimeout(resizeTimer);
         window.removeEventListener("resize", onResizeDebounced);
         loadToken++;
+        askGen++;
         root = null;
         scope = null;
         state = null;
