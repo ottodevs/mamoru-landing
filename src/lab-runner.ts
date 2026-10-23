@@ -65,17 +65,27 @@ async function handleClaim(db: D1Db): Promise<Response> {
   return json({ job: { id: candidate.id, spec: claimed.spec, leaseId: claimed.leaseId } });
 }
 
+/** The runner contract (spec 008 B-05, ottodevs/mamoru apps/mamoru-lab-runner) sends `jobId`; `id` is still read. */
+function jobIdOf(b: { jobId?: unknown; id?: unknown }): string | null {
+  if (typeof b.jobId === "string" && b.jobId) return b.jobId;
+  if (typeof b.id === "string" && b.id) return b.id;
+  return null;
+}
+
 async function handleHeartbeat(db: D1Db, body: unknown): Promise<Response> {
-  const b = (body ?? {}) as { id?: unknown; leaseId?: unknown };
-  if (typeof b.id !== "string" || typeof b.leaseId !== "string") return json({ error: "LAB_RUNNER_BAD_BODY" }, 400);
-  const ok = await renewLease(db, b.id, b.leaseId, new Date().toISOString());
+  const b = (body ?? {}) as { jobId?: unknown; id?: unknown; leaseId?: unknown };
+  const id = jobIdOf(b);
+  if (id === null || typeof b.leaseId !== "string") return json({ error: "LAB_RUNNER_BAD_BODY" }, 400);
+  const ok = await renewLease(db, id, b.leaseId, new Date().toISOString());
   if (!ok) return json({ error: "LAB_JOB_LEASE_LOST" }, 409);
   return json({ ok: true });
 }
 
 async function handleResult(db: D1Db, body: unknown): Promise<Response> {
-  const b = (body ?? {}) as { id?: unknown; leaseId?: unknown; run?: unknown; error?: unknown };
-  if (typeof b.id !== "string" || typeof b.leaseId !== "string") return json({ error: "LAB_RUNNER_BAD_BODY" }, 400);
+  const raw = (body ?? {}) as { jobId?: unknown; id?: unknown; leaseId?: unknown; run?: unknown; error?: unknown };
+  const id = jobIdOf(raw);
+  if (id === null || typeof raw.leaseId !== "string") return json({ error: "LAB_RUNNER_BAD_BODY" }, 400);
+  const b = { ...raw, id, leaseId: raw.leaseId };
   const job = await jobById(db, b.id);
   if (!job || job.leaseId !== b.leaseId) return json({ error: "LAB_JOB_LEASE_LOST" }, 409);
   const nowIso = new Date().toISOString();

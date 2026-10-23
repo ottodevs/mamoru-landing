@@ -90,11 +90,11 @@ describe("lab-runner.ts: claim / heartbeat / result, with fencing", () => {
     const job = await jobById(db, "job-1");
     expect(job?.status).toBe("running");
 
-    const hbRes = await signedFetch(env, "/ops/lab/runner/heartbeat", { id: "job-1", leaseId });
+    const hbRes = await signedFetch(env, "/ops/lab/runner/heartbeat", { jobId: "job-1", leaseId });
     expect(hbRes.status).toBe(200);
 
     const run = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "Política actual", resultHash: "fresh-hash-1", vsHodl: -5 });
-    const resultRes = await signedFetch(env, "/ops/lab/runner/result", { id: "job-1", leaseId, run });
+    const resultRes = await signedFetch(env, "/ops/lab/runner/result", { jobId: "job-1", leaseId, run });
     expect(resultRes.status).toBe(200);
     const resultBody = (await resultRes.json()) as { ok: boolean; status: string; resultHash: string };
     expect(resultBody.status).toBe("done");
@@ -113,7 +113,7 @@ describe("lab-runner.ts: claim / heartbeat / result, with fencing", () => {
     const env = opsEnv(db);
     const spec = { windowId: "feb2025", base: "live" as const, widthTicks: 2000, deposit: 1000 };
     await insertJob(db, { id: "job-2", requester: "r", spec, specKey: "feb2025|live|2000|1000", status: "queued", resultHash: null, now: new Date().toISOString() });
-    const res = await signedFetch(env, "/ops/lab/runner/heartbeat", { id: "job-2", leaseId: "not-the-real-lease" });
+    const res = await signedFetch(env, "/ops/lab/runner/heartbeat", { jobId: "job-2", leaseId: "not-the-real-lease" });
     expect(res.status).toBe(409);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("LAB_JOB_LEASE_LOST");
@@ -135,7 +135,7 @@ describe("lab-runner.ts: claim / heartbeat / result, with fencing", () => {
 
     // The stale runner (holding the old lease) tries to post a result: refused.
     const staleRun = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "stale", resultHash: "stale-hash", vsHodl: -1 });
-    const staleRes = await signedFetch(env, "/ops/lab/runner/result", { id: "job-3", leaseId: staleLease, run: staleRun });
+    const staleRes = await signedFetch(env, "/ops/lab/runner/result", { jobId: "job-3", leaseId: staleLease, run: staleRun });
     expect(staleRes.status).toBe(409);
     // GPT-6 Sol review (otto/mamoru-astro#28): a refused result must never land in lab_runs either, not only
     // leave the job's own resultHash untouched — this is what "fence before writing the run" actually buys.
@@ -144,7 +144,7 @@ describe("lab-runner.ts: claim / heartbeat / result, with fencing", () => {
 
     // The reclaiming runner's own result is accepted.
     const freshRun = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "fresh", resultHash: "fresh-hash-2", vsHodl: -1 });
-    const okRes = await signedFetch(env, "/ops/lab/runner/result", { id: "job-3", leaseId: newLease, run: freshRun });
+    const okRes = await signedFetch(env, "/ops/lab/runner/result", { jobId: "job-3", leaseId: newLease, run: freshRun });
     expect(okRes.status).toBe(200);
 
     const job = await jobById(db, "job-3");
@@ -168,7 +168,7 @@ describe("lab-runner.ts: claim / heartbeat / result, with fencing", () => {
     // Let the lease expire in place: lease_id is unchanged (still what the runner holds), lease_until is past.
     db.raw.query("UPDATE lab_jobs SET lease_until = ? WHERE id = 'job-expire-result'").run(Math.floor(Date.now() / 1000) - 5);
     const run = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "late", resultHash: "expired-lease-hash", vsHodl: -1 });
-    const res = await signedFetch(env, "/ops/lab/runner/result", { id: "job-expire-result", leaseId: claim.job.leaseId, run });
+    const res = await signedFetch(env, "/ops/lab/runner/result", { jobId: "job-expire-result", leaseId: claim.job.leaseId, run });
     expect(res.status).toBe(409);
     const row = await db.prepare("SELECT 1 AS x FROM lab_runs WHERE result_hash = ?").bind("expired-lease-hash").first();
     expect(row).toBeNull();
@@ -181,7 +181,7 @@ describe("lab-runner.ts: claim / heartbeat / result, with fencing", () => {
     await insertJob(db, { id: "job-4", requester: "r", spec, specKey: "feb2025|live|2000|1000", status: "queued", resultHash: null, now: new Date().toISOString() });
     const claim = (await (await signedFetch(env, "/ops/lab/runner/claim", {})).json()) as { job: { leaseId: string } };
     const wrongRun = makeRun({ windowId: "feb2025", base: "guard", widthTicks: 2000, deposit: 1000, variantLabel: "wrong", resultHash: "wrong-hash", vsHodl: -1 });
-    const res = await signedFetch(env, "/ops/lab/runner/result", { id: "job-4", leaseId: claim.job.leaseId, run: wrongRun });
+    const res = await signedFetch(env, "/ops/lab/runner/result", { jobId: "job-4", leaseId: claim.job.leaseId, run: wrongRun });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("LAB_RUN_SPEC_MISMATCH");
@@ -193,7 +193,7 @@ describe("lab-runner.ts: claim / heartbeat / result, with fencing", () => {
     const spec = { windowId: "feb2025", base: "live" as const, widthTicks: 2000, deposit: 1000 };
     await insertJob(db, { id: "job-5", requester: "r", spec, specKey: "feb2025|live|2000|1000", status: "queued", resultHash: null, now: new Date().toISOString() });
     const claim = (await (await signedFetch(env, "/ops/lab/runner/claim", {})).json()) as { job: { leaseId: string } };
-    const res = await signedFetch(env, "/ops/lab/runner/result", { id: "job-5", leaseId: claim.job.leaseId, error: "LAB_DATASET_MISSING" });
+    const res = await signedFetch(env, "/ops/lab/runner/result", { jobId: "job-5", leaseId: claim.job.leaseId, error: "LAB_DATASET_MISSING" });
     expect(res.status).toBe(200);
     const job = await jobById(db, "job-5");
     expect(job?.status).toBe("failed");
@@ -332,7 +332,7 @@ describe("lab-runner.ts: claim / heartbeat / result, with fencing", () => {
     await insertJob(db, { id: "job-http-broken", requester: "r", spec, specKey: "feb2025|live|2000|1000", status: "queued", resultHash: null, now: new Date().toISOString() });
     const claim = (await (await signedFetch(env, "/ops/lab/runner/claim", {})).json()) as { job: { leaseId: string } };
     const run = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "x", resultHash: "http-would-be-hash", vsHodl: -1 });
-    const res = await signedFetch(env, "/ops/lab/runner/result", { id: "job-http-broken", leaseId: claim.job.leaseId, run });
+    const res = await signedFetch(env, "/ops/lab/runner/result", { jobId: "job-http-broken", leaseId: claim.job.leaseId, run });
     expect(res.status).toBe(503);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("LAB_RUN_WRITE_FAILED");
