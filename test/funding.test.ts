@@ -14,6 +14,13 @@ describe("funding targets", () => {
     expect(new Set(FUNDING_TARGETS.map((t) => t.id)).size).toBe(FUNDING_TARGETS.length);
   });
 
+  test("Monad funds its own relayer, not Base's", () => {
+    const mon = FUNDING_TARGETS.find((t) => t.id === "relayer-monad")!;
+    const base = FUNDING_TARGETS.find((t) => t.id === "relayer-base")!;
+    expect(mon.address).toBe("0xE41175b9CEBD25b9F45B745C922002BC052B5C88");
+    expect(mon.address).not.toBe(base.address);
+  });
+
   test("status: empty, low, ok, unknown", () => {
     expect(fundingStatus(null, 5n)).toBe("unknown");
     expect(fundingStatus(0n, 5n)).toBe("empty");
