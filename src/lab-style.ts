@@ -140,14 +140,42 @@ export const LAB_STYLE = `
 .lab-field .lab-scale { display: flex; justify-content: space-between; font-family: var(--mono); font-size: .68rem; color: var(--stone); }
 .lab-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: .86rem; }
 .lab-toggle input { accent-color: var(--mamoru); width: 18px; height: 18px; }
-.lab-run { border: 1px solid var(--ink); background: var(--ink); color: var(--paper); border-radius: var(--r); padding: 10px 12px; cursor: pointer; font-size: .92rem; width: 100%; }
+.lab-run { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); border-radius: var(--r); padding: 10px 12px; cursor: pointer; font-size: .92rem; width: 100%; }
 .lab-run:active { transform: translateY(1px); }
 .lab-run:disabled { opacity: .55; cursor: default; }
 .lab-note { font-size: .8rem; color: var(--stone); }
 .lab-later { opacity: .55; }
 .lab-later label::after { content: "más adelante"; font-family: var(--mono); font-size: .64rem; color: var(--stone); border: 1px solid var(--wash); border-radius: 999px; padding: 0 6px; margin-left: 6px; }
-.lab-jobline { font-family: var(--mono); font-size: .78rem; border: 1px dashed var(--wash); border-radius: var(--r); padding: 8px 10px; }
-.lab-jobline.lab-failed { color: var(--loss); border-color: var(--loss); }
+
+/* ---- "Ejecutar escenario" feedback (otto/mamoru-astro#28 follow-up, Ot 23 Oct) ---- */
+@keyframes lab-spin { to { transform: rotate(360deg); } }
+.lab-spinner { display: inline-block; width: 13px; height: 13px; border-radius: 50%; border: 2px solid rgba(248, 245, 239, .35); border-top-color: var(--paper); animation: lab-spin .7s linear infinite; flex: none; }
+
+/* the detail card, right under the Run button */
+.lab-status-card { margin-top: 2px; border: 1px solid var(--wash); border-radius: var(--r); background: var(--card); padding: 10px 11px; display: grid; gap: 4px; position: relative; }
+.lab-status-card.lab-failed { border-color: var(--loss); }
+.lab-status-spec { font-family: var(--mono); font-size: .72rem; color: var(--stone); overflow-wrap: anywhere; }
+.lab-status-text { font-size: .88rem; line-height: 1.35; padding-right: 1.1rem; }
+.lab-status-card.lab-failed .lab-status-text { color: var(--loss); }
+.lab-status-sub { font-size: .76rem; color: var(--stone); }
+.lab-status-close { position: absolute; top: 6px; right: 7px; border: 0; background: none; color: var(--stone); font-size: .95rem; line-height: 1; cursor: pointer; padding: 2px 4px; }
+.lab-status-close:hover { color: var(--ink); }
+.lab-retry { justify-self: start; margin-top: 2px; border: 1px solid var(--loss); background: none; color: var(--loss); border-radius: var(--r); padding: 4px 10px; font-size: .78rem; cursor: pointer; }
+.lab-retry:hover { background: var(--loss); color: var(--paper); }
+
+/* indeterminate progress, queued/running only */
+@keyframes lab-indeterminate { 0% { left: -30%; width: 30%; } 60% { left: 100%; width: 40%; } 100% { left: 100%; width: 40%; } }
+.lab-progress { position: relative; height: 3px; border-radius: 2px; background: var(--wash); overflow: hidden; margin-top: 2px; }
+.lab-progress i { position: absolute; top: 0; bottom: 0; background: var(--mamoru); border-radius: 2px; animation: lab-indeterminate 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .lab-progress i { animation: none; left: 0; width: 100%; opacity: .5; } }
+
+/* compact chip, left column, queued/running only */
+.lab-chip-job { font-family: var(--mono); font-size: .74rem; border: 1px dashed var(--wash); border-radius: 999px; padding: 5px 10px; display: inline-flex; align-items: center; gap: 6px; width: fit-content; }
+.lab-chip-job .lab-spinner { width: 10px; height: 10px; border-color: rgba(138, 133, 120, .35); border-top-color: var(--mamoru); }
+
+/* the strategy card just computed/selected gets a brief wash, never a loud flash */
+@keyframes lab-flash { 0% { background: color-mix(in oklab, var(--mamoru) 22%, var(--card)); } 100% { background: var(--sel); } }
+.lab-var.lab-flash { animation: lab-flash 1.2s ease-out 1; }
 
 .lab-chat { display: grid; gap: 12px; }
 .lab-msg { display: grid; gap: 6px; }

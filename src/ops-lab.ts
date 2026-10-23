@@ -50,7 +50,7 @@ function labShell(csrf: string): string {
       <section style="display:grid;gap:8px">
         <div class="lab-k">Estrategias del experimento</div>
         <div class="lab-variants" id="lab-variants"></div>
-        <div class="lab-jobline" id="lab-job" hidden></div>
+        <div class="lab-chip-job" id="lab-job-chip" role="status" aria-live="polite" hidden></div>
       </section>
       <details class="lab-box" id="lab-assum"><summary class="lab-k">Supuestos</summary><dl class="lab-ass" id="lab-ass" style="margin-top:10px"></dl></details>
     </aside>
@@ -179,7 +179,7 @@ export async function handleLabCreateJob(db: D1Db | undefined, requester: string
       sinceIso,
       maxPerDay: MAX_JOBS_PER_DAY,
     });
-    if (!inserted) return json({ error: "LAB_JOB_LIMIT" }, 429);
+    if (!inserted) return json({ error: "LAB_JOB_LIMIT_DAILY" }, 429);
     return json({ job: { id, status: "done", resultHash: existing.resultHash, spec } }, 200);
   }
 
@@ -205,9 +205,16 @@ export async function handleLabCreateJob(db: D1Db | undefined, requester: string
     // GPT-6 Sol review round 2: returning someone else's in-flight job must not let a requester who is
     // themselves already at the daily cap bypass it — they created no new row, but they still got service.
     if ((await countJobsToday(db, requester, sinceIso)) >= MAX_JOBS_PER_DAY) {
-      return json({ error: "LAB_JOB_LIMIT" }, 429);
+      return json({ error: "LAB_JOB_LIMIT_DAILY" }, 429);
     }
     return json({ job: { id: active.id, status: active.status, resultHash: active.resultHash, spec: active.spec } }, 200);
   }
-  return json({ error: "LAB_JOB_LIMIT" }, 429);
+  // Neither a duplicate nor a limit explains it on their own by construction, so one of the two caps the
+  // conditional insert checked must have been it; this read only picks the right word for the 429, same
+  // "response-shaping, not decision-making" read as the one just above (otto/mamoru-astro#28 follow-up: the
+  // status card names the actual limit with its number, which needs to know which one was hit).
+  if ((await countJobsToday(db, requester, sinceIso)) >= MAX_JOBS_PER_DAY) {
+    return json({ error: "LAB_JOB_LIMIT_DAILY" }, 429);
+  }
+  return json({ error: "LAB_JOB_LIMIT_QUEUED" }, 429);
 }

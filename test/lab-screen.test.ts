@@ -210,7 +210,7 @@ describe("POST /ops/lab/api/jobs: dedupe by spec_key (B-04, LAB-AL-09)", () => {
     const res = await postJob(env, cookie, csrf, { windowId: "feb2025", base: "guard", widthTicks: "5000", deposit: "1000" });
     expect(res.status).toBe(429);
     const body = (await res.json()) as { error: string };
-    expect(body.error).toBe("LAB_JOB_LIMIT");
+    expect(body.error).toBe("LAB_JOB_LIMIT_DAILY");
     // The in-flight job itself is untouched — still exactly one row for that spec, owned by the original requester.
     const { results } = await db.prepare("SELECT requester FROM lab_jobs WHERE spec_key = ?").bind(dupKey).all<{ requester: string }>();
     expect(results.length).toBe(1);
@@ -336,7 +336,7 @@ describe("POST /ops/lab/api/jobs: B-03 dataset-missing (coordinator note)", () =
 });
 
 describe("POST /ops/lab/api/jobs: limits (B-04)", () => {
-  test("20 jobs/requester/day: the 21st in the window is refused with LAB_JOB_LIMIT (429)", async () => {
+  test("20 jobs/requester/day: the 21st in the window is refused with LAB_JOB_LIMIT_DAILY (429)", async () => {
     const db = labDb();
     const env = opsEnv(db);
     const { cookie, csrf } = await sessionCookie();
@@ -356,10 +356,10 @@ describe("POST /ops/lab/api/jobs: limits (B-04)", () => {
     const res = await postJob(env, cookie, csrf, { windowId: "feb2025", base: "live", widthTicks: "4000", deposit: "1000" });
     expect(res.status).toBe(429);
     const body = (await res.json()) as { error: string };
-    expect(body.error).toBe("LAB_JOB_LIMIT");
+    expect(body.error).toBe("LAB_JOB_LIMIT_DAILY");
   });
 
-  test("3 queued at a time: the 4th distinct not-yet-run spec is refused, but a dedupe hit still goes through", async () => {
+  test("3 queued at a time: the 4th distinct not-yet-run spec is refused with LAB_JOB_LIMIT_QUEUED, but a dedupe hit still goes through", async () => {
     const db = labDb();
     const env = opsEnv(db);
     const { cookie, csrf } = await sessionCookie();
@@ -375,9 +375,11 @@ describe("POST /ops/lab/api/jobs: limits (B-04)", () => {
         now,
       });
     }
-    // A brand-new spec would be a 4th queued slot: refused.
+    // A brand-new spec would be a 4th queued slot: refused, and distinguishable from the daily cap.
     const blocked = await postJob(env, cookie, csrf, { windowId: "feb2025", base: "live", widthTicks: "6500", deposit: "1000" });
     expect(blocked.status).toBe(429);
+    const blockedBody = (await blocked.json()) as { error: string };
+    expect(blockedBody.error).toBe("LAB_JOB_LIMIT_QUEUED");
     // An already-seeded spec resolves instantly to `done` and never touches the queued-slot limit.
     const dedupe = await postJob(env, cookie, csrf, { windowId: "feb2025", base: "live", widthTicks: "2000", deposit: "1000" });
     expect(dedupe.status).toBe(200);

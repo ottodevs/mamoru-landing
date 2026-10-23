@@ -166,6 +166,56 @@ export function labLogic() {
     return idx;
   };
 
+  // ---- "Ejecutar escenario" feedback (otto/mamoru-astro#28 follow-up, Ot 23 Oct: a click that resolved
+  // instantly — the spec already existed — left the button re-enabled and nothing else on screen said
+  // anything). Every piece of text the status card and the chip show is a pure function of a few known values,
+  // so the message choice (including "this was already computed") is unit-tested the same way the client ships
+  // it, not eyeballed in a screenshot. ----
+
+  var MAX_JOBS_PER_DAY = 20;
+  var MAX_QUEUED_JOBS = 3;
+  var BASE_LABEL: Record<string, string> = { live: "Política actual", guard: "Con guarda de caídas" };
+
+  /** "Caída feb 2025 · Política actual · 2.000 ticks · 1.000 USDC" — the requested spec, always visible on the card. */
+  var specWords = function (windowLabel: string, base: string, widthTicks: number, deposit: number): string {
+    return windowLabel + " · " + (BASE_LABEL[base] || base) + " · " + int(widthTicks) + " ticks · " + int(deposit) + " USDC";
+  };
+
+  type JobStatusInput = { status: "queued" | "running" | "done"; elapsedSec: number; variantLabel: string; windowLabel: string; alreadyExisted: boolean };
+  /** The status card's headline for queued/running/done. Never called for `failed` — see jobFailedText. */
+  var jobStatusText = function (input: JobStatusInput): string {
+    if (input.status === "queued") return "En cola · " + input.elapsedSec + " s";
+    if (input.status === "running") return "Calculando con el motor de producción · " + input.elapsedSec + " s";
+    if (input.alreadyExisted) return "Ya estaba calculado: «" + input.variantLabel + "» en " + input.windowLabel + ". Te lo he seleccionado.";
+    return "Listo en " + input.elapsedSec + " s: «" + input.variantLabel + "» añadida a " + input.windowLabel + ".";
+  };
+
+  /** The queued sub-line, with the "still polling" notice appended past 60 s (running has no sub-line). */
+  var jobSubText = function (status: "queued" | "running" | "done", elapsedSec: number): string {
+    if (status !== "queued") return "";
+    var base = "El runner de lady lo recoge en unos segundos.";
+    return elapsedSec > 60 ? base + " El runner no ha respondido todavía." : base;
+  };
+
+  var JOB_ERROR_WORDS: Record<string, string> = {
+    LAB_JOB_LEASE_LOST: "el runner perdió el trabajo; vuelve a intentarlo",
+    LAB_SPEC_INVALID: "el escenario pedido no es válido",
+    LAB_DATASET_MISSING: "esta ventana no tiene datos para esa base",
+    LAB_JOB_TIMEOUT: "se agotó el tiempo del trabajo",
+    LAB_RUN_INVALID: "el runner devolvió un resultado con forma inválida",
+    LAB_RUN_WRITE_FAILED: "no se pudo guardar el resultado; vuelve a intentarlo",
+    LAB_HOLDOUT_DENIED: "esa ventana es parte de la reserva de prueba y no se puede correr aquí",
+    LAB_SERVICE_UNAVAILABLE: "el banco no está disponible ahora mismo",
+    LAB_NETWORK: "sin conexión con el servidor",
+    LAB_CSRF_INVALID: "la sesión caducó: recarga la página",
+  };
+  /** The daily/queued limits get their own sentence with the actual numbers; everything else is "Falló: <word>". */
+  var jobFailedText = function (errorCode: string): string {
+    if (errorCode === "LAB_JOB_LIMIT_DAILY") return "Has llegado a " + int(MAX_JOBS_PER_DAY) + " escenarios hoy";
+    if (errorCode === "LAB_JOB_LIMIT_QUEUED") return "Ya tienes " + int(MAX_QUEUED_JOBS) + " en cola";
+    return "Falló: " + (JOB_ERROR_WORDS[errorCode] || errorCode || "motivo desconocido");
+  };
+
   return {
     WIDTH_MIN: WIDTH_MIN,
     WIDTH_MAX: WIDTH_MAX,
@@ -190,6 +240,12 @@ export function labLogic() {
     windowHeadlineLabel: windowHeadlineLabel,
     strategyNote: strategyNote,
     initialCursorIndex: initialCursorIndex,
+    MAX_JOBS_PER_DAY: MAX_JOBS_PER_DAY,
+    MAX_QUEUED_JOBS: MAX_QUEUED_JOBS,
+    specWords: specWords,
+    jobStatusText: jobStatusText,
+    jobSubText: jobSubText,
+    jobFailedText: jobFailedText,
   };
 }
 
