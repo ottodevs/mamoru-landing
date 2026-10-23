@@ -20,7 +20,8 @@ export function describeSettings(s: EngineSettings): string {
   const guard = s.guard.enabled
     ? `fall guard on (BTC ${pct(s.guard.btc.fallBps)} fall with ${pct(s.guard.btc.volBps)} vol, ETH ${pct(s.guard.eth.fallBps)} with ${pct(s.guard.eth.volBps)})`
     : "fall guard off";
-  return `${cap}; ${depth}; ${guard}.`;
+  const minEntry = s.minEntry ? `; smallest entry at least ${s.minEntry.gasMultiple}x its gas` : "";
+  return `${cap}; ${depth}; ${guard}${minEntry}.`;
 }
 
 const when = (iso: string) => iso.replace("T", " ").slice(0, 16) + " UTC";
@@ -63,6 +64,7 @@ function hiddenFields(env: Env, template: string, s: EngineSettings, canary: str
     h("btc_vol", String(s.guard.btc.volBps)),
     h("eth_fall", String(s.guard.eth.fallBps)),
     h("eth_vol", String(s.guard.eth.volBps)),
+    h("min_entry_gas", s.minEntry ? String(s.minEntry.gasMultiple) : ""),
     h("canary", canary),
     h("reason", reason),
   ].join("");
@@ -102,6 +104,9 @@ function editForm(csrf: string, templates: readonly TemplateRow[], draft: { env:
       ${num("btc_vol", "BTC volatility", s.guard.btc.volBps, BOUNDS.volBps, "bps annualized")}
       ${num("eth_fall", "ETH 24 h fall", s.guard.eth.fallBps, BOUNDS.fallBps, "bps")}
       ${num("eth_vol", "ETH volatility", s.guard.eth.volBps, BOUNDS.volBps, "bps annualized")}
+    </fieldset>
+    <fieldset><legend>Smallest entry</legend>
+      ${num("min_entry_gas", "At least", s.minEntry?.gasMultiple, BOUNDS.gasMultiple, "times its swap and mint gas, blank for only the 0.10 USDC minimum")}
     </fieldset>
     <label>Why <input name="reason" required maxlength="500" value="${esc(draft.reason)}" /></label>
     <button type="submit">Apply</button>
