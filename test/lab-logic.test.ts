@@ -116,6 +116,9 @@ describe("lab-logic.ts (embedded client logic, same function the server-side bou
 
   test("windowShortLabel: regime word + short month (no dot) + 4-digit year", () => {
     expect(LAB.windowShortLabel("crash", "2025-01-29T23:55:47.000Z")).toBe("Caída ene 2025");
+    // feb2025 starts on 29 Jan: with its end, the middle of the window names February.
+    expect(LAB.windowShortLabel("crash", "2025-01-29T23:55:47.000Z", "2025-02-05T23:55:47.000Z")).toBe("Caída feb 2025");
+    expect(LAB.windowHeadlineLabel("crash", "2025-01-29T23:55:47.000Z", "2025-02-05T23:55:47.000Z")).toBe("Caída de febrero 2025");
     expect(LAB.windowShortLabel("crash", "2025-02-02T00:00:00.000Z")).toBe("Caída feb 2025");
     expect(LAB.windowShortLabel("rally", "2024-12-01T00:00:00.000Z")).toBe("Subida dic 2024");
     expect(LAB.windowShortLabel("calm", "2026-09-01T00:00:00.000Z")).toBe("Calma sep 2026");

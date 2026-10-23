@@ -755,7 +755,7 @@ export function opsClientScript(nonce: string): string {
       state.windows.forEach(function (w, i) {
         var b = document.createElement("button");
         b.type = "button";
-        b.textContent = LAB.windowShortLabel(w.regime, w.from);
+        b.textContent = LAB.windowShortLabel(w.regime, w.from, w.to);
         b.title = w.label || w.windowId;
         b.setAttribute("aria-pressed", String(i === state.w));
         b.onclick = function () { pickWindow(i); };
@@ -807,7 +807,7 @@ export function opsClientScript(nonce: string): string {
       var w = windowOf();
       if (!r || !w) { $("lab-ass").innerHTML = ""; return; }
       var rows = [
-        ["Ventana", LAB.windowShortLabel(w.regime, w.from)],
+        ["Ventana", LAB.windowShortLabel(w.regime, w.from, w.to)],
         ["Descripción", w.label || w.windowId],
         ["Depósito", LAB.money(r.deposit) + " USDC"],
         ["Fechas", dF.format(new Date(w.from)) + " a " + dF.format(new Date(w.to))],
@@ -828,7 +828,7 @@ export function opsClientScript(nonce: string): string {
       var head = $("lab-headline");
       if (!r || !w) { head.textContent = ""; return; }
       var vs = r.metrics.vsHodl;
-      var txt = esc(LAB.windowHeadlineLabel(w.regime, w.from)) + ": " + esc(r.variantLabel.toLowerCase()) + " termina <b>" + esc(LAB.money(Math.abs(vs))) + (vs >= 0 ? " por encima" : " por debajo") + "</b> de mantener la mezcla";
+      var txt = esc(LAB.windowHeadlineLabel(w.regime, w.from, w.to)) + ": " + esc(r.variantLabel.toLowerCase()) + " termina <b>" + esc(LAB.money(Math.abs(vs))) + (vs >= 0 ? " por encima" : " por debajo") + "</b> de mantener la mezcla";
       var base = baselineSummary();
       if (base && base.resultHash !== r.resultHash && LAB.canCompareToBaseline(r, base)) {
         var d = r.metrics.end - base.metrics.end;
@@ -1094,8 +1094,8 @@ export function opsClientScript(nonce: string): string {
         })
         .join("");
       box.innerHTML =
-        '<div class="lab-tbl"><table><thead><tr><th title="' + esc(w.label || w.windowId) + '">' + esc(LAB.windowShortLabel(w.regime, w.from)) + "</th><th>Final</th><th>vs mantener</th><th>Comisiones</th><th>Gas</th><th>Operaciones</th><th>Peor caída</th></tr></thead><tbody>" + rows + "</tbody></table></div>" +
-        '<div class="lab-tbl" style="margin-top:18px"><table><thead><tr><th>Frente a mantener, por ventana</th>' + state.windows.map(function (win) { return '<th title="' + esc(win.label || win.windowId) + '">' + esc(LAB.windowShortLabel(win.regime, win.from)) + "</th>"; }).join("") + "</tr></thead><tbody>" + mat + "</tbody></table></div>" +
+        '<div class="lab-tbl"><table><thead><tr><th title="' + esc(w.label || w.windowId) + '">' + esc(LAB.windowShortLabel(w.regime, w.from, w.to)) + "</th><th>Final</th><th>vs mantener</th><th>Comisiones</th><th>Gas</th><th>Operaciones</th><th>Peor caída</th></tr></thead><tbody>" + rows + "</tbody></table></div>" +
+        '<div class="lab-tbl" style="margin-top:18px"><table><thead><tr><th>Frente a mantener, por ventana</th>' + state.windows.map(function (win) { return '<th title="' + esc(win.label || win.windowId) + '">' + esc(LAB.windowShortLabel(win.regime, win.from, win.to)) + "</th>"; }).join("") + "</tr></thead><tbody>" + mat + "</tbody></table></div>" +
         '<p class="lab-note" style="margin-top:8px">Una estrategia que gana en una ventana y pierde en otra no está validada: mira todas las ventanas a la vez.</p>';
     }
     function renderDiag() {
