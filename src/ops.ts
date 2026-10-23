@@ -5,6 +5,7 @@ import type { Entry } from "./list";
 import { consoleClientScript, themeHeadScript } from "./console-client";
 import { CONSOLE_STYLE } from "./console-style";
 import { motionHeadScript, opsClientScript } from "./ops-client";
+import { LAB_STYLE } from "./lab-style";
 import { esc, sameSecret } from "./text";
 
 const COOKIE = "mamoru_list";
@@ -188,7 +189,7 @@ export const FLASH_COPY: Record<Exclude<Flash, "">, string> = {
   bad: "That did not go through. Try again.",
 };
 
-export type SectionId = "overview" | "yield" | "accounts" | "engine" | "costs" | "more" | "mails" | "infra" | "experiments" | "settings" | "functions" | "archive" | "gate";
+export type SectionId = "overview" | "yield" | "accounts" | "engine" | "costs" | "more" | "mails" | "infra" | "experiments" | "settings" | "functions" | "archive" | "lab" | "gate";
 
 export type OpsSection = {
   id: string;
@@ -212,6 +213,9 @@ export const OPS_SECTIONS: readonly OpsSection[] = [
   { id: "costs", label: "Costs", href: "/ops/costs", tab: "Costs" },
   { id: "mails", label: "Waitlist and mail", href: "/ops/mails", group: "Grow" },
   { id: "experiments", label: "Experiments", href: "/ops/experiments", group: "Grow" },
+  // otto/mamoru-astro#28 (spec 008 phase 1): the strategy bench. Grouped with Experiments, not a primary tab —
+  // keeps the phone tab bar at five entries (otto/mamoru-astro#24).
+  { id: "lab", label: "Lab", href: "/ops/lab", group: "Grow" },
   { id: "settings", label: "Engine settings", href: "/ops/settings", group: "Control" },
   { id: "functions", label: "Functions", href: "/ops/functions", group: "Control" },
   { id: "infra", label: "Funding", href: "/ops/infra", group: "Control" },
@@ -738,7 +742,7 @@ export function renderDocument(
   <link rel="icon" href="/mark-two-stones.png" type="image/png" />
   <title>${esc(view.title)}${TITLE_SUFFIX}</title>
   ${themeHeadScript(opts.nonce)}
-  <style>${OPS_STYLE}${CONSOLE_STYLE}</style>
+  <style>${OPS_STYLE}${CONSOLE_STYLE}${LAB_STYLE}</style>
   ${motionHeadScript(opts.nonce)}
 </head>
 <body>
