@@ -74,32 +74,46 @@ describe("lab-logic.ts (embedded client logic, same function the server-side bou
     expect(LAB.canCompareToBaseline(run, { ...baseline, simVersion: "sim-2" })).toBe(false);
   });
 
-  test("compareMatrix: one row per (base, widthTicks) at deposit 1000, one column per window", () => {
+  // GPT-6 Sol review (otto/mamoru-astro#28): base/widthTicks live under `spec` in the real screen-API shape
+  // (LabRunSummary), not at the top level — this fixture matches that shape exactly, so a regression back to
+  // reading `run.base`/`run.widthTicks` directly makes every row collapse into one "undefined|undefined" key.
+  test("compareMatrix: one row per (base, widthTicks) at deposit 1000, one column per window — reads base/widthTicks from spec", () => {
     const windows = [
       {
         windowId: "feb2025",
         label: "Feb 2025",
         runs: [
-          { base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "Política actual", metrics: { vsHodl: -16.44 } },
-          { base: "live", widthTicks: 4000, deposit: 1000, variantLabel: "Rango ×2", metrics: { vsHodl: -3.26 } },
+          { spec: { base: "live", widthTicks: 2000 }, deposit: 1000, variantLabel: "Política actual", metrics: { vsHodl: -16.44 } },
+          { spec: { base: "live", widthTicks: 4000 }, deposit: 1000, variantLabel: "Rango ×2", metrics: { vsHodl: -3.26 } },
+          { spec: { base: "guard", widthTicks: 2000 }, deposit: 1000, variantLabel: "Con guarda de caídas", metrics: { vsHodl: -12.37 } },
           // a non-1000 deposit run must be excluded from the matrix
-          { base: "live", widthTicks: 2000, deposit: 5000, variantLabel: "Política actual", metrics: { vsHodl: -80 } },
+          { spec: { base: "live", widthTicks: 2000 }, deposit: 5000, variantLabel: "Política actual", metrics: { vsHodl: -80 } },
         ],
       },
       {
         windowId: "sep2026",
         label: "Sep 2026",
-        runs: [{ base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "Política actual", metrics: { vsHodl: 0.1 } }],
+        runs: [
+          { spec: { base: "live", widthTicks: 2000 }, deposit: 1000, variantLabel: "Política actual", metrics: { vsHodl: 0.1 } },
+          { spec: { base: "guard", widthTicks: 2000 }, deposit: 1000, variantLabel: "Con guarda de caídas", metrics: { vsHodl: 0.4 } },
+        ],
       },
     ];
     const rows = LAB.compareMatrix(windows as any);
-    expect(rows.length).toBe(2);
+    // Three distinct strategies (live/2000, live/4000, guard/2000), never collapsed into one.
+    expect(rows.length).toBe(3);
     const live2000 = rows.find((r: any) => r.base === "live" && r.widthTicks === 2000)!;
+    expect(live2000).toBeTruthy();
     expect(live2000.byWindow.feb2025).toBe(-16.44);
     expect(live2000.byWindow.sep2026).toBe(0.1);
     const live4000 = rows.find((r: any) => r.base === "live" && r.widthTicks === 4000)!;
+    expect(live4000).toBeTruthy();
     expect(live4000.byWindow.feb2025).toBe(-3.26);
     expect(live4000.byWindow.sep2026).toBeUndefined();
+    const guard2000 = rows.find((r: any) => r.base === "guard" && r.widthTicks === 2000)!;
+    expect(guard2000).toBeTruthy();
+    expect(guard2000.byWindow.feb2025).toBe(-12.37);
+    expect(guard2000.byWindow.sep2026).toBe(0.4);
   });
 
   test("pollDelayMs grows then settles, so a fast job is noticed quickly and a slow one does not spam the API", () => {

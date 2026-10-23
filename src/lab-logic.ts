@@ -90,7 +90,10 @@ export function labLogic() {
     return run.spec.windowId === baseline.spec.windowId && run.deposit === baseline.deposit && run.simVersion === baseline.simVersion;
   };
 
-  type CompareRun = { base: string; widthTicks: number; deposit: number; variantLabel: string; metrics: { vsHodl: number } };
+  // base/widthTicks live under `run.spec` (the B-02 RunResult shape the screen API actually returns), not at
+  // the top level — reading `run.base`/`run.widthTicks` directly made every strategy collapse into the same
+  // "undefined|undefined" row (GPT-6 Sol review, otto/mamoru-astro#28).
+  type CompareRun = { spec: { base: string; widthTicks: number }; deposit: number; variantLabel: string; metrics: { vsHodl: number } };
   type CompareWindow = { windowId: string; label: string; runs: CompareRun[] };
   type CompareRow = { base: string; widthTicks: number; variantLabel: string; byWindow: Record<string, number | null> };
   /** B-07 Compare tab: strategies (by base+width, deposit 1000) as rows, windows as columns, vsHodl per cell. */
@@ -101,12 +104,12 @@ export function labLogic() {
       var runs = windows[w].runs.filter(function (r) { return r.deposit === 1000; });
       for (var r = 0; r < runs.length; r++) {
         var run = runs[r];
-        var key = run.base + "|" + run.widthTicks;
+        var key = run.spec.base + "|" + run.spec.widthTicks;
         var idx = seen[key];
         if (idx === undefined) {
           idx = rows.length;
           seen[key] = idx;
-          rows.push({ base: run.base, widthTicks: run.widthTicks, variantLabel: run.variantLabel, byWindow: {} });
+          rows.push({ base: run.spec.base, widthTicks: run.spec.widthTicks, variantLabel: run.variantLabel, byWindow: {} });
         }
         rows[idx].byWindow[windows[w].windowId] = run.metrics.vsHodl;
       }

@@ -300,6 +300,9 @@ export async function countActiveJobs(db: D1Db, requester: string): Promise<numb
   return row?.n ?? 0;
 }
 
+/** Direct, unconditional insert — used by tests to seed job rows. The screen API never calls this: job
+ * creation always goes through the atomic, limit-checked inserts below (GPT-6 Sol review, otto/mamoru-astro#28:
+ * a read-then-insert of the daily/queued counts races two concurrent requests past the limit). */
 export async function insertJob(
   db: D1Db,
   opts: { id: string; requester: string; spec: LabSpec; specKey: string; status: "queued" | "done"; resultHash: string | null; now: string },
@@ -311,6 +314,72 @@ export async function insertJob(
     )
     .bind(opts.id, opts.requester, JSON.stringify(opts.spec), opts.specKey, opts.status, opts.resultHash, opts.now, opts.now) as WriteStatement;
   await stmt.run();
+}
+
+/**
+ * B-04: a spec that already has a finished run (`lab_runs`) finishes the job at once. The only race here is
+ * the daily cap, so the count check and the insert are one statement; returns `false` (nothing written) only
+ * when the requester is already at the daily limit.
+ */
+export async function insertDoneJobIfUnderLimit(
+  db: D1Db,
+  opts: { id: string; requester: string; spec: LabSpec; specKey: string; resultHash: string; now: string; sinceIso: string; maxPerDay: number },
+): Promise<boolean> {
+  const stmt = db
+    .prepare(
+      `INSERT INTO lab_jobs (id, kind, origin, requester, spec_json, spec_key, status, lease_id, lease_until, attempts, result_hash, error_code, created_at, updated_at)
+       SELECT ?, 'bench', 'ops', ?, ?, ?, 'done', NULL, NULL, 0, ?, NULL, ?, ?
+       WHERE (SELECT COUNT(*) FROM lab_jobs WHERE requester = ? AND created_at >= ?) < ?`,
+    )
+    .bind(opts.id, opts.requester, JSON.stringify(opts.spec), opts.specKey, opts.resultHash, opts.now, opts.now, opts.requester, opts.sinceIso, opts.maxPerDay) as WriteStatement;
+  const res = await stmt.run();
+  return (res.meta?.changes ?? res.changes ?? 0) === 1;
+}
+
+/**
+ * B-04: inserts a new `queued` job only if, in one statement: no queued/running job already shares this
+ * `spec_key` (dedupe against work already in flight, not only finished runs — a second "Run scenario" for the
+ * same spec must never double the work), the requester is under the daily cap, and under the queued-slot cap.
+ * `false` means none of that is true at the moment of the statement — the caller reads `activeJobBySpecKey` to
+ * tell "a duplicate is already in flight" from "a limit was hit" for the response, never to decide the write.
+ */
+export async function insertQueuedJobIfEligible(
+  db: D1Db,
+  opts: { id: string; requester: string; spec: LabSpec; specKey: string; now: string; sinceIso: string; maxPerDay: number; maxActive: number },
+): Promise<boolean> {
+  const stmt = db
+    .prepare(
+      `INSERT INTO lab_jobs (id, kind, origin, requester, spec_json, spec_key, status, lease_id, lease_until, attempts, result_hash, error_code, created_at, updated_at)
+       SELECT ?, 'bench', 'ops', ?, ?, ?, 'queued', NULL, NULL, 0, NULL, NULL, ?, ?
+       WHERE NOT EXISTS (SELECT 1 FROM lab_jobs WHERE spec_key = ? AND status IN ('queued', 'running'))
+         AND (SELECT COUNT(*) FROM lab_jobs WHERE requester = ? AND created_at >= ?) < ?
+         AND (SELECT COUNT(*) FROM lab_jobs WHERE requester = ? AND status IN ('queued', 'running')) < ?`,
+    )
+    .bind(
+      opts.id,
+      opts.requester,
+      JSON.stringify(opts.spec),
+      opts.specKey,
+      opts.now,
+      opts.now,
+      opts.specKey,
+      opts.requester,
+      opts.sinceIso,
+      opts.maxPerDay,
+      opts.requester,
+      opts.maxActive,
+    ) as WriteStatement;
+  const res = await stmt.run();
+  return (res.meta?.changes ?? res.changes ?? 0) === 1;
+}
+
+/** The oldest queued/running job already covering this spec_key, if any (B-04 dedupe against in-flight work). */
+export async function activeJobBySpecKey(db: D1Db, key: string): Promise<JobRow | null> {
+  const row = await db
+    .prepare(`SELECT ${JOB_COLUMNS} FROM lab_jobs WHERE spec_key = ? AND status IN ('queued', 'running') ORDER BY created_at ASC LIMIT 1`)
+    .bind(key)
+    .first<LabJobRaw>();
+  return row ? toJob(row) : null;
 }
 
 /** AL-02: jobs stuck `running` past their lease with no retries left are given up on. Returns rows changed. */
@@ -371,19 +440,31 @@ export async function renewLease(db: D1Db, id: string, leaseId: string, nowEpoch
   return (res.meta?.changes ?? res.changes ?? 0) === 1;
 }
 
-/** AL-02a: fenced on `lease_id` — a reclaimed job always carries a fresh lease, so a stale runner's write never matches. */
-export async function finishJobDone(db: D1Db, id: string, leaseId: string, resultHash: string, nowIso: string): Promise<boolean> {
+/**
+ * AL-02a: fenced on `lease_id` — a reclaimed job always carries a fresh lease, so a stale runner's write never
+ * matches — AND on `status = 'running' AND lease_until >= now` (GPT-6 Sol review, otto/mamoru-astro#28): without
+ * the status check a job already `done` could be flipped back to `failed` by a late duplicate request; without
+ * the `lease_until` check a runner whose lease has technically expired, but that nobody has reclaimed yet, could
+ * still finish the job — both are refused here, not just an identity match on `lease_id`.
+ */
+export async function finishJobDone(db: D1Db, id: string, leaseId: string, resultHash: string, nowEpoch: number, nowIso: string): Promise<boolean> {
   const stmt = db
-    .prepare(`UPDATE lab_jobs SET status = 'done', result_hash = ?, error_code = NULL, updated_at = ? WHERE id = ? AND lease_id = ?`)
-    .bind(resultHash, nowIso, id, leaseId) as WriteStatement;
+    .prepare(
+      `UPDATE lab_jobs SET status = 'done', result_hash = ?, error_code = NULL, updated_at = ?
+       WHERE id = ? AND lease_id = ? AND status = 'running' AND lease_until IS NOT NULL AND lease_until >= ?`,
+    )
+    .bind(resultHash, nowIso, id, leaseId, nowEpoch) as WriteStatement;
   const res = await stmt.run();
   return (res.meta?.changes ?? res.changes ?? 0) === 1;
 }
 
-export async function finishJobFailed(db: D1Db, id: string, leaseId: string, errorCode: string, nowIso: string): Promise<boolean> {
+export async function finishJobFailed(db: D1Db, id: string, leaseId: string, errorCode: string, nowEpoch: number, nowIso: string): Promise<boolean> {
   const stmt = db
-    .prepare(`UPDATE lab_jobs SET status = 'failed', error_code = ?, updated_at = ? WHERE id = ? AND lease_id = ?`)
-    .bind(errorCode, nowIso, id, leaseId) as WriteStatement;
+    .prepare(
+      `UPDATE lab_jobs SET status = 'failed', error_code = ?, updated_at = ?
+       WHERE id = ? AND lease_id = ? AND status = 'running' AND lease_until IS NOT NULL AND lease_until >= ?`,
+    )
+    .bind(errorCode, nowIso, id, leaseId, nowEpoch) as WriteStatement;
   const res = await stmt.run();
   return (res.meta?.changes ?? res.changes ?? 0) === 1;
 }

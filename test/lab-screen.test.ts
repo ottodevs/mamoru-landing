@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import worker, { type Env } from "../src/worker";
 import { openSession, sealSession } from "../src/ops";
 import { labDb } from "./lab-fixture";
-import { countJobsToday, insertJob, jobById } from "../src/lab-store";
+import { activeJobBySpecKey, countJobsToday, insertDoneJobIfUnderLimit, insertJob, insertQueuedJobIfEligible, jobById } from "../src/lab-store";
 import { MAX_JOBS_PER_DAY, MAX_QUEUED_JOBS } from "../src/lab-spec";
 
 function opsEnv(db: ReturnType<typeof labDb>): Env {
@@ -147,6 +147,103 @@ describe("POST /ops/lab/api/jobs: dedupe by spec_key (B-04, LAB-AL-09)", () => {
     const body = (await res.json()) as { job: { status: string; resultHash: string | null } };
     expect(body.job.status).toBe("queued");
     expect(body.job.resultHash).toBeNull();
+  });
+
+  // GPT-6 Sol review (otto/mamoru-astro#28): dedupe must also cover a spec that is already queued or running —
+  // not only one that already has a finished run — or two requests for the exact same spec queue the work twice.
+  test("a spec already queued (no finished run yet) returns that same job instead of creating a second one", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const { cookie, csrf } = await sessionCookie();
+    const spec = { windowId: "feb2025", base: "live" as const, widthTicks: 6500, deposit: 1000 };
+    const key = "feb2025|live|6500|1000";
+    await insertJob(db, { id: "already-queued", requester: "someone-else@example.com", spec, specKey: key, status: "queued", resultHash: null, now: new Date().toISOString() });
+
+    const res = await postJob(env, cookie, csrf, { windowId: "feb2025", base: "live", widthTicks: "6500", deposit: "1000" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { job: { id: string; status: string } };
+    expect(body.job.id).toBe("already-queued");
+    expect(body.job.status).toBe("queued");
+
+    const { results } = await db.prepare("SELECT id FROM lab_jobs WHERE spec_key = ?").bind(key).all();
+    expect(results.length).toBe(1); // no duplicate row was inserted
+  });
+
+  test("a spec already running (claimed, not finished) also returns that job instead of a new one", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const { cookie, csrf } = await sessionCookie();
+    const spec = { windowId: "feb2025", base: "guard" as const, widthTicks: 4500, deposit: 1000 };
+    const key = "feb2025|guard|4500|1000";
+    await insertJob(db, { id: "already-running", requester: "someone-else@example.com", spec, specKey: key, status: "queued", resultHash: null, now: new Date().toISOString() });
+    db.raw.query("UPDATE lab_jobs SET status='running', lease_id='x', lease_until=? WHERE id='already-running'").run(Math.floor(Date.now() / 1000) + 120);
+
+    const res = await postJob(env, cookie, csrf, { windowId: "feb2025", base: "guard", widthTicks: "4500", deposit: "1000" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { job: { id: string; status: string } };
+    expect(body.job.id).toBe("already-running");
+    expect(body.job.status).toBe("running");
+  });
+});
+
+// GPT-6 Sol review (otto/mamoru-astro#28): the limits and the in-flight dedupe must be enforced by the write
+// itself (one conditional INSERT ... SELECT ... WHERE), not by a read-then-insert that two concurrent requests
+// could both pass. These exercise the atomic store functions directly.
+describe("lab-store.ts: insertQueuedJobIfEligible / insertDoneJobIfUnderLimit are atomic, not read-then-insert", () => {
+  const spec = { windowId: "feb2025", base: "live" as const, widthTicks: 7000, deposit: 1000 };
+  const key = "feb2025|live|7000|1000";
+
+  test("insertQueuedJobIfEligible refuses when a queued/running job already shares the spec_key, inserting nothing", async () => {
+    const db = labDb();
+    const now = new Date().toISOString();
+    await insertJob(db, { id: "existing", requester: "r", spec, specKey: key, status: "queued", resultHash: null, now });
+    const ok = await insertQueuedJobIfEligible(db, { id: "new-one", requester: "r", spec, specKey: key, now, sinceIso: now, maxPerDay: 20, maxActive: 3 });
+    expect(ok).toBe(false);
+    expect(await jobById(db, "new-one")).toBeNull();
+  });
+
+  test("insertQueuedJobIfEligible refuses at the daily cap and at the active-slot cap, in one statement each", async () => {
+    const db = labDb();
+    const now = new Date().toISOString();
+    const underDaily = await insertQueuedJobIfEligible(db, { id: "day-ok", requester: "r", spec, specKey: key, now, sinceIso: now, maxPerDay: 1, maxActive: 3 });
+    expect(underDaily).toBe(true);
+    const overDaily = await insertQueuedJobIfEligible(db, { id: "day-over", requester: "r", spec: { ...spec, widthTicks: 7500 }, specKey: "feb2025|live|7500|1000", now, sinceIso: now, maxPerDay: 1, maxActive: 3 });
+    expect(overDaily).toBe(false);
+    expect(await jobById(db, "day-over")).toBeNull();
+
+    const db2 = labDb();
+    await insertJob(db2, { id: "slot-1", requester: "r", spec: { ...spec, widthTicks: 500 }, specKey: "feb2025|live|500|1000", status: "queued", resultHash: null, now });
+    const overActive = await insertQueuedJobIfEligible(db2, { id: "slot-2", requester: "r", spec, specKey: key, now, sinceIso: now, maxPerDay: 20, maxActive: 1 });
+    expect(overActive).toBe(false);
+    expect(await jobById(db2, "slot-2")).toBeNull();
+  });
+
+  test("insertQueuedJobIfEligible succeeds once eligible", async () => {
+    const db = labDb();
+    const now = new Date().toISOString();
+    const ok = await insertQueuedJobIfEligible(db, { id: "fresh", requester: "r", spec, specKey: key, now, sinceIso: now, maxPerDay: 20, maxActive: 3 });
+    expect(ok).toBe(true);
+    const job = await jobById(db, "fresh");
+    expect(job?.status).toBe("queued");
+    expect(job?.specKey).toBe(key);
+  });
+
+  test("insertDoneJobIfUnderLimit refuses at the daily cap and inserts nothing", async () => {
+    const db = labDb();
+    const now = new Date().toISOString();
+    await insertJob(db, { id: "day-1", requester: "r", spec, specKey: key, status: "done", resultHash: "x", now });
+    const ok = await insertDoneJobIfUnderLimit(db, { id: "day-2", requester: "r", spec, specKey: key, resultHash: "hash-feb-live-2000-1000", now, sinceIso: now, maxPerDay: 1 });
+    expect(ok).toBe(false);
+    expect(await jobById(db, "day-2")).toBeNull();
+  });
+
+  test("activeJobBySpecKey finds a queued or running job for the spec, null otherwise", async () => {
+    const db = labDb({ seed: false });
+    expect(await activeJobBySpecKey(db, key)).toBeNull();
+    const now = new Date().toISOString();
+    await insertJob(db, { id: "a1", requester: "r", spec, specKey: key, status: "queued", resultHash: null, now });
+    const found = await activeJobBySpecKey(db, key);
+    expect(found?.id).toBe("a1");
   });
 });
 

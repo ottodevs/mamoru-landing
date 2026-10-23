@@ -16,11 +16,11 @@ import {
   validateSpec,
 } from "./lab-spec";
 import {
-  countActiveJobs,
-  countJobsToday,
+  activeJobBySpecKey,
   findRunBySpecKey,
   hasWindow,
-  insertJob,
+  insertDoneJobIfUnderLimit,
+  insertQueuedJobIfEligible,
   jobById,
   readCatalog,
   runByHash,
@@ -145,8 +145,13 @@ export async function handleLabJobStatus(db: D1Db | undefined, id: string): Prom
 }
 
 /**
- * B-04: daily limit checked on every request (including a dedupe hit, since it is still usage); the queued-slot
- * limit only when a new `queued` row would actually be inserted — a dedupe never occupies a slot.
+ * B-04: daily limit applies on every request (including a dedupe-to-finished-run hit, since it is still
+ * usage); the queued-slot limit only when a new `queued` row would actually be inserted — a dedupe never
+ * occupies a slot. Every write here is one conditional `INSERT ... SELECT ... WHERE` statement (GPT-6 Sol
+ * review, otto/mamoru-astro#28): a separate read-then-insert would let two concurrent requests both pass the
+ * count check and both insert, overshooting the limits, and would miss a spec whose job is already queued or
+ * running (not yet a finished run) — the dedupe must cover in-flight work too, or two requests for the exact
+ * same spec queue the work twice.
  */
 export async function handleLabCreateJob(db: D1Db | undefined, requester: string, input: unknown): Promise<Response> {
   if (!db) return json({ error: "LAB_SERVICE_UNAVAILABLE" }, 503);
@@ -156,25 +161,47 @@ export async function handleLabCreateJob(db: D1Db | undefined, requester: string
   if (!(await hasWindow(db, spec.windowId))) return json({ error: LAB_SPEC_INVALID }, 400);
   if (!(await windowHasBase(db, spec.windowId, spec.base))) return json({ error: LAB_DATASET_MISSING }, 400);
 
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  if ((await countJobsToday(db, requester, since)) >= MAX_JOBS_PER_DAY) {
-    return json({ error: "LAB_JOB_LIMIT" }, 429);
-  }
   const key = specKey(spec);
-  const existing = await findRunBySpecKey(db, key);
-  if (!existing && (await countActiveJobs(db, requester)) >= MAX_QUEUED_JOBS) {
-    return json({ error: "LAB_JOB_LIMIT" }, 429);
-  }
-  const id = crypto.randomUUID();
+  const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const nowIso = new Date().toISOString();
-  await insertJob(db, {
+  const existing = await findRunBySpecKey(db, key);
+
+  if (existing) {
+    const id = crypto.randomUUID();
+    const inserted = await insertDoneJobIfUnderLimit(db, {
+      id,
+      requester,
+      spec,
+      specKey: key,
+      resultHash: existing.resultHash,
+      now: nowIso,
+      sinceIso,
+      maxPerDay: MAX_JOBS_PER_DAY,
+    });
+    if (!inserted) return json({ error: "LAB_JOB_LIMIT" }, 429);
+    return json({ job: { id, status: "done", resultHash: existing.resultHash, spec } }, 200);
+  }
+
+  const id = crypto.randomUUID();
+  const inserted = await insertQueuedJobIfEligible(db, {
     id,
     requester,
     spec,
     specKey: key,
-    status: existing ? "done" : "queued",
-    resultHash: existing?.resultHash ?? null,
     now: nowIso,
+    sinceIso,
+    maxPerDay: MAX_JOBS_PER_DAY,
+    maxActive: MAX_QUEUED_JOBS,
   });
-  return json({ job: { id, status: existing ? "done" : "queued", resultHash: existing?.resultHash ?? null, spec } }, existing ? 200 : 201);
+  if (inserted) {
+    return json({ job: { id, status: "queued", resultHash: null, spec } }, 201);
+  }
+  // The conditional insert refused: either a queued/running job already covers this exact spec (dedupe against
+  // in-flight work), or a limit was hit. This read only shapes the response — the write above already decided
+  // the outcome atomically, so a benign race here could at worst show a stale status, never double-write.
+  const active = await activeJobBySpecKey(db, key);
+  if (active) {
+    return json({ job: { id: active.id, status: active.status, resultHash: active.resultHash, spec: active.spec } }, 200);
+  }
+  return json({ error: "LAB_JOB_LIMIT" }, 429);
 }
