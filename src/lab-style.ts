@@ -38,7 +38,11 @@ export const LAB_STYLE = `
   --band: rgba(47, 167, 124, .15); --bandedge: rgba(47, 167, 124, .5); --gain: #2fa77c; --loss: #d06262; --sel: rgba(47, 167, 124, .1);
 }
 .lab-root [hidden] { display: none !important; }
-.lab-root button, .lab-root input, .lab-root select { font: inherit; color: inherit; }
+/* :where() keeps this at the bare tag-selector specificity the prototype relied on (button,input,select{...}
+   at its CSS root) — without it, scoping under .lab-root would outrank single-class rules like .lab-run and
+   silently override their color (otto/mamoru-astro#28 visual check: this exact bug hid the "Ejecutar
+   escenario" button's text, ink-on-ink). */
+:where(.lab-root) button, :where(.lab-root) input, :where(.lab-root) select { font: inherit; color: inherit; }
 .lab-root :focus-visible { outline: 2px solid var(--mamoru); outline-offset: 2px; }
 .lab-mono { font-family: var(--mono); }
 .lab-num { font-variant-numeric: tabular-nums; }
