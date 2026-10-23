@@ -142,7 +142,9 @@ export const LAB_STYLE = `
 .lab-toggle input { accent-color: var(--mamoru); width: 18px; height: 18px; }
 .lab-run { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); border-radius: var(--r); padding: 10px 12px; cursor: pointer; font-size: .92rem; width: 100%; }
 .lab-run:active { transform: translateY(1px); }
-.lab-run:disabled { opacity: .55; cursor: default; }
+/* Busy or unavailable stays readable: ink on paper at reduced strength (Ot 23-oct: feedback must be visible). The doubled class outranks the console's generic button:disabled. */
+.lab-run.lab-run:disabled { background: var(--ink); color: var(--paper); border-color: var(--ink); opacity: .72; cursor: progress; }
+.lab-run.lab-run:disabled:not([aria-busy="true"]) { cursor: not-allowed; opacity: .45; }
 .lab-note { font-size: .8rem; color: var(--stone); }
 .lab-later { opacity: .55; }
 .lab-later label::after { content: "más adelante"; font-family: var(--mono); font-size: .64rem; color: var(--stone); border: 1px solid var(--wash); border-radius: 999px; padding: 0 6px; margin-left: 6px; }
