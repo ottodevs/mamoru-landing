@@ -14,19 +14,31 @@ import {
   MAX_QUEUED_JOBS,
   specKey,
   validateSpec,
+  validateQuestion,
+  threadTitleFromQuestion,
 } from "./lab-spec";
 import {
   activeJobBySpecKey,
+  agentJobsByThread,
   countJobsToday,
   findRunBySpecKey,
   hasWindow,
   insertDoneJobIfUnderLimit,
+  insertQueuedAgentJobIfEligible,
   insertQueuedJobIfEligible,
+  insertThread,
   jobById,
+  loadShadowPriceTable,
   readCatalog,
   runByHash,
   runSummariesForWindow,
+  runSummaryByHash,
+  shadowCostUsd,
+  threadById,
+  threadsByOwner,
+  touchThread,
   windowHasBase,
+  type AgentJobRow,
 } from "./lab-store";
 import { esc } from "./text";
 import type { SectionView } from "./ops";
@@ -106,8 +118,21 @@ function labShell(csrf: string): string {
         <button type="button" role="tab" aria-selected="false" data-lab-r="preguntar">Preguntar al Lab</button>
       </div>
       <section id="lab-r-probar" style="display:grid;gap:16px"></section>
-      <section id="lab-r-preguntar" class="lab-chat" hidden>
-        <p class="lab-note">El agente llega en la fase 2 de este proyecto (spec 008). Este panel solo muestra el aviso por ahora: todavía no se puede preguntar nada aquí.</p>
+      <!-- otto/mamoru-astro#30 (spec 008 phase 2, AL-50..53): a static skeleton, same discipline as the Probar
+           panel above -- every thread, message and answer comes from the screen API at runtime, this Worker
+           never computes a verdict, a claim's value or an answer's shape. -->
+      <section id="lab-r-preguntar" class="lab-chat" hidden aria-label="Preguntar al Lab">
+        <div class="lab-ask-head">
+          <select id="lab-ask-thread" class="lab-ask-threadsel" aria-label="Hilo"></select>
+          <button type="button" id="lab-ask-new" class="lab-ask-new">Nuevo hilo</button>
+        </div>
+        <div class="lab-ask-messages" id="lab-ask-messages"></div>
+        <div class="lab-ask-suggestions" id="lab-ask-suggestions"></div>
+        <p class="lab-ask-err" id="lab-ask-err" role="alert"></p>
+        <form class="lab-ask-form" id="lab-ask-form">
+          <textarea id="lab-ask-input" class="lab-ask-input" maxlength="600" rows="1" placeholder="Pregunta algo sobre el banco…" aria-label="Pregunta para el Lab"></textarea>
+          <button type="submit" id="lab-ask-send" class="lab-ask-send">Enviar</button>
+        </form>
       </section>
     </aside>
   </div>
@@ -219,4 +244,115 @@ export async function handleLabCreateJob(db: D1Db | undefined, requester: string
     return json({ error: "LAB_JOB_LIMIT_DAILY" }, 429);
   }
   return json({ error: "LAB_JOB_LIMIT_QUEUED" }, 429);
+}
+
+// ---- "Preguntar al Lab" (otto/mamoru-astro#30, spec 008 phase 2, AL-50): threads and agent jobs ----
+
+export async function handleLabThreads(db: D1Db | undefined, owner: string): Promise<Response> {
+  if (!db) return json({ threads: [] });
+  return json({ threads: await threadsByOwner(db, owner) });
+}
+
+/** Every `runId` a thread's answers cite (claim/verdict runs, verdict `against` when it is another run, chart
+ * runIds), resolved once here so the client never has to chase a second round trip per block to render a claim
+ * chip's label or a verdict's sentence. */
+function collectCitedRunIds(jobs: AgentJobRow[]): Set<string> {
+  const ids = new Set<string>();
+  for (const job of jobs) {
+    const answer = job.answer as { blocks?: unknown[] } | null;
+    if (!answer || !Array.isArray(answer.blocks)) continue;
+    for (const raw of answer.blocks) {
+      const b = raw as Record<string, unknown>;
+      if (b.type === "claim" && typeof b.runId === "string") ids.add(b.runId);
+      else if (b.type === "verdict") {
+        if (typeof b.runId === "string") ids.add(b.runId);
+        if (typeof b.against === "string" && b.against !== "hold" && b.against !== "usdc") ids.add(b.against);
+      } else if (b.type === "chart" && Array.isArray(b.runIds)) {
+        for (const r of b.runIds) if (typeof r === "string") ids.add(r);
+      }
+    }
+  }
+  return ids;
+}
+
+export async function handleLabThread(db: D1Db | undefined, owner: string, id: string): Promise<Response> {
+  if (!db) return json({ error: "LAB_THREAD_NOT_FOUND" }, 404);
+  const thread = await threadById(db, id);
+  if (!thread || thread.owner !== owner) return json({ error: "LAB_THREAD_NOT_FOUND" }, 404);
+  const jobs = await agentJobsByThread(db, id);
+  const runIds = collectCitedRunIds(jobs);
+  const runs: Record<string, Awaited<ReturnType<typeof runSummaryByHash>>> = {};
+  for (const hash of runIds) {
+    const summary = await runSummaryByHash(db, hash);
+    if (summary) runs[hash] = summary;
+  }
+  // AL-41 footer, "shadow cost if present": priced only when lab_prices has rows and the job's own cost meter
+  // parsed cleanly; a job from before pricing was configured (or any shape surprise) just omits the figure.
+  const prices = await loadShadowPriceTable(db, new Date().toISOString());
+  const jobsOut = jobs.map((job) => {
+    let shadowUsd: number | null = null;
+    if (prices && job.cost && typeof job.cost === "object") {
+      const c = job.cost as { modelCalls?: unknown; runs?: unknown; sweepCpuMs?: unknown };
+      if (Array.isArray(c.modelCalls) && Array.isArray(c.runs) && typeof c.sweepCpuMs === "number") {
+        try {
+          shadowUsd = shadowCostUsd(c as { modelCalls: { model: string; promptTokens: number; completionTokens: number }[]; runs: { cpuMs: number }[]; sweepCpuMs: number }, prices);
+        } catch {
+          shadowUsd = null;
+        }
+      }
+    }
+    return { ...job, shadowUsd };
+  });
+  return json({ thread, jobs: jobsOut, runs });
+}
+
+/**
+ * AL-01/AL-04: `POST /ops/lab/api/ask` — creates the thread when `threadId` is absent (title = the first 60
+ * chars of the question) or reuses an existing one owned by this requester, then queues an agent job under the
+ * same daily/queued caps the bench path uses (shared across both kinds by construction — see
+ * insertQueuedAgentJobIfEligible). `windowId`, when given, rides along in the job's `spec_json` as the only
+ * context the runner's catalog prompt needs about what the user was looking at; it is never itself validated
+ * against the catalog here (the runner's own TRAIN-only resolution, AL-12a, is the authority on that).
+ */
+export async function handleLabAsk(db: D1Db | undefined, requester: string, input: unknown): Promise<Response> {
+  if (!db) return json({ error: "LAB_SERVICE_UNAVAILABLE" }, 503);
+  const b = (input ?? {}) as { threadId?: unknown; question?: unknown; windowId?: unknown };
+  const check = validateQuestion(b.question);
+  if (!check.ok) return json({ error: check.error }, 400);
+  const windowId = typeof b.windowId === "string" && b.windowId ? b.windowId : null;
+  const nowIso = new Date().toISOString();
+
+  let threadId: string;
+  if (typeof b.threadId === "string" && b.threadId) {
+    const thread = await threadById(db, b.threadId);
+    if (!thread || thread.owner !== requester) return json({ error: "LAB_THREAD_NOT_FOUND" }, 404);
+    threadId = thread.id;
+    await touchThread(db, threadId, nowIso);
+  } else {
+    threadId = crypto.randomUUID();
+    await insertThread(db, { id: threadId, owner: requester, title: threadTitleFromQuestion(check.question), now: nowIso });
+  }
+
+  const id = crypto.randomUUID();
+  const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const inserted = await insertQueuedAgentJobIfEligible(db, {
+    id,
+    requester,
+    threadId,
+    question: check.question,
+    windowId,
+    now: nowIso,
+    sinceIso,
+    maxPerDay: MAX_JOBS_PER_DAY,
+    maxActive: MAX_QUEUED_JOBS,
+  });
+  if (!inserted) {
+    // No dedupe path here (spec_key is unique per job by construction, see insertQueuedAgentJobIfEligible), so
+    // a refusal only ever means one of the two caps — same "response-shaping read" as handleLabCreateJob above.
+    if ((await countJobsToday(db, requester, sinceIso)) >= MAX_JOBS_PER_DAY) {
+      return json({ error: "LAB_JOB_LIMIT_DAILY" }, 429);
+    }
+    return json({ error: "LAB_JOB_LIMIT_QUEUED" }, 429);
+  }
+  return json({ threadId, job: { id, status: "queued", question: check.question } }, 201);
 }

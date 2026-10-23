@@ -5,6 +5,37 @@ import { Database } from "bun:sqlite";
 import type { D1Db } from "../src/d1-infra";
 import type { LabRunFull } from "../src/lab-store";
 
+// otto/mamoru-astro#30 (spec 008 phase 2): the agent-lab columns/tables, same "reference copy, canonical file
+// lives in ottodevs/mamoru" convention as the phase-1 schema above.
+const AGENT_SCHEMA = `
+ALTER TABLE lab_jobs ADD COLUMN thread_id TEXT;
+ALTER TABLE lab_jobs ADD COLUMN question TEXT;
+ALTER TABLE lab_jobs ADD COLUMN answer_json TEXT;
+ALTER TABLE lab_jobs ADD COLUMN verifier_json TEXT;
+ALTER TABLE lab_jobs ADD COLUMN cost_json TEXT;
+ALTER TABLE lab_jobs ADD COLUMN quote_json TEXT;
+ALTER TABLE lab_jobs ADD COLUMN payer TEXT;
+CREATE TABLE lab_threads (
+  id TEXT PRIMARY KEY,
+  owner TEXT NOT NULL,
+  title TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE lab_job_runs (
+  job_id TEXT NOT NULL,
+  result_hash TEXT NOT NULL,
+  PRIMARY KEY (job_id, result_hash)
+);
+CREATE TABLE lab_prices (
+  resource TEXT NOT NULL,
+  unit TEXT NOT NULL,
+  usd REAL NOT NULL,
+  valid_from TEXT NOT NULL,
+  PRIMARY KEY (resource, unit, valid_from)
+);
+`;
+
 const SCHEMA = `
 CREATE TABLE lab_runs (
   result_hash TEXT PRIMARY KEY,
@@ -32,7 +63,7 @@ CREATE TABLE lab_jobs (
   updated_at TEXT NOT NULL
 );
 CREATE TABLE lab_nonces (nonce TEXT PRIMARY KEY, seen_at INTEGER NOT NULL);
-`;
+` + AGENT_SCHEMA;
 
 // Deliberately missing `sim_version` (and selected via the same 7-column INSERT finishJobDoneWithRun uses):
 // inserting a run against this table throws "no such column", for the test proving a failed run write rolls
@@ -63,7 +94,7 @@ CREATE TABLE lab_jobs (
   updated_at TEXT NOT NULL
 );
 CREATE TABLE lab_nonces (nonce TEXT PRIMARY KEY, seen_at INTEGER NOT NULL);
-`;
+` + AGENT_SCHEMA;
 
 function op(t: number, kind: string, pool: string, gas: number, fees: number, code: string) {
   return { t, kind, pool, gas, fees, code, reason: code };
