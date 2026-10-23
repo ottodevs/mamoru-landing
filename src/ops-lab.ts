@@ -17,6 +17,7 @@ import {
 } from "./lab-spec";
 import {
   activeJobBySpecKey,
+  countJobsToday,
   findRunBySpecKey,
   hasWindow,
   insertDoneJobIfUnderLimit,
@@ -201,6 +202,11 @@ export async function handleLabCreateJob(db: D1Db | undefined, requester: string
   // the outcome atomically, so a benign race here could at worst show a stale status, never double-write.
   const active = await activeJobBySpecKey(db, key);
   if (active) {
+    // GPT-6 Sol review round 2: returning someone else's in-flight job must not let a requester who is
+    // themselves already at the daily cap bypass it — they created no new row, but they still got service.
+    if ((await countJobsToday(db, requester, sinceIso)) >= MAX_JOBS_PER_DAY) {
+      return json({ error: "LAB_JOB_LIMIT" }, 429);
+    }
     return json({ job: { id: active.id, status: active.status, resultHash: active.resultHash, spec: active.spec } }, 200);
   }
   return json({ error: "LAB_JOB_LIMIT" }, 429);

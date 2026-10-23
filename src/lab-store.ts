@@ -382,27 +382,32 @@ export async function activeJobBySpecKey(db: D1Db, key: string): Promise<JobRow 
   return row ? toJob(row) : null;
 }
 
-/** AL-02: jobs stuck `running` past their lease with no retries left are given up on. Returns rows changed. */
-export async function failExhaustedLeases(db: D1Db, nowEpoch: number, nowIso: string): Promise<number> {
+/**
+ * AL-02: jobs stuck `running` past their lease with no retries left are given up on. Returns rows changed.
+ * `unixepoch()` (GPT-6 Sol round 2, otto/mamoru-astro#28): every lease comparison below uses SQLite's own
+ * clock at the moment the statement runs, not a JS `Date.now()` captured earlier in the handler — a value
+ * captured before `await`ing validation, a JSON parse, or an earlier query could be stale by the time it is
+ * finally bound into the write, which is exactly the kind of gap fencing is supposed to close.
+ */
+export async function failExhaustedLeases(db: D1Db, nowIso: string): Promise<number> {
   const stmt = db
     .prepare(
       `UPDATE lab_jobs SET status = 'failed', error_code = 'LAB_JOB_LEASE_LOST', lease_id = NULL, updated_at = ?
-       WHERE status = 'running' AND lease_until IS NOT NULL AND lease_until < ? AND attempts >= 2`,
+       WHERE status = 'running' AND lease_until IS NOT NULL AND lease_until < unixepoch() AND attempts >= 2`,
     )
-    .bind(nowIso, nowEpoch) as WriteStatement;
+    .bind(nowIso) as WriteStatement;
   const res = await stmt.run();
   return res.meta?.changes ?? res.changes ?? 0;
 }
 
 /** The oldest job eligible to be claimed: queued, or running with an expired lease and a retry left. */
-export async function oldestClaimable(db: D1Db, nowEpoch: number): Promise<{ id: string } | null> {
+export async function oldestClaimable(db: D1Db): Promise<{ id: string } | null> {
   const row = await db
     .prepare(
       `SELECT id FROM lab_jobs
-       WHERE status = 'queued' OR (status = 'running' AND lease_until IS NOT NULL AND lease_until < ? AND attempts < 2)
+       WHERE status = 'queued' OR (status = 'running' AND lease_until IS NOT NULL AND lease_until < unixepoch() AND attempts < 2)
        ORDER BY created_at ASC LIMIT 1`,
     )
-    .bind(nowEpoch)
     .first<{ id: string }>();
   return row ?? null;
 }
@@ -410,17 +415,17 @@ export async function oldestClaimable(db: D1Db, nowEpoch: number): Promise<{ id:
 /**
  * Atomically takes one job: only succeeds if it is still eligible (not claimed by a concurrent request since
  * `oldestClaimable` read it). Returns the new lease on success, null if the race was lost (caller returns 204:
- * with one runner in practice (B-12) this is a defensive path, not a retry loop).
+ * with one runner in practice (B-12) this is a defensive path, not a retry loop). The new `lease_until` is
+ * `unixepoch() + 120`, computed in SQL for the same reason as the comparisons above.
  */
-export async function claimJobById(db: D1Db, id: string, nowEpoch: number, nowIso: string): Promise<{ leaseId: string; spec: LabSpec } | null> {
+export async function claimJobById(db: D1Db, id: string, nowIso: string): Promise<{ leaseId: string; spec: LabSpec } | null> {
   const leaseId = crypto.randomUUID();
-  const leaseUntil = nowEpoch + 120;
   const stmt = db
     .prepare(
-      `UPDATE lab_jobs SET status = 'running', lease_id = ?, lease_until = ?, attempts = attempts + 1, updated_at = ?
-       WHERE id = ? AND (status = 'queued' OR (status = 'running' AND lease_until IS NOT NULL AND lease_until < ? AND attempts < 2))`,
+      `UPDATE lab_jobs SET status = 'running', lease_id = ?, lease_until = unixepoch() + 120, attempts = attempts + 1, updated_at = ?
+       WHERE id = ? AND (status = 'queued' OR (status = 'running' AND lease_until IS NOT NULL AND lease_until < unixepoch() AND attempts < 2))`,
     )
-    .bind(leaseId, leaseUntil, nowIso, id, nowEpoch) as WriteStatement;
+    .bind(leaseId, nowIso, id) as WriteStatement;
   const res = await stmt.run();
   const changes = res.meta?.changes ?? res.changes ?? 0;
   if (changes !== 1) return null;
@@ -429,44 +434,71 @@ export async function claimJobById(db: D1Db, id: string, nowEpoch: number, nowIs
 }
 
 /** AL-02a: a renewal only succeeds while it still matches the live lease. */
-export async function renewLease(db: D1Db, id: string, leaseId: string, nowEpoch: number, nowIso: string): Promise<boolean> {
+export async function renewLease(db: D1Db, id: string, leaseId: string, nowIso: string): Promise<boolean> {
   const stmt = db
     .prepare(
-      `UPDATE lab_jobs SET lease_until = ?, updated_at = ?
-       WHERE id = ? AND lease_id = ? AND status = 'running' AND lease_until IS NOT NULL AND lease_until >= ?`,
+      `UPDATE lab_jobs SET lease_until = unixepoch() + 120, updated_at = ?
+       WHERE id = ? AND lease_id = ? AND status = 'running' AND lease_until IS NOT NULL AND lease_until >= unixepoch()`,
     )
-    .bind(nowEpoch + 120, nowIso, id, leaseId, nowEpoch) as WriteStatement;
+    .bind(nowIso, id, leaseId) as WriteStatement;
   const res = await stmt.run();
   return (res.meta?.changes ?? res.changes ?? 0) === 1;
 }
 
 /**
  * AL-02a: fenced on `lease_id` — a reclaimed job always carries a fresh lease, so a stale runner's write never
- * matches — AND on `status = 'running' AND lease_until >= now` (GPT-6 Sol review, otto/mamoru-astro#28): without
- * the status check a job already `done` could be flipped back to `failed` by a late duplicate request; without
- * the `lease_until` check a runner whose lease has technically expired, but that nobody has reclaimed yet, could
- * still finish the job — both are refused here, not just an identity match on `lease_id`.
+ * matches — AND on `status = 'running' AND lease_until >= unixepoch()` (GPT-6 Sol review, otto/mamoru-astro#28):
+ * without the status check a job already `done` could be flipped back to `failed` by a late duplicate request;
+ * without the `lease_until` check a runner whose lease has technically expired, but that nobody has reclaimed
+ * yet, could still finish the job — both are refused here, not just an identity match on `lease_id`. Kept for
+ * the failure path, which is a single write with nothing else to coordinate; the success path's job update is
+ * in `finishJobDoneWithRun` below, batched with the run insert so neither can land without the other.
  */
-export async function finishJobDone(db: D1Db, id: string, leaseId: string, resultHash: string, nowEpoch: number, nowIso: string): Promise<boolean> {
+export async function finishJobFailed(db: D1Db, id: string, leaseId: string, errorCode: string, nowIso: string): Promise<boolean> {
   const stmt = db
     .prepare(
-      `UPDATE lab_jobs SET status = 'done', result_hash = ?, error_code = NULL, updated_at = ?
-       WHERE id = ? AND lease_id = ? AND status = 'running' AND lease_until IS NOT NULL AND lease_until >= ?`,
+      `UPDATE lab_jobs SET status = 'failed', error_code = ?, updated_at = ?
+       WHERE id = ? AND lease_id = ? AND status = 'running' AND lease_until IS NOT NULL AND lease_until >= unixepoch()`,
     )
-    .bind(resultHash, nowIso, id, leaseId, nowEpoch) as WriteStatement;
+    .bind(errorCode, nowIso, id, leaseId) as WriteStatement;
   const res = await stmt.run();
   return (res.meta?.changes ?? res.changes ?? 0) === 1;
 }
 
-export async function finishJobFailed(db: D1Db, id: string, leaseId: string, errorCode: string, nowEpoch: number, nowIso: string): Promise<boolean> {
-  const stmt = db
+type BatchableDb = D1Db & { batch(statements: D1PreparedStatement[]): Promise<{ meta?: { changes?: number }; changes?: number }[]> };
+
+/**
+ * AL-02a + the run store, as one D1 transaction (GPT-6 Sol round 2, otto/mamoru-astro#28): the job's fenced
+ * UPDATE and the run's guarded INSERT either both commit or neither does. Without this, a run-insert failure
+ * after a successful job update (a constraint, a dropped connection, anything) left the job `done` pointing at
+ * a `resultHash` that was never actually written to `lab_runs` — `GET /api/run/:hash` would 404 forever. The
+ * insert is itself guarded by `WHERE EXISTS` against the job's row as the UPDATE just left it (statements in a
+ * `batch()` run in one transaction, so the second statement sees the first's effect): if the UPDATE didn't
+ * match (fence lost), the row still won't show `status = 'done'` with this `resultHash`, so the INSERT's guard
+ * is false and nothing is written — and if the batch itself throws for any reason, D1 rolls the whole
+ * transaction back, so the job update is undone too and the job is left exactly as it was (`running`).
+ */
+export async function finishJobDoneWithRun(
+  db: D1Db,
+  opts: { id: string; leaseId: string; nowIso: string; run: { resultHash: string; specKey: string; windowId: string; summaryJson: string; runJson: string; simVersion: string; createdAt: string } },
+): Promise<boolean> {
+  const updateStmt = db
     .prepare(
-      `UPDATE lab_jobs SET status = 'failed', error_code = ?, updated_at = ?
-       WHERE id = ? AND lease_id = ? AND status = 'running' AND lease_until IS NOT NULL AND lease_until >= ?`,
+      `UPDATE lab_jobs SET status = 'done', result_hash = ?, error_code = NULL, updated_at = ?
+       WHERE id = ? AND lease_id = ? AND status = 'running' AND lease_until IS NOT NULL AND lease_until >= unixepoch()`,
     )
-    .bind(errorCode, nowIso, id, leaseId, nowEpoch) as WriteStatement;
-  const res = await stmt.run();
-  return (res.meta?.changes ?? res.changes ?? 0) === 1;
+    .bind(opts.run.resultHash, opts.nowIso, opts.id, opts.leaseId);
+  const insertStmt = db
+    .prepare(
+      `INSERT INTO lab_runs (result_hash, spec_key, window_id, summary_json, run_json, sim_version, created_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?
+       WHERE EXISTS (SELECT 1 FROM lab_jobs WHERE id = ? AND lease_id = ? AND status = 'done' AND result_hash = ?)
+       ON CONFLICT(result_hash) DO NOTHING`,
+    )
+    .bind(opts.run.resultHash, opts.run.specKey, opts.run.windowId, opts.run.summaryJson, opts.run.runJson, opts.run.simVersion, opts.run.createdAt, opts.id, opts.leaseId, opts.run.resultHash);
+  const results = await (db as BatchableDb).batch([updateStmt, insertStmt]);
+  const changes = results[0]?.meta?.changes ?? results[0]?.changes ?? 0;
+  return changes === 1;
 }
 
 // ---- lab_nonces ----

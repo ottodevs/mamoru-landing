@@ -8,7 +8,7 @@ import { verifyRunnerRequest } from "./lab-runner-auth";
 import {
   claimJobById,
   failExhaustedLeases,
-  finishJobDone,
+  finishJobDoneWithRun,
   finishJobFailed,
   jobById,
   oldestClaimable,
@@ -25,10 +25,6 @@ export interface LabRunnerEnv {
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
-}
-
-function nowEpoch(): number {
-  return Math.floor(Date.now() / 1000);
 }
 
 /** B-02 shape check: required top-level fields present with sane basic types. Not a deep schema validator — the
@@ -60,12 +56,11 @@ function summaryOf(run: LabRunFull): string {
 }
 
 async function handleClaim(db: D1Db): Promise<Response> {
-  const now = nowEpoch();
   const nowIso = new Date().toISOString();
-  await failExhaustedLeases(db, now, nowIso);
-  const candidate = await oldestClaimable(db, now);
+  await failExhaustedLeases(db, nowIso);
+  const candidate = await oldestClaimable(db);
   if (!candidate) return new Response(null, { status: 204 });
-  const claimed = await claimJobById(db, candidate.id, now, nowIso);
+  const claimed = await claimJobById(db, candidate.id, nowIso);
   if (!claimed) return new Response(null, { status: 204 });
   return json({ job: { id: candidate.id, spec: claimed.spec, leaseId: claimed.leaseId } });
 }
@@ -73,8 +68,7 @@ async function handleClaim(db: D1Db): Promise<Response> {
 async function handleHeartbeat(db: D1Db, body: unknown): Promise<Response> {
   const b = (body ?? {}) as { id?: unknown; leaseId?: unknown };
   if (typeof b.id !== "string" || typeof b.leaseId !== "string") return json({ error: "LAB_RUNNER_BAD_BODY" }, 400);
-  const now = nowEpoch();
-  const ok = await renewLease(db, b.id, b.leaseId, now, new Date().toISOString());
+  const ok = await renewLease(db, b.id, b.leaseId, new Date().toISOString());
   if (!ok) return json({ error: "LAB_JOB_LEASE_LOST" }, 409);
   return json({ ok: true });
 }
@@ -84,33 +78,44 @@ async function handleResult(db: D1Db, body: unknown): Promise<Response> {
   if (typeof b.id !== "string" || typeof b.leaseId !== "string") return json({ error: "LAB_RUNNER_BAD_BODY" }, 400);
   const job = await jobById(db, b.id);
   if (!job || job.leaseId !== b.leaseId) return json({ error: "LAB_JOB_LEASE_LOST" }, 409);
-  const now = nowEpoch();
   const nowIso = new Date().toISOString();
   if (b.error !== undefined) {
     const code = typeof b.error === "string" && b.error ? b.error : "LAB_JOB_FAILED";
-    const ok = await finishJobFailed(db, b.id, b.leaseId, code, now, nowIso);
+    const ok = await finishJobFailed(db, b.id, b.leaseId, code, nowIso);
     if (!ok) return json({ error: "LAB_JOB_LEASE_LOST" }, 409);
     return json({ ok: true, status: "failed", errorCode: code });
   }
   const check = validateRunResult(b.run);
   if (!check.ok) return json({ error: check.error }, 400);
   if (check.run.specKey !== job.specKey) return json({ error: "LAB_RUN_SPEC_MISMATCH" }, 400);
-  // Fence BEFORE writing the run (GPT-6 Sol review, otto/mamoru-astro#28): the earlier jobById read above is
-  // only a cheap early-out, not the authoritative check — between it and here the lease could have been
-  // reclaimed. Doing the atomic, fenced job update first and only inserting into lab_runs when it actually
-  // matched means a stale runner's run can never land in the store, even though the job itself was already
-  // correctly protected either way.
-  const ok = await finishJobDone(db, b.id, b.leaseId, check.run.resultHash, now, nowIso);
+  // The job's fenced UPDATE and the run's guarded INSERT are one D1 transaction (GPT-6 Sol review round 2,
+  // otto/mamoru-astro#28): the earlier jobById read above is only a cheap early-out, not the authoritative
+  // check, and writing the job and the run as two separate statements risked either half landing without the
+  // other (a stale run with no fenced job update behind it, or a job marked done with no run to show for it).
+  // If the batch itself throws, D1 rolls the whole transaction back: the job is left exactly as it was.
+  let ok: boolean;
+  try {
+    ok = await finishJobDoneWithRun(db, {
+      id: b.id,
+      leaseId: b.leaseId,
+      nowIso,
+      run: {
+        resultHash: check.run.resultHash,
+        specKey: check.run.specKey,
+        windowId: check.run.window.id,
+        summaryJson: summaryOf(check.run),
+        runJson: JSON.stringify(check.run),
+        simVersion: check.run.simVersion,
+        createdAt: nowIso,
+      },
+    });
+  } catch {
+    // Rolled back: nothing was written, the job is untouched (still `running` under this lease). The runner's
+    // own retry (lease renewal keeps it alive, or the next claim cycle once it expires) resolves this, not a
+    // half-committed job.
+    return json({ error: "LAB_RUN_WRITE_FAILED" }, 503);
+  }
   if (!ok) return json({ error: "LAB_JOB_LEASE_LOST" }, 409);
-  await upsertRun(db, {
-    resultHash: check.run.resultHash,
-    specKey: check.run.specKey,
-    windowId: check.run.window.id,
-    summaryJson: summaryOf(check.run),
-    runJson: JSON.stringify(check.run),
-    simVersion: check.run.simVersion,
-    createdAt: nowIso,
-  });
   return json({ ok: true, status: "done", resultHash: check.run.resultHash });
 }
 
