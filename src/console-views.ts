@@ -260,17 +260,19 @@ function eth(v: number): string {
 /** Earned, gas and net per day, newest first: a table, because a day's net is often below zero and a cost is not a stack. */
 function dailyTable(m: ConsoleModel): string {
   if (!m.daily.length) return `<p class="c-empty">No ledger day yet.</p>`;
-  const priced = m.daily.some((d) => d.gasUsd != null);
   const rows = [...m.daily]
     .reverse()
     .map((d) => {
-      // The receipts cover every day an operation paid gas, so a day without one paid none: $0, not a blank.
-      const gas = d.gasUsd != null ? money(d.gasUsd) : d.gasEth ? eth(d.gasEth) : "$0";
+      // The receipts cover every day an operation paid gas, so a day without one paid none ($0). Unknown is n/a:
+      // fees on a day no snapshot covered, gas without the receipts table, a day's gas without that day's ETH price.
+      const gas = d.gasEth == null ? "n/a" : d.gasUsd != null ? money(d.gasUsd) : eth(d.gasEth);
+      const fees = d.fees == null ? "n/a" : money(d.fees);
       const net = d.net == null ? "n/a" : money(d.net);
-      return `<tr><td>${esc(dayLabel(d.day))}</td><td class="n">${esc(money(d.fees))}</td><td class="n">${esc(gas)}</td><td class="n${d.net != null && d.net < 0 ? " neg" : ""}">${esc(net)}</td></tr>`;
+      return `<tr><td>${esc(dayLabel(d.day))}</td><td class="n">${esc(fees)}</td><td class="n">${esc(gas)}</td><td class="n${d.net != null && d.net < 0 ? " neg" : ""}">${esc(net)}</td></tr>`;
     })
     .join("");
-  return `<table class="c-days"><thead><tr><th>Day</th><th class="n">Fees earned</th><th class="n">Gas paid</th><th class="n">Net</th></tr></thead><tbody>${rows}</tbody></table>${priced ? "" : `<p class="c-foot">No ETH price right now: gas is shown in ETH and the net is unavailable.</p>`}`;
+  const gaps = m.daily.some((d) => d.net == null);
+  return `<table class="c-days"><thead><tr><th>Day</th><th class="n">Fees earned</th><th class="n">Gas paid</th><th class="n">Net</th></tr></thead><tbody>${rows}</tbody></table>${gaps ? `<p class="c-foot">n/a: no snapshot that day (the ledger's fees start on 18 Oct), or gas without that day's ETH price. Gas is priced at each day's own ETH price.</p>` : ""}`;
 }
 
 function poolStack(m: ConsoleModel): string {
@@ -299,7 +301,7 @@ export function pulseSection(m: ConsoleModel, now: Date): SectionView {
   const t = m.totals;
   const hero = `<section class="c-sheet c-hero"><p class="c-k">Earned for users so far</p>
 <p class="c-big">${esc(money(t.earned))}</p>
-<p class="c-line">${t.collected != null ? `<span><b>${esc(money(t.fees))}</b> uncollected, <b>${esc(money(t.collected))}</b> collected</span><span>${t.net != null ? `<b>${esc(money(t.net))}</b> after <b>${esc(money(t.gasUsd))}</b> of gas` : t.gasEth ? `<b>${esc(eth(t.gasEth))}</b> of gas, not priced` : "no gas recorded"}</span>` : ""}<span>${t.apr != null ? `at least <b>${esc(pct(t.apr))}</b> fee APR, before gas` : "fee APR shows once the engine reports first entries"}</span><span><b>${esc(money(t.lp))}</b> placed in ${t.positions} positions</span><span><b>${t.earning}</b> accounts earning</span></p>
+<p class="c-line">${t.collected != null ? `<span><b>${esc(money(t.feesCounted))}</b> uncollected, <b>${esc(money(t.collected))}</b> collected</span><span>${t.net != null ? `${t.gasUnpricedEth ? "at most " : ""}<b>${esc(money(t.net))}</b> after <b>${esc(money(t.gasUsd))}</b> of gas` : "no gas recorded"}</span>` : ""}<span>${t.apr != null ? `at least <b>${esc(pct(t.apr))}</b> fee APR, before gas` : "fee APR shows once the engine reports first entries"}</span><span><b>${esc(money(t.lp))}</b> placed in ${t.positions} positions</span><span><b>${t.earning}</b> accounts earning</span></p>
 ${capitalChart(m)}
 <p class="c-foot">Capital held per day, every account including test: that daily table has no environment yet. A dip is a withdrawal as often as a price move.</p></section>`;
   const attention = sheet("Needs attention", m.alerts.length ? `${m.alerts.length} open` : null, alertsList(m), "c-attn");
@@ -343,8 +345,8 @@ export function yieldView(m: ConsoleModel, now: Date): SectionView {
   const t = m.totals;
   const best = m.accounts.filter((a) => a.apr != null).sort((a, b) => (b.apr ?? 0) - (a.apr ?? 0))[0];
   const figs = `<div class="c-figs">
-${fig("Earned to date", money(t.earned), t.collected != null ? `${money(t.fees)} uncollected + ${money(t.collected)} collected` : "uncollected fees, every position")}
-${fig("Net after gas", t.net != null ? money(t.net) : "n/a", t.net != null ? `${money(t.gasUsd)} of gas paid by the accounts` : t.gasEth ? `${eth(t.gasEth)} of gas, no ETH price` : "gas not recorded yet")}
+${fig("Earned to date", money(t.earned), t.collected != null ? `${money(t.feesCounted)} uncollected + ${money(t.collected)} collected` : "uncollected fees, every position")}
+${fig("Net after gas", t.net != null ? money(t.net) : "n/a", t.net == null ? "gas not recorded yet" : t.gasUnpricedEth ? `at most: ${money(t.gasUsd)} of gas, plus ${eth(t.gasUnpricedEth)} on days with no ETH price` : `${money(t.gasUsd)} of gas paid by the accounts, at each day's ETH price`)}
 ${fig("Fee APR", pct(t.apr), best ? `at least, before gas; best ${best.key} at ${pct(best.apr)}` : "at least: since first entry, weighted by capital, before gas")}
 ${harvestFig(m)}
 </div>`;

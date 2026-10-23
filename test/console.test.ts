@@ -37,6 +37,11 @@ INSERT INTO yield_ledger_account_receipts VALUES ('2026-10-17', 8453, '0xaaaaaaa
 INSERT INTO yield_ledger_account_receipts VALUES ('2026-10-18', 8453, '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'acc1', 'prod', '1000000000000000', 0, 'd2', '2026-10-18T08:00:05Z');
 `;
 
+/** ETH at $4,000 on 17 Oct and $2,000 on 18 Oct: past gas keeps its own day's price. */
+const PRICES = `CREATE TABLE metrics_daily (day TEXT, lp_usd REAL, idle_usdc_usd REAL, eth_usd REAL);
+INSERT INTO metrics_daily VALUES ('2026-10-17', 0, 0, 4000);
+INSERT INTO metrics_daily VALUES ('2026-10-18', 0, 0, 2000);`;
+
 const OPERATOR_SCHEMA = `CREATE TABLE operator_metrics_latest (id INTEGER PRIMARY KEY CHECK (id = 1), payload_json TEXT NOT NULL, generated_at TEXT NOT NULL, fetched_at TEXT NOT NULL);`;
 const OPERATOR_PAYLOAD = {
   operator: { gitSha: "abc1234", relayer: { address: "0x8F7D", balanceWei: "3600000000000000" } },
@@ -59,8 +64,15 @@ function memoryDb(tables: string[]): D1Db {
   if (tables.includes("seed")) db.exec(SEED_DATA);
   if (tables.includes("seed-gas")) db.exec(SEED_DATA_WITH_GAS);
   if (tables.includes("operator")) db.exec(OPERATOR_SCHEMA + OPERATOR_SEED);
+  if (tables.includes("prices")) db.exec(PRICES);
+  const early = () => db.exec(
+    `INSERT INTO yield_ledger_account_receipts VALUES ('2026-10-15', 8453, '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'acc1', 'prod', '1000000000000000', 0, 'd0', '2026-10-15T08:00:05Z');` +
+      `INSERT INTO accounts VALUES ('acc3', 'u3', 8453, '0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC', '2026-10-01T00:00:00Z', 'prod', 0);` +
+      `INSERT INTO yield_ledger_account_receipts VALUES ('2026-10-18', 8453, '0xcccccccccccccccccccccccccccccccccccccccc', 'acc3', 'prod', '0', 250000, 'd3', '2026-10-18T08:00:05Z');`,
+  );
   if (tables.includes("receipts")) db.exec(RECEIPTS_SCHEMA + RECEIPTS_SEED);
   if (tables.includes("receipts-after-stop")) db.exec(RECEIPTS_SCHEMA + RECEIPTS_SEED.replaceAll("2026-10-18T08:00:05Z", "2026-10-18T09:10:05Z"));
+  if (tables.includes("receipts-early")) early();
   const stmt = (sql: string, values: unknown[] = []): any => ({
     bind: (...v: unknown[]) => stmt(sql, v),
     first: async () => (db.query(sql).get(...(values as never[])) as unknown) ?? null,
@@ -229,55 +241,75 @@ describe("console model", () => {
 });
 
 describe("console receipts (otto/mamoru-astro#26, ottodevs/mamoru#129 phase 2)", () => {
-  const infra = { ethUsd: 2000 } as unknown as InfraSnapshot;
+  const infra = { ethUsd: 1000 } as unknown as InfraSnapshot;
 
-  test("earned is uncollected plus collected; gas from the receipts, net after it at the ETH price", async () => {
-    const m = await loadConsole(memoryDb(["yield", "seed", "receipts"]), "prod", NOW, infra);
+  test("earned is uncollected plus collected; gas priced at each day's own ETH price, never today's", async () => {
+    const m = await loadConsole(memoryDb(["yield", "seed", "prices", "receipts"]), "prod", NOW, infra);
     const a = m.accounts.find((x) => x.key === "acc1")!;
     expect(a.collected).toBeCloseTo(0.5, 9);
     expect(a.gasEth).toBeCloseTo(0.003, 12);
     expect(a.earned).toBeCloseTo(0.8, 9);
     expect(a.feesStale).toBe(false);
     expect(m.totals.earned).toBeCloseTo(0.8, 9);
-    expect(m.totals.gasUsd).toBeCloseTo(6, 9);
-    expect(m.totals.net).toBeCloseTo(-5.2, 9);
+    // 0.002 ETH at $4,000 on 17 Oct + 0.001 ETH at $2,000 on 18 Oct, whatever ETH costs today ($1,000 here).
+    expect(m.totals.gasUsd).toBeCloseTo(10, 9);
+    expect(m.totals.gasUnpricedEth).toBe(0);
+    expect(m.totals.net).toBeCloseTo(-9.2, 9);
   });
 
-  test("daily: fees from account_daily (accrued change plus collected that day), gas from the receipts", async () => {
-    const m = await loadConsole(memoryDb(["yield", "seed", "receipts"]), "prod", NOW, infra);
+  test("daily: fees from account_daily, gas from the receipts at that day's price", async () => {
+    const m = await loadConsole(memoryDb(["yield", "seed", "prices", "receipts"]), "prod", NOW, infra);
     expect(m.daily.map((d) => d.day)).toEqual(["2026-10-17", "2026-10-18"]);
+    expect(m.daily[0]).toMatchObject({ gasUsd: 8, net: -7 });
     expect(m.daily[0]!.fees).toBeCloseTo(1.0, 9);
-    expect(m.daily[0]!.gasUsd).toBeCloseTo(4, 9);
-    expect(m.daily[0]!.net).toBeCloseTo(-3, 9);
     expect(m.daily[1]!.fees).toBeCloseTo(0.5, 9);
   });
 
-  test("a receipt newer than the account's snapshot (a Stop) leaves uncollected out of earned instead of counting it twice", async () => {
-    const m = await loadConsole(memoryDb(["yield", "seed", "receipts-after-stop"]), "prod", NOW, infra);
-    const a = m.accounts.find((x) => x.key === "acc1")!;
-    expect(a.feesStale).toBe(true);
-    expect(a.earned).toBeCloseTo(0.5, 9);
-  });
-
-  test("no ETH price: gas stays in ETH and net is unavailable, never earned minus a guessed zero", async () => {
-    const m = await loadConsole(memoryDb(["yield", "seed", "receipts"]), "prod", NOW, null);
+  test("gas on a day with no price is never repriced: that day's net is unknown and the lifetime net is an upper bound", async () => {
+    const m = await loadConsole(memoryDb(["yield", "seed", "receipts"]), "prod", NOW, infra);
     expect(m.totals.gasEth).toBeCloseTo(0.003, 12);
-    expect(m.totals.gasUsd).toBeNull();
-    expect(m.totals.net).toBeNull();
+    expect(m.totals.gasUsd).toBe(0);
+    expect(m.totals.gasUnpricedEth).toBeCloseTo(0.003, 12);
+    expect(m.totals.net).toBeCloseTo(0.8, 9);
     expect(m.daily[0]!.net).toBeNull();
   });
 
-  test("without the receipts table (migration 0015 not applied): collected and gas are unknown, earned is the uncollected fees", async () => {
-    const m = await loadConsole(memoryDb(["yield", "seed"]), "prod", NOW, infra);
+  test("gas paid before the first snapshot day starts the table there, with fees unknown that day", async () => {
+    const m = await loadConsole(memoryDb(["yield", "seed", "prices", "receipts", "receipts-early"]), "prod", NOW, infra);
+    expect(m.daily[0]!.day).toBe("2026-10-15");
+    expect(m.daily[0]!.fees).toBeNull();
+    expect(m.daily[0]!.gasEth).toBeCloseTo(0.001, 12);
+    expect(m.daily[0]!.net).toBeNull();
+  });
+
+  test("totals count every account in scope, a snapshot or not", async () => {
+    const m = await loadConsole(memoryDb(["yield", "seed", "prices", "receipts", "receipts-early"]), "prod", NOW, infra);
+    // acc3 has a receipt (0.25 USDC collected) and no snapshot yet.
+    expect(m.totals.collected).toBeCloseTo(0.75, 9);
+    expect(m.totals.earned).toBeCloseTo(1.05, 9);
+  });
+
+  test("a receipt newer than the account's snapshot (a Stop) leaves uncollected out of earned and out of its breakdown", async () => {
+    const m = await loadConsole(memoryDb(["yield", "seed", "prices", "receipts-after-stop"]), "prod", NOW, infra);
+    const a = m.accounts.find((x) => x.key === "acc1")!;
+    expect(a.feesStale).toBe(true);
+    expect(a.earned).toBeCloseTo(0.5, 9);
+    expect(m.totals.feesCounted).toBe(0);
+    expect(m.totals.earned).toBeCloseTo(0.5, 9);
+  });
+
+  test("without the receipts table (migration 0015 not applied): collected and gas are unknown, daily gas is n/a not $0", async () => {
+    const m = await loadConsole(memoryDb(["yield", "seed", "prices"]), "prod", NOW, infra);
     const a = m.accounts.find((x) => x.key === "acc1")!;
     expect(a.collected).toBeNull();
     expect(a.gasEth).toBeNull();
     expect(a.earned).toBeCloseTo(0.3, 9);
     expect(m.totals.net).toBeNull();
+    expect(m.daily.every((d) => d.gasEth === null && d.net === null)).toBe(true);
   });
 
   test("/ops/yield shows earned, net after gas and the daily table", async () => {
-    const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "receipts", "flags"]));
+    const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "prices", "receipts", "flags"]));
     const html = await (await worker.fetch(get("/ops/yield", cookie), env, {} as ExecutionContext)).text();
     expect(html).toContain("Net after gas");
     expect(html).toContain('class="c-days"');
