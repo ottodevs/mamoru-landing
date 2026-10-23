@@ -130,13 +130,18 @@ export function labLogic() {
   var MONTH_SHORT = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
   var MONTH_LONG = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
   /** "Caída feb 2025" — short month, no dot, 4-digit year. Segment buttons, Probar, strategy assumptions. */
-  var windowShortLabel = function (regime: string, fromIso: string): string {
-    var d = new Date(fromIso);
+  // The month is taken from the middle of the window: feb2025 starts on 29 Jan but is the February crash.
+  var windowMid = function (fromIso: string, toIso?: string): Date {
+    var a = new Date(fromIso).getTime();
+    return new Date(toIso ? (a + new Date(toIso).getTime()) / 2 : a);
+  };
+  var windowShortLabel = function (regime: string, fromIso: string, toIso?: string): string {
+    var d = windowMid(fromIso, toIso);
     return (REGIME_WORD[regime] || regime) + " " + MONTH_SHORT[d.getUTCMonth()] + " " + d.getUTCFullYear();
   };
   /** "Caída de febrero 2025" — long month, for the headline sentence only. */
-  var windowHeadlineLabel = function (regime: string, fromIso: string): string {
-    var d = new Date(fromIso);
+  var windowHeadlineLabel = function (regime: string, fromIso: string, toIso?: string): string {
+    var d = windowMid(fromIso, toIso);
     return (REGIME_WORD[regime] || regime) + " de " + MONTH_LONG[d.getUTCMonth()] + " " + d.getUTCFullYear();
   };
 
