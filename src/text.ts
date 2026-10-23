@@ -45,6 +45,19 @@ export async function hmacB64Url(secret: string, data: string): Promise<string> 
   return btoa(bin).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
+/** HMAC-SHA256 of `data` under `secret`, as lowercase hex. Used by the Lab runner signing scheme (otto/mamoru-astro#28). */
+export async function hmacHex(secret: string, data: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data)));
+  return [...sig].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export async function sameSecret(provided: string, expected: string): Promise<boolean> {
   const enc = new TextEncoder();
   const [a, b] = await Promise.all([
