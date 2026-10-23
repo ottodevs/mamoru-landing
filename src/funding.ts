@@ -79,7 +79,10 @@ export const ETHEREUM: FundingChain = {
 
 const FORGEJO = "https://git.ot2.me/otto/mamoru/issues/";
 
-/** The same relayer key signs on every chain, so the address is the same; the funds are not. */
+/** The relayer that funds activations on Monad: its own key, not Base's (operator `mamoru-operator-monad`, 23 Oct). */
+export const MONAD_RELAYER_ADDRESS = "0xE41175b9CEBD25b9F45B745C922002BC052B5C88";
+
+/** One relayer per chain. Base and Ethereum share the Base relayer's key; Monad has its own. */
 export const FUNDING_TARGETS: readonly FundingTarget[] = [
   {
     id: "relayer-base",
@@ -96,7 +99,7 @@ export const FUNDING_TARGETS: readonly FundingTarget[] = [
     id: "relayer-monad",
     label: "Relayer on Monad",
     recipientName: "the relayer on Monad",
-    address: RELAYER_ADDRESS,
+    address: MONAD_RELAYER_ADDRESS,
     chain: MONAD,
     pays: "Activations on Monad, about 1.4 MON each at today's gas. Monad cannot start without it.",
     lowWei: 5n * E18,
