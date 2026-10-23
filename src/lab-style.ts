@@ -179,14 +179,57 @@ export const LAB_STYLE = `
 @keyframes lab-flash { 0% { background: color-mix(in oklab, var(--mamoru) 22%, var(--card)); } 100% { background: var(--sel); } }
 .lab-var.lab-flash { animation: lab-flash 1.2s ease-out 1; }
 
-.lab-chat { display: grid; gap: 12px; }
+.lab-chat { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; gap: 10px; min-height: 0; min-width: 0; }
+/* Same reasoning as ".lab-shell main > *, .lab-shell aside > * { min-width: 0 }" above, one level deeper: a
+   grid track's implicit sizing otherwise grows to fit a wide child (a long message, a chip row) instead of
+   letting that child wrap inside the 330px right column -- every row of .lab-chat's own grid needs the same
+   min-width: 0 floor, and so does .lab-ans's own nested grid (claim chips/verdict sentences wrap inside it,
+   not the whole card growing past the column). */
+.lab-chat > * { min-width: 0; }
+.lab-ans > * { min-width: 0; }
 .lab-msg { display: grid; gap: 6px; }
 .lab-msg.lab-me { justify-items: end; }
-.lab-msg.lab-me p { margin: 0; background: var(--ink); color: var(--paper); border-radius: 12px 12px 2px 12px; padding: 8px 12px; max-width: 92%; font-size: .9rem; }
+.lab-msg.lab-me p { margin: 0; background: var(--ink); color: var(--paper); border-radius: 12px 12px 2px 12px; padding: 8px 12px; max-width: 92%; font-size: .9rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .lab-ans { border: 1px solid var(--wash); background: var(--card); border-radius: 12px 12px 12px 2px; padding: 12px; display: grid; gap: 10px; }
-.lab-verdict { font-size: 1rem; line-height: 1.35; }
+.lab-ans.lab-failed { border-color: var(--loss); }
+.lab-verdict { font-size: 1rem; line-height: 1.35; margin: 0; }
 .lab-verdict b { font-weight: 600; }
-.lab-prose { border-top: 1px dashed var(--wash); padding-top: 8px; font-size: .84rem; color: var(--ink2); }
+.lab-verdict-claim { display: block; }
+.lab-prose { border-top: 1px dashed var(--wash); padding-top: 8px; font-size: .84rem; color: var(--ink2); display: grid; gap: 4px; }
+.lab-prose p { margin: 0; }
+.lab-prose-label { font-family: var(--mono); font-size: .68rem; letter-spacing: .04em; text-transform: uppercase; color: var(--stone); }
+
+/* "Preguntar al Lab" (otto/mamoru-astro#30, spec 008 phase 2) */
+.lab-ask-head { display: flex; gap: 8px; align-items: center; }
+.lab-ask-threadsel { flex: 1; min-width: 0; border: 1px solid var(--wash); background: var(--rice); color: var(--ink); border-radius: var(--r); padding: 6px 8px; font-size: .86rem; font-family: var(--serif); }
+.lab-ask-new { border: 1px solid var(--wash); background: none; color: var(--ink2); border-radius: var(--r); padding: 6px 10px; font-size: .82rem; cursor: pointer; white-space: nowrap; }
+.lab-ask-new:hover { border-color: var(--mamoru); color: var(--mamoru); }
+.lab-ask-messages { display: grid; gap: 14px; overflow-y: auto; min-height: 120px; max-height: 52vh; padding-right: 2px; min-width: 0; }
+.lab-ask-messages > * { min-width: 0; }
+.lab-ask-empty { font-size: .84rem; color: var(--stone); }
+.lab-ask-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.lab-ask-chip { display: inline-grid; gap: 1px; border: 1px solid var(--wash); background: var(--rice); border-radius: var(--r); padding: 5px 9px; }
+.lab-ask-chip b { font-size: .86rem; font-weight: 600; }
+.lab-ask-chip small { font-size: .68rem; color: var(--stone); }
+.lab-ask-chip:hover { border-color: var(--mamoru); }
+.lab-ask-openbench { justify-self: start; border: 1px solid var(--mamoru); background: none; color: var(--mamoru); border-radius: var(--r); padding: 5px 10px; font-size: .8rem; cursor: pointer; }
+.lab-ask-openbench:hover { background: var(--mamoru); color: var(--paper); }
+.lab-ask-partial { margin: 0; font-size: .78rem; color: var(--hold); border: 1px dashed var(--hold); border-radius: var(--r); padding: 5px 8px; }
+.lab-ask-footer { font-family: var(--mono); font-size: .68rem; color: var(--stone); border-top: 1px dashed var(--wash); padding-top: 6px; overflow-wrap: anywhere; }
+/* the pending answer card, same persistent-status discipline as the Run button's (#28): role=status written
+   once per shape, the ticking seconds live in their own aria-hidden span, never inside the announced text. */
+.lab-ask-pending-text { display: block; }
+.lab-ask-pending-secs { font-family: var(--mono); color: var(--stone); }
+.lab-ask-suggestions { display: flex; flex-wrap: wrap; gap: 6px; }
+.lab-ask-suggestion { border: 1px dashed var(--wash); background: none; color: var(--ink2); border-radius: 999px; padding: 5px 10px; font-size: .78rem; cursor: pointer; text-align: left; }
+.lab-ask-suggestion:hover { border-color: var(--mamoru); color: var(--mamoru); }
+.lab-ask-err { margin: 0; font-size: .78rem; color: var(--loss); }
+.lab-ask-err:empty { display: none; }
+.lab-ask-form { display: flex; gap: 8px; align-items: flex-end; }
+.lab-ask-input { flex: 1; min-width: 0; resize: none; border: 1px solid var(--wash); background: var(--rice); color: var(--ink); border-radius: var(--r); padding: 8px 10px; font-family: var(--serif); font-size: .9rem; max-height: 120px; }
+.lab-ask-input:focus { outline: 2px solid var(--mamoru); outline-offset: 1px; }
+.lab-ask-send { border: 1px solid var(--ink); background: var(--ink); color: var(--paper); border-radius: var(--r); padding: 8px 14px; font-size: .86rem; cursor: pointer; }
+.lab-ask-send:disabled { opacity: .45; cursor: not-allowed; }
 
 @media (max-width: 1180px) { .lab-shell { grid-template-columns: 220px minmax(0, 1fr); } .lab-shell aside.lab-right { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--wash); } }
 @media (max-width: 820px) {
@@ -202,6 +245,9 @@ export const LAB_STYLE = `
   .lab-tile .lab-v { font-size: 1rem; }
   .lab-ev { grid-template-columns: 5.6rem minmax(0, 1fr) auto; }
   .lab-ev .lab-p { display: none; }
+  /* otto/mamoru-astro#30: the chat panel already stacks under the bench (aside.lab-right order: 2, above) --
+     cap the message list shorter here so "Enviar" is always one scroll away, never pushed fully off-screen. */
+  .lab-ask-messages { max-height: 38vh; }
 }
 @media (prefers-reduced-motion: reduce) { .lab-root * { transition: none !important; animation: none !important; } }
 /* GPT-6 Sol review (otto/mamoru-astro#28 follow-up): the rule above already stops the spin (animation: none

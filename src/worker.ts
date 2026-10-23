@@ -105,7 +105,7 @@ import { appendCapOverride, CapConflict, CapOutcomeUnknown, CapTableMissing, new
 import { checkCapConfirmToken, issueCapConfirmToken } from "./account-caps-confirm";
 import { archiveTarget } from "./archive";
 import { archiveBar, archiveSection } from "./ops-archive";
-import { handleLabCatalog, handleLabCreateJob, handleLabJobStatus, handleLabRun, handleLabRuns, labSection } from "./ops-lab";
+import { handleLabAsk, handleLabCatalog, handleLabCreateJob, handleLabJobStatus, handleLabRun, handleLabRuns, handleLabThread, handleLabThreads, labSection } from "./ops-lab";
 import { handleLabRunner } from "./lab-runner";
 import {
   isPreviewPath,
@@ -694,6 +694,29 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
       base: String(form.get("base") ?? ""),
       widthTicks: Number(form.get("widthTicks")),
       deposit: Number(form.get("deposit")),
+    });
+  }
+
+  // ---- "Preguntar al Lab" (otto/mamoru-astro#30, spec 008 phase 2) ----
+  if (url.pathname === "/ops/lab/api/threads" && request.method === "GET") {
+    return handleLabThreads(env.MAMORU_DB, session.email);
+  }
+  if (url.pathname.startsWith("/ops/lab/api/threads/") && request.method === "GET") {
+    return handleLabThread(env.MAMORU_DB, session.email, decodeURIComponent(url.pathname.slice("/ops/lab/api/threads/".length)));
+  }
+  if (url.pathname === "/ops/lab/api/ask" && request.method === "POST") {
+    if (!csrfOk || !form) {
+      return new Response(JSON.stringify({ error: "LAB_CSRF_INVALID" }), {
+        status: 403,
+        headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+    const threadIdField = String(form.get("threadId") ?? "");
+    const windowIdField = String(form.get("windowId") ?? "");
+    return handleLabAsk(env.MAMORU_DB, session.email, {
+      threadId: threadIdField || undefined,
+      question: String(form.get("question") ?? ""),
+      windowId: windowIdField || undefined,
     });
   }
 

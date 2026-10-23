@@ -6,7 +6,7 @@ import worker, { type Env } from "../src/worker";
 import { sealSession } from "../src/ops";
 import { signRunnerRequest } from "../src/lab-sign";
 import { labDb, makeRun } from "./lab-fixture";
-import { claimJobById, finishJobDoneWithRun, finishJobFailed, insertJob, jobById } from "../src/lab-store";
+import { claimJobById, finishJobDoneWithRun, finishJobFailed, insertAgentJob, insertJob, insertThread, jobById } from "../src/lab-store";
 
 const SECRET = "test-runner-secret";
 
@@ -338,5 +338,148 @@ describe("lab-runner.ts: claim / heartbeat / result, with fencing", () => {
     expect(body.error).toBe("LAB_RUN_WRITE_FAILED");
     const job = await jobById(db, "job-http-broken");
     expect(job?.status).toBe("running");
+  });
+});
+
+// otto/mamoru-astro#30 (spec 008 phase 2): the agent half of claim/result — kind: "agent", threadId/question/
+// history on claim, answer/verifier/cost/runHashes stored fenced on result, LAB_RUN_MISSING when a cited run
+// never landed in lab_runs.
+describe("lab-runner.ts: agent jobs (claim history, result storing the verified answer, LAB_RUN_MISSING)", () => {
+  test("a bench claim now also carries kind: 'bench' (additive)", async () => {
+    const db = labDb({ seed: false });
+    const env = opsEnv(db);
+    const spec = { windowId: "feb2025", base: "live" as const, widthTicks: 2000, deposit: 1000 };
+    await insertJob(db, { id: "job-bench", requester: "r", spec, specKey: "feb2025|live|2000|1000", status: "queued", resultHash: null, now: new Date().toISOString() });
+    const res = (await (await signedFetch(env, "/ops/lab/runner/claim", {})).json()) as { job: { kind: string } };
+    expect(res.job.kind).toBe("bench");
+  });
+
+  test("claim on an agent job returns kind: 'agent', threadId, question, and an empty history for a thread's first turn", async () => {
+    const db = labDb({ seed: false });
+    const env = opsEnv(db);
+    await insertThread(db, { id: "thread-1", owner: "ottodevs@gmail.com", title: "¿Qué tal febrero?", now: new Date().toISOString() });
+    await insertAgentJob(db, { id: "job-ask-1", requester: "ottodevs@gmail.com", threadId: "thread-1", question: "¿Qué tal febrero?", status: "queued", now: new Date().toISOString() });
+
+    const res = await signedFetch(env, "/ops/lab/runner/claim", {});
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { job: { id: string; kind: string; leaseId: string; threadId: string; question: string; history: unknown[] } };
+    expect(body.job.kind).toBe("agent");
+    expect(body.job.id).toBe("job-ask-1");
+    expect(body.job.threadId).toBe("thread-1");
+    expect(body.job.question).toBe("¿Qué tal febrero?");
+    expect(body.job.history).toEqual([]);
+  });
+
+  test("claim on a follow-up turn carries the thread's earlier *done* turns, oldest first, with their verified answer", async () => {
+    const db = labDb({ seed: false });
+    const env = opsEnv(db);
+    const now = new Date().toISOString();
+    await insertThread(db, { id: "thread-2", owner: "r", title: "t", now });
+    await insertAgentJob(db, { id: "job-done-1", requester: "r", threadId: "thread-2", question: "primera pregunta", status: "done", now });
+    const answer1 = { blocks: [{ type: "claim", metric: "end", runId: "h1", value: 100 }] };
+    await db.prepare("UPDATE lab_jobs SET answer_json = ? WHERE id = ?").bind(JSON.stringify(answer1), "job-done-1").run();
+    // A failed or still-queued turn in between must never show up in history.
+    await insertAgentJob(db, { id: "job-failed-1", requester: "r", threadId: "thread-2", question: "una que falló", status: "failed", now });
+    await insertAgentJob(db, { id: "job-follow-up", requester: "r", threadId: "thread-2", question: "¿y el doble de ancho?", status: "queued", now });
+
+    const res = await signedFetch(env, "/ops/lab/runner/claim", {});
+    const body = (await res.json()) as { job: { id: string; history: { question: string; answer: unknown }[] } };
+    expect(body.job.id).toBe("job-follow-up");
+    expect(body.job.history).toEqual([{ question: "primera pregunta", answer: answer1 }]);
+  });
+
+  test("result on an agent job stores answer/verifier/cost and records the cited runs in lab_job_runs, fenced", async () => {
+    const db = labDb({ seed: false });
+    const env = opsEnv(db);
+    const now = new Date().toISOString();
+    await insertThread(db, { id: "thread-3", owner: "r", title: "t", now });
+    await insertAgentJob(db, { id: "job-ask-3", requester: "r", threadId: "thread-3", question: "q", status: "queued", now });
+    const claim = (await (await signedFetch(env, "/ops/lab/runner/claim", {})).json()) as { job: { leaseId: string } };
+
+    const run = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "Política actual", resultHash: "cited-hash-1", vsHodl: -5 });
+    await db
+      .prepare("INSERT INTO lab_runs (result_hash, spec_key, window_id, summary_json, run_json, sim_version, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .bind(run.resultHash, run.specKey, run.window.id, JSON.stringify(run), JSON.stringify(run), run.simVersion, now)
+      .run();
+
+    const answer = { blocks: [{ type: "claim", metric: "vsHodl", runId: "cited-hash-1", value: -5 }] };
+    const verifier = { ok: true, errors: [] };
+    const cost = { modelCalls: [{ model: "qwen3", promptTokens: 100, completionTokens: 40 }], toolRounds: 1, runs: [{ resultHash: "cited-hash-1", cpuMs: 2 }], sweepCpuMs: 0, wallMs: 900, repairUsed: false, verifierOutcome: "ok" };
+    const res = await signedFetch(env, "/ops/lab/runner/result", {
+      jobId: "job-ask-3",
+      leaseId: claim.job.leaseId,
+      kind: "agent",
+      answer,
+      verifier,
+      cost,
+      runHashes: ["cited-hash-1"],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; status: string };
+    expect(body.status).toBe("done");
+
+    const job = await jobById(db, "job-ask-3");
+    expect(job?.status).toBe("done");
+    expect(JSON.parse(job!.answerJson!)).toEqual(answer);
+    expect(JSON.parse(job!.verifierJson!)).toEqual(verifier);
+    expect(JSON.parse(job!.costJson!)).toEqual(cost);
+    const cited = await db.prepare("SELECT result_hash FROM lab_job_runs WHERE job_id = ?").bind("job-ask-3").all<{ result_hash: string }>();
+    expect(cited.results.map((r) => r.result_hash)).toEqual(["cited-hash-1"]);
+  });
+
+  test("result on an agent job citing a run never posted to lab_runs is refused whole with LAB_RUN_MISSING (409), nothing written", async () => {
+    const db = labDb({ seed: false });
+    const env = opsEnv(db);
+    const now = new Date().toISOString();
+    await insertThread(db, { id: "thread-4", owner: "r", title: "t", now });
+    await insertAgentJob(db, { id: "job-ask-4", requester: "r", threadId: "thread-4", question: "q", status: "queued", now });
+    const claim = (await (await signedFetch(env, "/ops/lab/runner/claim", {})).json()) as { job: { leaseId: string } };
+
+    const res = await signedFetch(env, "/ops/lab/runner/result", {
+      jobId: "job-ask-4",
+      leaseId: claim.job.leaseId,
+      kind: "agent",
+      answer: { blocks: [{ type: "claim", metric: "end", runId: "never-published", value: 1 }] },
+      verifier: { ok: true, errors: [] },
+      cost: { modelCalls: [], toolRounds: 0, runs: [], sweepCpuMs: 0, wallMs: 100, repairUsed: false, verifierOutcome: "ok" },
+      runHashes: ["never-published"],
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("LAB_RUN_MISSING");
+
+    // Nothing written: the job is still running, no lab_job_runs row exists.
+    const job = await jobById(db, "job-ask-4");
+    expect(job?.status).toBe("running");
+    expect(job?.answerJson).toBeNull();
+    const cited = await db.prepare("SELECT 1 AS x FROM lab_job_runs WHERE job_id = ?").bind("job-ask-4").all();
+    expect(cited.results).toEqual([]);
+  });
+
+  test("AL-02a fencing: a stale runner's agent result (reclaimed job, new lease) is refused with LAB_JOB_LEASE_LOST", async () => {
+    const db = labDb({ seed: false });
+    const env = opsEnv(db);
+    const now = new Date().toISOString();
+    await insertThread(db, { id: "thread-5", owner: "r", title: "t", now });
+    await insertAgentJob(db, { id: "job-ask-5", requester: "r", threadId: "thread-5", question: "q", status: "queued", now });
+    const firstClaim = (await (await signedFetch(env, "/ops/lab/runner/claim", {})).json()) as { job: { leaseId: string } };
+
+    // The lease expires and a second runner reclaims it with a fresh lease — the first runner's result must
+    // not be able to land on top of the reclaiming runner's turn.
+    await db.prepare("UPDATE lab_jobs SET lease_until = unixepoch() - 1, attempts = 1 WHERE id = ?").bind("job-ask-5").run();
+    await signedFetch(env, "/ops/lab/runner/claim", {}); // reclaims with a new lease_id
+
+    const staleRes = await signedFetch(env, "/ops/lab/runner/result", {
+      jobId: "job-ask-5",
+      leaseId: firstClaim.job.leaseId,
+      kind: "agent",
+      answer: { blocks: [{ type: "text", md: "stale" }] },
+      verifier: { ok: true, errors: [] },
+      cost: { modelCalls: [], toolRounds: 0, runs: [], sweepCpuMs: 0, wallMs: 1, repairUsed: false, verifierOutcome: "ok" },
+      runHashes: [],
+    });
+    expect(staleRes.status).toBe(409);
+    const body = (await staleRes.json()) as { error: string };
+    expect(body.error).toBe("LAB_JOB_LEASE_LOST");
   });
 });

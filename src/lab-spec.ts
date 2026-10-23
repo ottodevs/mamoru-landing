@@ -63,3 +63,27 @@ export const MAX_QUEUED_JOBS = 3;
 /** AL-02: a claimed job's lease window and the retry budget before a stuck job is given up on. */
 export const LEASE_SECONDS = 120;
 export const MAX_LEASE_ATTEMPTS = 2;
+
+// ---------------------------------------------------------------------------
+// Agent Lab questions (otto/mamoru-astro#30, spec 008 phase 2): "Preguntar al Lab" ask requests.
+// ---------------------------------------------------------------------------
+
+export const MAX_QUESTION_CHARS = 600;
+export const LAB_ASK_INVALID = "LAB_ASK_INVALID";
+export const LAB_THREAD_NOT_FOUND = "LAB_THREAD_NOT_FOUND";
+export const LAB_RUN_MISSING = "LAB_RUN_MISSING";
+
+export type QuestionValidation = { ok: true; question: string } | { ok: false; error: typeof LAB_ASK_INVALID };
+
+/** 1..600 chars after trimming surrounding whitespace; an all-whitespace or empty question is invalid. */
+export function validateQuestion(input: unknown): QuestionValidation {
+  if (typeof input !== "string") return { ok: false, error: LAB_ASK_INVALID };
+  const question = input.trim();
+  if (question.length < 1 || question.length > MAX_QUESTION_CHARS) return { ok: false, error: LAB_ASK_INVALID };
+  return { ok: true, question };
+}
+
+/** The new thread's title (AL-01): the first 60 chars of its opening question. */
+export function threadTitleFromQuestion(question: string): string {
+  return question.slice(0, 60);
+}

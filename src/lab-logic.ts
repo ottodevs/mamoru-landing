@@ -207,6 +207,17 @@ export function labLogic() {
     return elapsedSec > 60 ? base + " El runner no ha respondido todavía." : base;
   };
 
+  /** "Preguntar al Lab" turn wording (coordinator note: "en cola / pensando"), separate from jobStatusHeadline
+   * (the bench's "Ejecutar escenario" wording) so either panel's copy can change without touching the other. */
+  var askStatusHeadline = function (status: "queued" | "running"): string {
+    return status === "queued" ? "En cola" : "Pensando";
+  };
+  var askSubText = function (status: "queued" | "running", elapsedSec: number): string {
+    if (status !== "queued") return "";
+    var base = "El agente lo recoge en unos segundos.";
+    return elapsedSec > 60 ? base + " El runner no ha respondido todavía." : base;
+  };
+
   var JOB_ERROR_WORDS: Record<string, string> = {
     LAB_JOB_LEASE_LOST: "el runner perdió el trabajo; vuelve a intentarlo",
     LAB_SPEC_INVALID: "el escenario pedido no es válido",
@@ -226,6 +237,32 @@ export function labLogic() {
     return "Falló: " + (JOB_ERROR_WORDS[errorCode] || errorCode || "motivo desconocido");
   };
 
+  var ASK_ERROR_WORDS: Record<string, string> = {
+    LAB_JOB_TIMEOUT: "se agotó el tiempo del turno",
+    LAB_MODEL_UNAVAILABLE: "el modelo no está disponible ahora mismo",
+    LAB_JOB_LEASE_LOST: "el runner perdió el turno; vuelve a intentarlo",
+    LAB_HOLDOUT_DENIED: "esa ventana es parte de la reserva de prueba y el agente no puede usarla",
+    LAB_RUN_MISSING: "el agente citó un resultado que no llegó a guardarse",
+    LAB_SERVICE_UNAVAILABLE: "el banco no está disponible ahora mismo",
+    LAB_NETWORK: "sin conexión con el servidor",
+  };
+  /** "Preguntar al Lab" turn-level failure (the job was created, then the runner reported it failed) -- the
+   * chat bubble's text, not the inline form error (see askSendErrorText for a request the server never queued). */
+  var askFailedText = function (errorCode: string): string {
+    return "Falló: " + (ASK_ERROR_WORDS[errorCode] || errorCode || "motivo desconocido");
+  };
+
+  /** `POST /ops/lab/api/ask` refusing the request outright (no turn was ever queued): shown near the input,
+   * never as a chat bubble -- there is no job id for a bubble to attach to. */
+  var askSendErrorText = function (errorCode: string): string {
+    if (errorCode === "LAB_JOB_LIMIT_DAILY") return "Has llegado a " + int(MAX_JOBS_PER_DAY) + " preguntas hoy";
+    if (errorCode === "LAB_JOB_LIMIT_QUEUED") return "Ya tienes " + int(MAX_QUEUED_JOBS) + " en cola";
+    if (errorCode === "LAB_ASK_INVALID") return "Escribe una pregunta de hasta 600 caracteres";
+    if (errorCode === "LAB_THREAD_NOT_FOUND") return "Este hilo ya no está disponible";
+    if (errorCode === "LAB_CSRF_INVALID") return "La sesión caducó: recarga la página";
+    return ASK_ERROR_WORDS[errorCode] || "No se pudo enviar la pregunta";
+  };
+
   /**
    * The stale-completion guard (GPT-6 Sol review, otto/mamoru-astro#28 follow-up): a job's POST response, each
    * poll, and the final runs-refresh are all tagged with the generation counter active when runScenario()
@@ -238,6 +275,222 @@ export function labLogic() {
    */
   var isCurrentJobGen = function (eventGen: number, liveGen: number): boolean {
     return eventGen === liveGen;
+  };
+
+  // ---------------------------------------------------------------------------------------------------------
+  // "Preguntar al Lab" (otto/mamoru-astro#30, spec 008 phase 2): rendering the agent's verified answer blocks.
+  // esc/metric labels/the verdict sentence wording are a deliberate port of
+  // ottodevs/mamoru packages/lab-agent/src/contract.ts (Block types, METRIC_BASE_KEYS, writeVerdictSentence) --
+  // this repo cannot import that package (no workspace link), and labLogic() ships zero-import by design, so
+  // this is a copy that must be kept in sync by hand, not a shortcut taken for convenience. Nothing here
+  // re-verifies a claim or a verdict's comparability: AL-21/AL-20c already happened on the runner before this
+  // job's answer_json was ever written, so every block this function is given is trusted, not re-checked.
+  // ---------------------------------------------------------------------------------------------------------
+
+  var escHtml = function (s: unknown): string {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === '"' ? "&quot;" : "&#39;";
+    });
+  };
+
+  var MAX_QUESTION_CHARS = 600;
+  /** Client-side mirror of lab-spec.ts's validateQuestion bounds, for disabling "Enviar" before the round trip. */
+  var questionValid = function (q: string): boolean {
+    var t = (q || "").trim();
+    return t.length >= 1 && t.length <= MAX_QUESTION_CHARS;
+  };
+
+  /** Three questions phrased from the window currently in view (coordinator note), never a number: the agent
+   * fills in the actual figures once it runs. */
+  var suggestionQuestions = function (windowLabel: string): string[] {
+    return [
+      "¿Qué habría pasado con 1.000 USDC en " + windowLabel + "?",
+      "¿Y con el rango el doble de ancho en " + windowLabel + "?",
+      "Compara la política actual con la guarda de caídas en " + windowLabel + ".",
+    ];
+  };
+
+  var METRIC_LABEL_ES: Record<string, string> = {
+    end: "Saldo final",
+    net: "Resultado neto",
+    vsHodl: "Vs. mantener la mezcla",
+    vsUsdc: "Vs. quedarte en USDC",
+    fees: "Comisiones ganadas",
+    gas: "Gas gastado",
+    priceMove: "Movimiento de precio (BTC)",
+    timeInRange: "Tiempo en rango",
+    maxDrawdown: "Caída máxima",
+    return: "Retorno",
+    days: "Días",
+  };
+  /** `metric` is the closed enum AL-20a defines, plus `operations.<kind>` for whatever kind a run counted. */
+  var metricLabel = function (metric: string): string {
+    if (METRIC_LABEL_ES[metric]) return METRIC_LABEL_ES[metric];
+    if (metric.indexOf("operations.") === 0) return "Operaciones: " + metric.slice("operations.".length);
+    return metric;
+  };
+
+  var MONEY_SIGNED_METRICS: Record<string, boolean> = { net: true, vsHodl: true, vsUsdc: true };
+  var PCT_SIGNED_METRICS: Record<string, boolean> = { priceMove: true, return: true };
+  /** AL-21: the screen always shows the stored (already display-rounded) value, formatted per the metric's
+   * unit -- USDC deltas signed, absolute USDC magnitudes plain, signed percentages, maxDrawdown as a forced
+   * negative (same convention the bench's own Diagnóstico tab uses), counts and days as plain integers. */
+  var fmtClaimValue = function (value: number, metric: string): string {
+    if (MONEY_SIGNED_METRICS[metric]) return sg(value) + " USDC";
+    if (metric === "end" || metric === "fees" || metric === "gas") return money(value) + " USDC";
+    if (PCT_SIGNED_METRICS[metric]) return pct(value / 100, 1);
+    if (metric === "maxDrawdown") return "−" + nf(1).format(Math.abs(value)) + " %";
+    if (metric === "timeInRange") return nf(1).format(value) + " %";
+    if (metric === "days") return int(value) + (value === 1 ? " día" : " días");
+    if (metric.indexOf("operations.") === 0) return int(value) + (value === 1 ? " operación" : " operaciones");
+    return String(value);
+  };
+
+  type VerdictRunLike = { metrics: { end: number; vsHodl: number }; deposit: number; variantLabel: string };
+  var verdictDirectionWord = function (delta: number): "arriba" | "abajo" | "igual" {
+    if (Math.abs(delta) <= 0.01) return "igual";
+    return delta > 0 ? "arriba" : "abajo";
+  };
+  var isVerdictBaseline = function (x: string): boolean {
+    return x === "hold" || x === "usdc";
+  };
+  /** AL-20b: the verdict sentence, word for word the same templates as writeVerdictSentence (contract.ts) --
+   * comparability (AL-20c) is not re-checked here, it already gated whether this block exists at all. */
+  var verdictSentence = function (run: VerdictRunLike, against: string, other?: VerdictRunLike): string {
+    if (against === "hold") {
+      var delta = run.metrics.vsHodl;
+      var dir = verdictDirectionWord(delta);
+      if (dir === "igual") return "Terminó igual que mantener la mezcla (diferencia menor a 0.01 USDC).";
+      return "Terminó " + money(Math.abs(delta)) + " USDC por " + (dir === "arriba" ? "encima de" : "debajo de") + " mantener la mezcla (hold).";
+    }
+    if (against === "usdc") {
+      var delta2 = run.metrics.end - run.deposit;
+      var dir2 = verdictDirectionWord(delta2);
+      if (dir2 === "igual") return "Terminó igual que quedarte en USDC (diferencia menor a 0.01 USDC).";
+      return "Terminó " + money(Math.abs(delta2)) + " USDC por " + (dir2 === "arriba" ? "encima de" : "debajo de") + " quedarte en USDC.";
+    }
+    if (!other) return "No se pudo mostrar esta comparación: falta el otro resultado.";
+    var delta3 = run.metrics.end - other.metrics.end;
+    var dir3 = verdictDirectionWord(delta3);
+    if (dir3 === "igual") return "Terminó igual que " + other.variantLabel + " (diferencia menor a 0.01 USDC).";
+    return "Terminó " + money(Math.abs(delta3)) + " USDC por " + (dir3 === "arriba" ? "encima de" : "debajo de") + " " + other.variantLabel + ".";
+  };
+
+  type AnswerBlock =
+    | { type: "text"; md: string }
+    | { type: "claim"; metric: string; runId: string; value: number }
+    | { type: "verdict"; runId: string; against: string }
+    | { type: "chart"; kind: string; runIds: string[]; pool?: string }
+    | { type: "caveat"; md: string };
+
+  /** AL-21a: the answer's headline is always the first verdict, or with none the first claim -- never a text
+   * block, never a chart. `null` for an answer with neither (a refusal/caveat-only answer, AL-22, is valid). */
+  var answerHeadlineBlock = function (blocks: AnswerBlock[]): AnswerBlock | null {
+    for (var i = 0; i < blocks.length; i++) if (blocks[i].type === "verdict") return blocks[i];
+    for (var j = 0; j < blocks.length; j++) if (blocks[j].type === "claim") return blocks[j];
+    return null;
+  };
+
+  /** AL-20: text/caveat prose references a claim as `{{c0}}` and a verdict as `{{v0}}` -- the screen already
+   * shows that figure as a chip or sentence above, so the token is dropped rather than resolved a second time. */
+  var stripRefTokens = function (md: string): string {
+    return md.replace(/\{\{[cv]\d+\}\}/g, "").replace(/\s{2,}/g, " ").trim();
+  };
+
+  type RunLite = VerdictRunLike & { resultHash: string; windowId: string };
+
+  var claimChipHtml = function (b: { runId: string; value: number; metric: string }, run?: RunLite): string {
+    var title = run ? "Resultado: " + run.variantLabel : "";
+    return (
+      '<span class="lab-ask-chip" data-run-id="' + escHtml(b.runId) + '"' + (title ? ' title="' + escHtml(title) + '"' : "") + ">" +
+      "<b>" + escHtml(fmtClaimValue(b.value, b.metric)) + "</b><small>" + escHtml(metricLabel(b.metric)) + "</small></span>"
+    );
+  };
+
+  var verdictText = function (b: { runId: string; against: string }, runsByHash: Record<string, RunLite>): string {
+    var run = runsByHash[b.runId];
+    if (!run) return "No se pudo mostrar esta comparación: falta el resultado.";
+    var other = isVerdictBaseline(b.against) ? undefined : runsByHash[b.against];
+    return verdictSentence(run, b.against, other);
+  };
+
+  var chartButtonHtml = function (b: { kind: string; runIds: string[] }, runsByHash: Record<string, RunLite>): string {
+    var first = b.runIds[0];
+    var run = first ? runsByHash[first] : undefined;
+    var windowId = run ? run.windowId : "";
+    var compare = b.runIds.length > 1 || b.kind === "decomposition" ? "1" : "0";
+    return (
+      '<button type="button" class="lab-ask-openbench" data-run-id="' + escHtml(first || "") + '" data-window-id="' + escHtml(windowId) + '" data-compare="' + compare + '">' +
+      "Ver en el banco</button>"
+    );
+  };
+
+  /**
+   * AL-21a/AL-22: the full answer as HTML -- headline (verdict sentence or claim chip) first, then every other
+   * claim as a chip, every other verdict as a sentence, every chart as an "open in the bench" button, and all
+   * prose (text/caveat) together under the "not verified" label, never mixed with the verified blocks above
+   * it. `partial` renders the AL-22 notice when the answer was flagged `LAB_ANSWER_PARTIAL` (verified claims
+   * and charts only, after a failed repair). An answer with no blocks (should not happen; AL-20 requires at
+   * least one) renders nothing rather than an empty shell.
+   */
+  var answerBlocksHtml = function (blocks: AnswerBlock[], runsByHash: Record<string, RunLite>, partial: boolean): string {
+    if (!blocks || !blocks.length) return "";
+    var headline = answerHeadlineBlock(blocks);
+    var out = "";
+    if (headline) {
+      // `.lab-verdict`/`.lab-prose` are the PoC-1 prototype's own class names (AL-53: "the visual reference
+      // for the implementing session"), ported into lab-style.ts at the B-07 shell pass and left unused until
+      // this ticket -- reused here rather than inventing a parallel set of class names for the same thing.
+      out += headline.type === "verdict"
+        ? '<p class="lab-verdict">' + escHtml(verdictText(headline, runsByHash)) + "</p>"
+        : '<div class="lab-verdict lab-verdict-claim">' + claimChipHtml(headline, runsByHash[(headline as { runId: string }).runId]) + "</div>";
+    }
+    if (partial) out += '<p class="lab-ask-partial">Respuesta parcial: solo se muestra lo verificado.</p>';
+    var chips = "";
+    var sentences = "";
+    var charts = "";
+    var prose = "";
+    for (var i = 0; i < blocks.length; i++) {
+      var b = blocks[i];
+      if (b === headline) continue;
+      if (b.type === "claim") chips += claimChipHtml(b, runsByHash[b.runId]);
+      else if (b.type === "verdict") sentences += '<p class="lab-verdict">' + escHtml(verdictText(b, runsByHash)) + "</p>";
+      else if (b.type === "chart") charts += chartButtonHtml(b, runsByHash);
+      else prose += "<p>" + escHtml(stripRefTokens(b.md)) + "</p>";
+    }
+    if (chips) out += '<div class="lab-ask-chips">' + chips + "</div>";
+    out += sentences + charts;
+    if (prose) out += '<div class="lab-prose"><div class="lab-prose-label">Explicación del agente · no verificada</div>' + prose + "</div>";
+    return out;
+  };
+
+  type CostMeterLite = { modelCalls: { model: string; promptTokens: number; completionTokens: number }[]; runs: unknown[]; wallMs: number };
+  /** The small mono footer under an answer: model(s), tokens in→out, runs, seconds, and the shadow cost when
+   * the server could price it (lab_prices configured) -- omitted, not shown as 0, when it could not. */
+  var answerFooterText = function (cost: CostMeterLite | null, shadowUsd: number | null): string {
+    if (!cost) return "";
+    var models: string[] = [];
+    var seen: Record<string, boolean> = {};
+    for (var i = 0; i < cost.modelCalls.length; i++) {
+      var m = cost.modelCalls[i].model;
+      if (!seen[m]) {
+        seen[m] = true;
+        models.push(m);
+      }
+    }
+    var tokensIn = 0;
+    var tokensOut = 0;
+    for (var j = 0; j < cost.modelCalls.length; j++) {
+      tokensIn += cost.modelCalls[j].promptTokens || 0;
+      tokensOut += cost.modelCalls[j].completionTokens || 0;
+    }
+    var parts: string[] = [];
+    if (models.length) parts.push(models.join(" · "));
+    parts.push(int(tokensIn) + "→" + int(tokensOut) + " tok");
+    parts.push(cost.runs.length + (cost.runs.length === 1 ? " run" : " runs"));
+    parts.push((cost.wallMs / 1000).toFixed(1) + " s");
+    if (shadowUsd !== null && shadowUsd !== undefined) parts.push("$" + shadowUsd.toFixed(4) + " sombra");
+    return parts.join(" · ");
   };
 
   return {
@@ -272,6 +525,22 @@ export function labLogic() {
     jobSubText: jobSubText,
     jobFailedText: jobFailedText,
     isCurrentJobGen: isCurrentJobGen,
+    escHtml: escHtml,
+    MAX_QUESTION_CHARS: MAX_QUESTION_CHARS,
+    questionValid: questionValid,
+    suggestionQuestions: suggestionQuestions,
+    metricLabel: metricLabel,
+    fmtClaimValue: fmtClaimValue,
+    verdictSentence: verdictSentence,
+    isVerdictBaseline: isVerdictBaseline,
+    answerHeadlineBlock: answerHeadlineBlock,
+    stripRefTokens: stripRefTokens,
+    answerBlocksHtml: answerBlocksHtml,
+    answerFooterText: answerFooterText,
+    askStatusHeadline: askStatusHeadline,
+    askSubText: askSubText,
+    askFailedText: askFailedText,
+    askSendErrorText: askSendErrorText,
   };
 }
 
