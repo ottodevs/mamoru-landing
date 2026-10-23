@@ -106,4 +106,44 @@ describe("lab-logic.ts (embedded client logic, same function the server-side bou
     expect(LAB.pollDelayMs(0)).toBeLessThan(LAB.pollDelayMs(1));
     expect(LAB.pollDelayMs(1)).toBeLessThanOrEqual(LAB.pollDelayMs(5));
   });
+
+  test("int: grouped whole numbers everywhere a tick/deposit count is shown", () => {
+    expect(LAB.int(2000)).toBe("2.000");
+    expect(LAB.int(10000)).toBe("10.000");
+    expect(LAB.int(500)).toBe("500");
+    expect(LAB.int(3500)).toBe("3.500");
+  });
+
+  test("windowShortLabel: regime word + short month (no dot) + 4-digit year", () => {
+    expect(LAB.windowShortLabel("crash", "2025-01-29T23:55:47.000Z")).toBe("Caída ene 2025");
+    expect(LAB.windowShortLabel("crash", "2025-02-02T00:00:00.000Z")).toBe("Caída feb 2025");
+    expect(LAB.windowShortLabel("rally", "2024-12-01T00:00:00.000Z")).toBe("Subida dic 2024");
+    expect(LAB.windowShortLabel("calm", "2026-09-01T00:00:00.000Z")).toBe("Calma sep 2026");
+    expect(LAB.windowShortLabel("stable-stress", "2025-06-01T00:00:00.000Z")).toBe("Estrés USDT jun 2025");
+    // no trailing dot on the short month, ever
+    expect(LAB.windowShortLabel("crash", "2025-02-02T00:00:00.000Z")).not.toContain(".");
+  });
+
+  test("windowHeadlineLabel: regime word + 'de' + long month + 4-digit year", () => {
+    expect(LAB.windowHeadlineLabel("crash", "2025-02-02T00:00:00.000Z")).toBe("Caída de febrero 2025");
+    expect(LAB.windowHeadlineLabel("rally", "2024-12-01T00:00:00.000Z")).toBe("Subida de diciembre 2024");
+  });
+
+  test("strategyNote: a plain sentence per base/width, not the raw policyId", () => {
+    expect(LAB.strategyNote("live", 2000)).toBe("Lo que corre hoy en producción");
+    expect(LAB.strategyNote("live", 4000)).toBe("Mismo motor, rango de 4.000 ticks");
+    expect(LAB.strategyNote("guard", 2000)).toBe("Congela entradas si el precio cae fuerte");
+    expect(LAB.strategyNote("guard", 4000)).toBe("Congela entradas si el precio cae fuerte, rango de 4.000 ticks");
+  });
+
+  test("initialCursorIndex: the sample where the strategy trails holding the mix the most", () => {
+    const series = [
+      { v: 1000, h: 1000 }, // diff 0
+      { v: 980, h: 1000 }, // diff -20
+      { v: 940, h: 1010 }, // diff -70 (most negative)
+      { v: 990, h: 1000 }, // diff -10
+    ];
+    expect(LAB.initialCursorIndex(series)).toBe(2);
+    expect(LAB.initialCursorIndex([{ v: 1, h: 0 }])).toBe(0);
+  });
 });

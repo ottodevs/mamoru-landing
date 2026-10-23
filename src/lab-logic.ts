@@ -40,10 +40,14 @@ export function labLogic() {
   };
 
   var nf = function (d: number) {
-    return new Intl.NumberFormat("es-ES", { minimumFractionDigits: d, maximumFractionDigits: d, useGrouping: true });
+    return new Intl.NumberFormat("es-ES", { minimumFractionDigits: d, maximumFractionDigits: d, useGrouping: "always" });
   };
   var money = function (v: number): string {
     return nf(2).format(v);
+  };
+  /** Grouped whole number: "2.000", "10.000" — ticks, USDC bounds, axis labels, anywhere a plain number would read wrong. */
+  var int = function (v: number): string {
+    return nf(0).format(v);
   };
   /** Signed money, with a dead zone under 0.004 so rounding noise does not flip the sign shown. */
   var sg = function (v: number): string {
@@ -117,6 +121,43 @@ export function labLogic() {
     return 3000;
   };
 
+  // ---- window labels (coordinator note): the manifest's window.label is long English prose ("Feb 2025, 2-3
+  // Feb tariff headline crash (ETH -25%)") and overflows the top segment at 390px. A short Spanish label built
+  // from regime + month of window.from is what the segment buttons, Probar's window field and the strategy
+  // list show; the long label survives as a title tooltip and in Supuestos. ----
+
+  var REGIME_WORD: Record<string, string> = { crash: "Caída", rally: "Subida", calm: "Calma", "stable-stress": "Estrés USDT" };
+  var MONTH_SHORT = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+  var MONTH_LONG = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+  /** "Caída feb 2025" — short month, no dot, 4-digit year. Segment buttons, Probar, strategy assumptions. */
+  var windowShortLabel = function (regime: string, fromIso: string): string {
+    var d = new Date(fromIso);
+    return (REGIME_WORD[regime] || regime) + " " + MONTH_SHORT[d.getUTCMonth()] + " " + d.getUTCFullYear();
+  };
+  /** "Caída de febrero 2025" — long month, for the headline sentence only. */
+  var windowHeadlineLabel = function (regime: string, fromIso: string): string {
+    var d = new Date(fromIso);
+    return (REGIME_WORD[regime] || regime) + " de " + MONTH_LONG[d.getUTCMonth()] + " " + d.getUTCFullYear();
+  };
+
+  /** Strategy card subtitle: a plain sentence instead of the raw policyId (kept in Supuestos). */
+  var strategyNote = function (base: string, widthTicks: number): string {
+    var widthPart = "rango de " + int(widthTicks) + " ticks";
+    if (base === "guard") {
+      return widthTicks === 2000 ? "Congela entradas si el precio cae fuerte" : "Congela entradas si el precio cae fuerte, " + widthPart;
+    }
+    return widthTicks === 2000 ? "Lo que corre hoy en producción" : "Mismo motor, " + widthPart;
+  };
+
+  /** Like the prototype's own bootstrap: the sample where the strategy trails holding the mix the most. */
+  var initialCursorIndex = function (series: { v: number; h: number }[]): number {
+    var idx = 0;
+    for (var k = 1; k < series.length; k++) {
+      if (series[k].v - series[k].h < series[idx].v - series[idx].h) idx = k;
+    }
+    return idx;
+  };
+
   return {
     WIDTH_MIN: WIDTH_MIN,
     WIDTH_MAX: WIDTH_MAX,
@@ -127,6 +168,7 @@ export function labLogic() {
     validSpec: validSpec,
     ticks: ticks,
     money: money,
+    int: int,
     sg: sg,
     pct: pct,
     cls: cls,
@@ -136,6 +178,10 @@ export function labLogic() {
     canCompareToBaseline: canCompareToBaseline,
     compareMatrix: compareMatrix,
     pollDelayMs: pollDelayMs,
+    windowShortLabel: windowShortLabel,
+    windowHeadlineLabel: windowHeadlineLabel,
+    strategyNote: strategyNote,
+    initialCursorIndex: initialCursorIndex,
   };
 }
 
