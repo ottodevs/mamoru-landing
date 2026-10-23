@@ -50,7 +50,9 @@ function labShell(csrf: string): string {
       <section style="display:grid;gap:8px">
         <div class="lab-k">Estrategias del experimento</div>
         <div class="lab-variants" id="lab-variants"></div>
-        <div class="lab-chip-job" id="lab-job-chip" role="status" aria-live="polite" hidden></div>
+        <!-- Purely visual (otto/mamoru-astro#28 follow-up, GPT-6 Sol review): the right-column status card is
+             the one announced live region; a second aria-live here would double-announce the same ticking text. -->
+        <div class="lab-chip-job" id="lab-job-chip" aria-hidden="true" hidden></div>
       </section>
       <details class="lab-box" id="lab-assum"><summary class="lab-k">Supuestos</summary><dl class="lab-ass" id="lab-ass" style="margin-top:10px"></dl></details>
     </aside>

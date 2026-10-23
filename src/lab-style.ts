@@ -204,4 +204,12 @@ export const LAB_STYLE = `
   .lab-ev .lab-p { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .lab-root * { transition: none !important; animation: none !important; } }
+/* GPT-6 Sol review (otto/mamoru-astro#28 follow-up): the rule above already stops the spin (animation: none
+   !important), but a frozen ring with one differently-coloured side reads as a broken shape, not a paused one.
+   Placed last so it wins the cascade over .lab-spinner's and .lab-chip-job .lab-spinner's own unconditional
+   sizing/border rules above — a plain static dot says "busy" without needing motion. */
+@media (prefers-reduced-motion: reduce) {
+  .lab-spinner { border: none; width: 7px; height: 7px; background: var(--paper); }
+  .lab-chip-job .lab-spinner { width: 6px; height: 6px; background: var(--mamoru); }
+}
 `;

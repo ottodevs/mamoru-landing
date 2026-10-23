@@ -619,7 +619,7 @@ export function opsClientScript(nonce: string): string {
     var dF = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short", timeZone: "UTC" });
     var tF = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
 
-    var root = null, scope = null, csrf = "", state = null, geo = {}, playTimer = null, jobTimer = null, jobTickTimer = null, loadToken = 0;
+    var root = null, scope = null, csrf = "", state = null, geo = {}, playTimer = null, jobTimer = null, jobTickTimer = null, loadToken = 0, jobGen = 0, lastJobShape = null;
 
     function esc(s) {
       return String(s).replace(/[&<>"']/g, function (c) {
@@ -663,7 +663,7 @@ export function opsClientScript(nonce: string): string {
         // session knows about; jobSpec/jobWindowIndex are captured at submit time so a retry or a late
         // completion is attributed correctly even if the viewer has since switched windows.
         job: null, jobSpec: null, jobWindowIndex: 0, jobStartMs: 0, jobSending: false, jobWasInstant: false,
-        jobAlreadyExisted: false, jobVariantLabel: "", jobDismissed: false,
+        jobAlreadyExisted: false, jobVariantLabel: "", jobDismissed: false, jobApplying: false, jobDoneElapsedSec: 0,
       };
     }
     function windowOf() { return state.windows[state.w] || null; }
@@ -1175,7 +1175,10 @@ export function opsClientScript(nonce: string): string {
     // never only once on a response.
 
     function jobActive() {
-      return Boolean(state.jobSending || (state.job && (state.job.status === "queued" || state.job.status === "running")));
+      // jobApplying covers the gap between a job turning "done" and onJobDone's own async runs-refresh landing
+      // (GPT-6 Sol review, otto/mamoru-astro#28 follow-up): without it the button re-enabled the instant status
+      // flipped, so a second click could race the first completion's write to state.
+      return Boolean(state.jobSending || state.jobApplying || (state.job && (state.job.status === "queued" || state.job.status === "running")));
     }
     function stopJobTicker() {
       clearInterval(jobTickTimer);
@@ -1186,16 +1189,27 @@ export function opsClientScript(nonce: string): string {
       jobTickTimer = setInterval(renderJobStatus, 1000);
     }
 
-    /** explicitSpec is set only by the "Reintentar" button, re-running exactly the spec that just failed. */
+    /**
+     * explicitSpec is set only by the "Reintentar" button, re-running exactly the spec that just failed.
+     *
+     * jobGen (GPT-6 Sol review, otto/mamoru-astro#28 follow-up): every attempt bumps it, and every async step
+     * downstream (the POST response, each poll, the final runs-refresh in onJobDone) checks it against the
+     * live counter before touching state. A second click — or a poll response landing after a newer attempt
+     * already started — is recognized as stale and dropped instead of applying an older job's result over a
+     * newer one. windowIndex travels as a plain argument through the whole chain, never re-read from
+     * state.jobWindowIndex inside a callback, so a completion always writes to the window it was actually for.
+     */
     function runScenario(explicitSpec) {
       var w = explicitSpec ? null : windowOf();
       var spec = explicitSpec || (w && { windowId: w.windowId, base: state.probe.base, widthTicks: state.probe.width, deposit: state.probe.deposit });
       if (!spec || !LAB.validSpec(spec)) return;
       var windowIndex = 0;
       for (var i = 0; i < state.windows.length; i++) if (state.windows[i].windowId === spec.windowId) windowIndex = i;
+      var myGen = ++jobGen;
       state.jobSpec = spec;
       state.jobWindowIndex = windowIndex;
       state.jobSending = true;
+      state.jobApplying = false;
       state.jobDismissed = false;
       state.job = null;
       state.jobStartMs = Date.now();
@@ -1203,6 +1217,7 @@ export function opsClientScript(nonce: string): string {
       var body = new URLSearchParams({ csrf: csrf, windowId: spec.windowId, base: spec.base, widthTicks: String(spec.widthTicks), deposit: String(spec.deposit) }).toString();
       api("/ops/lab/api/jobs", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: body })
         .then(function (r) {
+          if (!LAB.isCurrentJobGen(myGen, jobGen)) return; // superseded while the POST was in flight
           state.jobSending = false;
           if (!r.ok || !r.body || !r.body.job) {
             state.job = { status: "failed", errorCode: (r.body && r.body.error) || "LAB_NETWORK" };
@@ -1212,49 +1227,58 @@ export function opsClientScript(nonce: string): string {
           }
           state.job = r.body.job;
           state.jobWasInstant = state.job.status === "done";
-          if (state.job.status === "done") { onJobDone(state.job); return; }
+          if (state.job.status === "done") { onJobDone(state.job, myGen, windowIndex); return; }
           startJobTicker();
           renderJobStatus();
-          pollJob(state.job.id, 0);
+          pollJob(state.job.id, 0, myGen, windowIndex);
         })
         .catch(function () {
+          if (!LAB.isCurrentJobGen(myGen, jobGen)) return;
           state.jobSending = false;
           state.job = { status: "failed", errorCode: "LAB_NETWORK" };
           stopJobTicker();
           renderJobStatus();
         });
     }
-    function pollJob(id, attempt) {
+    function pollJob(id, attempt, gen, windowIndex) {
       clearTimeout(jobTimer);
       jobTimer = setTimeout(function () {
         api("/ops/lab/api/jobs/" + encodeURIComponent(id)).then(function (r) {
+          if (!LAB.isCurrentJobGen(gen, jobGen)) return; // superseded while this poll was in flight
           if (!state.job || state.job.id !== id) return;
-          if (!r.ok || !r.body || !r.body.job) { pollJob(id, attempt + 1); return; }
+          if (!r.ok || !r.body || !r.body.job) { pollJob(id, attempt + 1, gen, windowIndex); return; }
           state.job = r.body.job;
-          if (state.job.status === "queued" || state.job.status === "running") { renderJobStatus(); pollJob(id, attempt + 1); return; }
+          if (state.job.status === "queued" || state.job.status === "running") { renderJobStatus(); pollJob(id, attempt + 1, gen, windowIndex); return; }
           stopJobTicker();
-          if (state.job.status === "done") onJobDone(state.job);
+          if (state.job.status === "done") onJobDone(state.job, gen, windowIndex);
           else renderJobStatus();
         });
       }, LAB.pollDelayMs(attempt));
     }
-    /** The window this job's spec belongs to — not necessarily the one currently in view. */
+    /** The window the in-flight/last job's spec belongs to — not necessarily the one currently in view. Only
+     * ever used for display (renderJobStatus); the mutation path below carries its own windowIndex argument. */
     function jobWindow() {
       return state.windows[state.jobWindowIndex] || null;
     }
-    function onJobDone(job) {
+    function onJobDone(job, gen, windowIndex) {
+      if (!LAB.isCurrentJobGen(gen, jobGen)) return;
       stopJobTicker();
-      var w = jobWindow();
+      var w = state.windows[windowIndex] || null;
       if (!w) { renderJobStatus(); return; }
       // Decided before the list is refreshed: either signal means this exact result already existed before
       // this click, not something the click itself computed just now.
       var alreadyExisted = state.jobWasInstant || w.runs.some(function (r) { return r.resultHash === job.resultHash; });
+      state.jobApplying = true; // keep the Run button disabled until this completion is actually applied
+      renderJobStatus();
       api("/ops/lab/api/runs?window=" + encodeURIComponent(w.windowId)).then(function (rr) {
+        if (!LAB.isCurrentJobGen(gen, jobGen)) return; // a newer attempt started while this refresh was in flight: drop it entirely
+        state.jobApplying = false;
         w.runs = (rr.body && rr.body.runs) || w.runs;
         var match = w.runs.filter(function (r) { return r.resultHash === job.resultHash; })[0];
+        state.jobDoneElapsedSec = jobElapsedSec(); // frozen here, not recomputed on later re-renders (window switches, …)
         state.jobAlreadyExisted = alreadyExisted;
         state.jobVariantLabel = match ? match.variantLabel : "";
-        state.w = state.jobWindowIndex;
+        state.w = windowIndex;
         state.selectedHash = job.resultHash || state.selectedHash;
         state.at = 0;
         renderAll();
@@ -1284,8 +1308,49 @@ export function opsClientScript(nonce: string): string {
     function jobElapsedSec() {
       return Math.max(0, Math.round((Date.now() - state.jobStartMs) / 1000));
     }
+    /** What shape the status card needs right now. Changes only on a real transition (idle→sending→active→
+     * done/failed); the elapsed seconds ticking every render never changes it — queued and running share one
+     * "active" shape, their headline text differs but that is itself a meaningful change, not tick noise. */
+    function jobShapeKey() {
+      if (!state.jobSpec || (!state.jobSending && !state.job)) return "none";
+      if (state.jobSending) return "sending";
+      var status = state.job.status;
+      if (status === "queued" || status === "running") return "active";
+      if (state.jobDismissed) return "none";
+      return status === "failed" ? "failed" : "done";
+    }
+    /** Builds the card's DOM once per shape (GPT-6 Sol review, otto/mamoru-astro#28 follow-up): the ticking
+     * seconds live in their own aria-hidden span, separate from the headline text node the aria-live region
+     * actually announces, and this is only called when the shape changes — never once a second. */
+    function buildJobStatusCard(shape, specLine) {
+      var specHtml = '<div class="lab-status-spec">' + esc(specLine) + "</div>";
+      if (shape === "sending") {
+        return '<div class="lab-status-card" role="status" aria-live="polite">' + specHtml + '<div class="lab-status-text" id="lab-status-text">Enviando…</div></div>';
+      }
+      if (shape === "active") {
+        return (
+          '<div class="lab-status-card" role="status" aria-live="polite">' + specHtml +
+          '<div class="lab-status-text"><span id="lab-status-headline"></span><span class="lab-status-secs" id="lab-status-secs" aria-hidden="true"></span></div>' +
+          '<div class="lab-progress"><i></i></div><div class="lab-status-sub" id="lab-status-sub"></div></div>'
+        );
+      }
+      if (shape === "failed") {
+        return (
+          '<div class="lab-status-card lab-failed" role="status" aria-live="polite"><button type="button" class="lab-status-close" id="lab-job-dismiss" aria-label="Descartar">×</button>' +
+          specHtml + '<div class="lab-status-text" id="lab-status-text"></div>' +
+          '<button type="button" class="lab-retry" id="lab-job-retry">Reintentar</button></div>'
+        );
+      }
+      // done
+      return (
+        '<div class="lab-status-card" role="status" aria-live="polite"><button type="button" class="lab-status-close" id="lab-job-dismiss" aria-label="Descartar">×</button>' +
+        specHtml + '<div class="lab-status-text" id="lab-status-text"></div></div>'
+      );
+    }
     /** Updates the Run button's state, the detail card right under it, and the compact left-column chip. Safe
-     * to call every second and on every poll: it only ever touches these three pieces, never the sliders. */
+     * to call every second and on every poll: the card's DOM is rebuilt only when its shape actually changes
+     * (jobShapeKey); a mere tick only ever sets textContent on existing nodes, never touches the sliders. The
+     * chip is aria-hidden (purely visual, see ops-lab.ts), so it is free to rebuild every tick. */
     function renderJobStatus() {
       var btn = $("lab-run");
       var label = $("lab-run-label");
@@ -1307,49 +1372,51 @@ export function opsClientScript(nonce: string): string {
         spin.remove();
       }
 
-      if (!state.jobSpec || (!state.jobSending && !state.job)) { card.innerHTML = ""; chip.hidden = true; return; }
+      var shape = jobShapeKey();
+      if (shape === "none") {
+        lastJobShape = shape;
+        card.innerHTML = "";
+        chip.hidden = true;
+        return;
+      }
       var jw = jobWindow();
       var windowLabel = jw ? LAB.windowShortLabel(jw.regime, jw.from, jw.to) : state.jobSpec.windowId;
       var specLine = LAB.specWords(windowLabel, state.jobSpec.base, state.jobSpec.widthTicks, state.jobSpec.deposit);
 
-      if (state.jobSending) {
-        card.innerHTML = '<div class="lab-status-card" role="status" aria-live="polite"><div class="lab-status-spec">' + esc(specLine) + '</div><div class="lab-status-text">Enviando…</div></div>';
-        chip.hidden = true;
-        return;
+      if (shape !== lastJobShape) {
+        lastJobShape = shape;
+        card.innerHTML = buildJobStatusCard(shape, specLine);
+        var dismiss = $("lab-job-dismiss");
+        if (dismiss) dismiss.onclick = dismissJobStatus;
+        var retry = $("lab-job-retry");
+        if (retry) retry.onclick = function () { runScenario(state.jobSpec); };
+      } else {
+        var specEl = card.querySelector(".lab-status-spec");
+        if (specEl) specEl.textContent = specLine;
       }
-      var status = state.job.status;
-      if (status === "queued" || status === "running") {
+
+      if (shape === "active") {
+        var status = state.job.status;
         var secs = jobElapsedSec();
-        var text = LAB.jobStatusText({ status: status, elapsedSec: secs, variantLabel: "", windowLabel: windowLabel, alreadyExisted: false });
-        var sub = LAB.jobSubText(status, secs);
-        card.innerHTML =
-          '<div class="lab-status-card" role="status" aria-live="polite"><div class="lab-status-spec">' + esc(specLine) + '</div><div class="lab-status-text">' + esc(text) + "</div>" +
-          '<div class="lab-progress"><i></i></div>' +
-          (sub ? '<div class="lab-status-sub">' + esc(sub) + "</div>" : "") +
-          "</div>";
+        var headlineEl = $("lab-status-headline");
+        if (headlineEl) headlineEl.textContent = LAB.jobStatusHeadline(status);
+        var secsEl = $("lab-status-secs");
+        if (secsEl) secsEl.textContent = " · " + secs + " s";
+        var subEl = $("lab-status-sub");
+        if (subEl) subEl.textContent = LAB.jobSubText(status, secs);
         chip.hidden = false;
         chip.innerHTML = '<span class="lab-spinner" aria-hidden="true"></span><span>' + esc(status === "queued" ? "En cola" : "Calculando") + "… " + secs + " s</span>";
         return;
       }
       chip.hidden = true;
-      if (state.jobDismissed) { card.innerHTML = ""; return; }
-      if (status === "failed") {
-        var failText = LAB.jobFailedText(state.job.errorCode);
-        card.innerHTML =
-          '<div class="lab-status-card lab-failed" role="status" aria-live="polite"><button type="button" class="lab-status-close" id="lab-job-dismiss" aria-label="Descartar">×</button>' +
-          '<div class="lab-status-spec">' + esc(specLine) + '</div><div class="lab-status-text">' + esc(failText) + "</div>" +
-          '<button type="button" class="lab-retry" id="lab-job-retry">Reintentar</button></div>';
-        var retry = $("lab-job-retry");
-        if (retry) retry.onclick = function () { runScenario(state.jobSpec); };
+      if (shape === "sending") return;
+      var textEl = $("lab-status-text");
+      if (!textEl) return;
+      if (shape === "failed") {
+        textEl.textContent = LAB.jobFailedText(state.job.errorCode);
       } else {
-        // done
-        var doneText = LAB.jobStatusText({ status: "done", elapsedSec: jobElapsedSec(), variantLabel: state.jobVariantLabel, windowLabel: windowLabel, alreadyExisted: state.jobAlreadyExisted });
-        card.innerHTML =
-          '<div class="lab-status-card" role="status" aria-live="polite"><button type="button" class="lab-status-close" id="lab-job-dismiss" aria-label="Descartar">×</button>' +
-          '<div class="lab-status-spec">' + esc(specLine) + '</div><div class="lab-status-text">' + esc(doneText) + "</div></div>";
+        textEl.textContent = LAB.jobStatusText({ status: "done", elapsedSec: state.jobDoneElapsedSec, variantLabel: state.jobVariantLabel, windowLabel: windowLabel, alreadyExisted: state.jobAlreadyExisted });
       }
-      var dismiss = $("lab-job-dismiss");
-      if (dismiss) dismiss.onclick = dismissJobStatus;
     }
 
     /* ---------- playback ---------- */
@@ -1431,6 +1498,7 @@ export function opsClientScript(nonce: string): string {
       csrf = root.getAttribute("data-lab-csrf") || "";
       state = freshState();
       geo = {};
+      lastJobShape = null;
       wire();
       loadAll();
       var onResize = function () { drawPrice(); drawMoney(); drawCursor(); };
