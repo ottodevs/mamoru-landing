@@ -316,3 +316,12 @@ describe("console receipts (otto/mamoru-astro#26, ottodevs/mamoru#129 phase 2)",
     expect(html).toContain("collected");
   });
 });
+
+test("an upper-bound net is labelled as one on Yield and Pulse, with the unpriced gas named", async () => {
+  const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "receipts", "flags"]));
+  const y = await (await worker.fetch(get("/ops/yield", cookie), env, {} as ExecutionContext)).text();
+  expect(y).toMatch(/<span class="c-k">Net after gas<\/span><span class="c-v">≤ /);
+  expect(y).toContain("0.0030 ETH more paid on days with no ETH price");
+  const p = await (await worker.fetch(get("/ops", cookie), env, {} as ExecutionContext)).text();
+  expect(p).toContain("not priced");
+});

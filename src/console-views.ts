@@ -301,7 +301,7 @@ export function pulseSection(m: ConsoleModel, now: Date): SectionView {
   const t = m.totals;
   const hero = `<section class="c-sheet c-hero"><p class="c-k">Earned for users so far</p>
 <p class="c-big">${esc(money(t.earned))}</p>
-<p class="c-line">${t.collected != null ? `<span><b>${esc(money(t.feesCounted))}</b> uncollected, <b>${esc(money(t.collected))}</b> collected</span><span>${t.net != null ? `${t.gasUnpricedEth ? "at most " : ""}<b>${esc(money(t.net))}</b> after <b>${esc(money(t.gasUsd))}</b> of gas` : "no gas recorded"}</span>` : ""}<span>${t.apr != null ? `at least <b>${esc(pct(t.apr))}</b> fee APR, before gas` : "fee APR shows once the engine reports first entries"}</span><span><b>${esc(money(t.lp))}</b> placed in ${t.positions} positions</span><span><b>${t.earning}</b> accounts earning</span></p>
+<p class="c-line">${t.collected != null ? `<span><b>${esc(money(t.feesCounted))}</b> uncollected, <b>${esc(money(t.collected))}</b> collected</span><span>${t.net != null ? (t.gasUnpricedEth ? `at most <b>${esc(money(t.net))}</b> after <b>${esc(money(t.gasUsd))}</b> of gas, plus <b>${esc(eth(t.gasUnpricedEth))}</b> not priced` : `<b>${esc(money(t.net))}</b> after <b>${esc(money(t.gasUsd))}</b> of gas`) : "no gas recorded"}</span>` : ""}<span>${t.apr != null ? `at least <b>${esc(pct(t.apr))}</b> fee APR, before gas` : "fee APR shows once the engine reports first entries"}</span><span><b>${esc(money(t.lp))}</b> placed in ${t.positions} positions</span><span><b>${t.earning}</b> accounts earning</span></p>
 ${capitalChart(m)}
 <p class="c-foot">Capital held per day, every account including test: that daily table has no environment yet. A dip is a withdrawal as often as a price move.</p></section>`;
   const attention = sheet("Needs attention", m.alerts.length ? `${m.alerts.length} open` : null, alertsList(m), "c-attn");
@@ -346,7 +346,7 @@ export function yieldView(m: ConsoleModel, now: Date): SectionView {
   const best = m.accounts.filter((a) => a.apr != null).sort((a, b) => (b.apr ?? 0) - (a.apr ?? 0))[0];
   const figs = `<div class="c-figs">
 ${fig("Earned to date", money(t.earned), t.collected != null ? `${money(t.feesCounted)} uncollected + ${money(t.collected)} collected` : "uncollected fees, every position")}
-${fig("Net after gas", t.net != null ? money(t.net) : "n/a", t.net == null ? "gas not recorded yet" : t.gasUnpricedEth ? `at most: ${money(t.gasUsd)} of gas, plus ${eth(t.gasUnpricedEth)} on days with no ETH price` : `${money(t.gasUsd)} of gas paid by the accounts, at each day's ETH price`)}
+${fig("Net after gas", t.net == null ? "n/a" : t.gasUnpricedEth ? `≤ ${money(t.net)}` : money(t.net), t.net == null ? "gas not recorded yet" : t.gasUnpricedEth ? `at most: after ${money(t.gasUsd)} of gas, and ${eth(t.gasUnpricedEth)} more paid on days with no ETH price is not in it` : `${money(t.gasUsd)} of gas paid by the accounts, at each day's ETH price`)}
 ${fig("Fee APR", pct(t.apr), best ? `at least, before gas; best ${best.key} at ${pct(best.apr)}` : "at least: since first entry, weighted by capital, before gas")}
 ${harvestFig(m)}
 </div>`;
