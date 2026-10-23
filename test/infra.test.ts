@@ -178,7 +178,7 @@ describe("uniswap-math.ts", () => {
 
 describe("ops.ts nav", () => {
   test("OPS_SECTIONS: the five console views first (otto/mamoru-astro#24), then Grow, Control and More", () => {
-    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["overview", "yield", "accounts", "engine", "costs", "mails", "experiments", "settings", "functions", "infra", "archive", "preview"]);
+    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["overview", "yield", "accounts", "engine", "costs", "mails", "experiments", "lab", "settings", "functions", "infra", "archive", "preview"]);
     expect(OPS_SECTIONS.filter((s) => s.tab).map((s) => s.id)).toEqual(["overview", "yield", "accounts", "engine", "costs"]);
     expect(OPS_SECTIONS.find((s) => s.id === "overview")?.href).toBe("/ops");
     expect(OPS_SECTIONS.find((s) => s.id === "yield")?.href).toBe("/ops/yield");
