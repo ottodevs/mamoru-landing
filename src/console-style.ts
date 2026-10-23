@@ -84,6 +84,11 @@ html, body { overflow-x: clip; }
 .c-sheet-h h2 { margin: 0; font-size: 1.08rem; font-weight: 400; }
 .c-sheet-h p { margin: 0.2rem 0 0; font-size: 0.88rem; color: var(--muted); line-height: 1.4; }
 .c-k { margin: 0; font: 0.68rem/1.2 var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--stone); }
+.c-days { width: 100%; border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+.c-days th { padding: 0 0.5rem 0.5rem; text-align: left; font: 0.64rem/1.2 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--stone); }
+.c-days td { padding: 0.45rem 0.5rem; border-top: 1px solid var(--hair); }
+.c-days .n { text-align: right; }
+.c-days td.neg { color: var(--umber); }
 .c-empty { margin: 0; padding: 0.9rem 1rem; border: 1px dashed var(--hair-2); border-radius: 4px; color: var(--muted); font-size: 0.95rem; line-height: 1.45; }
 .c-prose { margin: 0 0 0.9rem; font-size: 1.05rem; line-height: 1.5; max-width: 46rem; }
 .c-prose b { font-weight: 400; color: var(--em); }
