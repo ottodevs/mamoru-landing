@@ -1260,6 +1260,11 @@ export function opsClientScript(nonce: string): string {
     function jobWindow() {
       return state.windows[state.jobWindowIndex] || null;
     }
+    // Live-region hygiene (GPT-6 Sol review round 2, #24): assigning textContent replaces the text node even
+    // when the string is unchanged, which some screen readers announce; only write real changes.
+    function setText(el, text) {
+      if (el && el.textContent !== text) el.textContent = text;
+    }
     function onJobDone(job, gen, windowIndex) {
       if (!LAB.isCurrentJobGen(gen, jobGen)) return;
       stopJobTicker();
@@ -1290,6 +1295,14 @@ export function opsClientScript(nonce: string): string {
             headline.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
           }
         }
+      }).catch(function () {
+        // The job is done on the server; only the list refresh failed. Never leave Run disabled: unlock it and
+        // say so (GPT-6 Sol review round 2, #24).
+        if (!LAB.isCurrentJobGen(gen, jobGen)) return;
+        state.jobApplying = false;
+        state.job = { status: "failed", errorCode: "LAB_NETWORK" };
+        renderJobStatus();
+        renderProbar();
       });
     }
     function flashSelectedStrategy() {
@@ -1392,18 +1405,18 @@ export function opsClientScript(nonce: string): string {
         if (retry) retry.onclick = function () { runScenario(state.jobSpec); };
       } else {
         var specEl = card.querySelector(".lab-status-spec");
-        if (specEl) specEl.textContent = specLine;
+        setText(specEl, specLine);
       }
 
       if (shape === "active") {
         var status = state.job.status;
         var secs = jobElapsedSec();
         var headlineEl = $("lab-status-headline");
-        if (headlineEl) headlineEl.textContent = LAB.jobStatusHeadline(status);
+        setText(headlineEl, LAB.jobStatusHeadline(status));
         var secsEl = $("lab-status-secs");
-        if (secsEl) secsEl.textContent = " · " + secs + " s";
+        setText(secsEl, " · " + secs + " s");
         var subEl = $("lab-status-sub");
-        if (subEl) subEl.textContent = LAB.jobSubText(status, secs);
+        setText(subEl, LAB.jobSubText(status, secs));
         chip.hidden = false;
         chip.innerHTML = '<span class="lab-spinner" aria-hidden="true"></span><span>' + esc(status === "queued" ? "En cola" : "Calculando") + "… " + secs + " s</span>";
         return;
@@ -1413,9 +1426,9 @@ export function opsClientScript(nonce: string): string {
       var textEl = $("lab-status-text");
       if (!textEl) return;
       if (shape === "failed") {
-        textEl.textContent = LAB.jobFailedText(state.job.errorCode);
+        setText(textEl, LAB.jobFailedText(state.job.errorCode));
       } else {
-        textEl.textContent = LAB.jobStatusText({ status: "done", elapsedSec: state.jobDoneElapsedSec, variantLabel: state.jobVariantLabel, windowLabel: windowLabel, alreadyExisted: state.jobAlreadyExisted });
+        setText(textEl, LAB.jobStatusText({ status: "done", elapsedSec: state.jobDoneElapsedSec, variantLabel: state.jobVariantLabel, windowLabel: windowLabel, alreadyExisted: state.jobAlreadyExisted }));
       }
     }
 
