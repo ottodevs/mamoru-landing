@@ -105,6 +105,8 @@ import { appendCapOverride, CapConflict, CapOutcomeUnknown, CapTableMissing, new
 import { checkCapConfirmToken, issueCapConfirmToken } from "./account-caps-confirm";
 import { archiveTarget } from "./archive";
 import { archiveBar, archiveSection } from "./ops-archive";
+import { handleLabCatalog, handleLabCreateJob, handleLabJobStatus, handleLabRun, handleLabRuns, labSection } from "./ops-lab";
+import { handleLabRunner } from "./lab-runner";
 import {
   isPreviewPath,
   previewReturnUrl,
@@ -133,6 +135,9 @@ export interface Env {
   STAGING_BASE_URL?: string;
   GIT_SHA?: string;
   DEPLOYED_AT?: string;
+  // otto/mamoru-astro#28 (spec 008 phase 1): signs `/ops/lab/runner/*`. Never read anywhere near the /ops
+  // session. Unset → the runner routes answer 503, not "no auth required" (lab-runner-auth.ts fails closed).
+  LAB_RUNNER_SECRET?: string;
 }
 
 function loopsReady(env: Env): boolean {
@@ -388,7 +393,7 @@ function withNotice(view: SectionView, text: string, tone: "plain" | "bad" = "pl
 }
 
 /** Sections a stranger is sent to Google from, and returned to after signing in. */
-const SECTION_PATHS = new Set(["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/functions", "/ops/archive"]);
+const SECTION_PATHS = new Set(["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/functions", "/ops/archive", "/ops/lab"]);
 
 /** Anyone who is not signed in and allowlisted sees the landing. Nothing else. */
 function toRoot(request: Request, cookies: string[] = []): Response {
@@ -659,6 +664,37 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
 
   if (sectionPath === "/ops/experiments" && request.method === "GET") {
     return flashed(await experimentsView());
+  }
+
+  // ---- Lab bench (otto/mamoru-astro#28, spec 008 phase 1): one SSR shell, data fetched from the API below ----
+  if (sectionPath === "/ops/lab" && request.method === "GET") {
+    return flashed(labSection(session.csrf));
+  }
+  if (url.pathname === "/ops/lab/api/catalog" && request.method === "GET") {
+    return handleLabCatalog(env.MAMORU_DB);
+  }
+  if (url.pathname === "/ops/lab/api/runs" && request.method === "GET") {
+    return handleLabRuns(env.MAMORU_DB, url.searchParams.get("window"));
+  }
+  if (url.pathname.startsWith("/ops/lab/api/run/") && request.method === "GET") {
+    return handleLabRun(env.MAMORU_DB, decodeURIComponent(url.pathname.slice("/ops/lab/api/run/".length)));
+  }
+  if (url.pathname.startsWith("/ops/lab/api/jobs/") && request.method === "GET") {
+    return handleLabJobStatus(env.MAMORU_DB, decodeURIComponent(url.pathname.slice("/ops/lab/api/jobs/".length)));
+  }
+  if (url.pathname === "/ops/lab/api/jobs" && request.method === "POST") {
+    if (!csrfOk || !form) {
+      return new Response(JSON.stringify({ error: "LAB_CSRF_INVALID" }), {
+        status: 403,
+        headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+    return handleLabCreateJob(env.MAMORU_DB, session.email, {
+      windowId: String(form.get("windowId") ?? ""),
+      base: String(form.get("base") ?? ""),
+      widthTicks: Number(form.get("widthTicks")),
+      deposit: Number(form.get("deposit")),
+    });
   }
 
   // ---- console views (otto/mamoru-astro#24): one model, read fresh per request, scoped by ?env= ----
@@ -1113,6 +1149,7 @@ const RETURN_TO = new Set([
   "https://mamoru.lol/ops/infra",
   "https://mamoru.lol/ops/experiments",
   "https://mamoru.lol/ops/functions",
+  "https://mamoru.lol/ops/lab",
   "https://mamoru.lol/ops/landing",
   "https://mamoru.lol/ops/app",
   "https://mamoru.lol/ops/app/onboarding",
@@ -1218,6 +1255,14 @@ async function dispatch(request: Request, env: Env, ctx?: Background): Promise<R
 
     // app.mamoru.lol belongs to the mamoru-app Worker. Nothing here answers it.
     if (host === APP_HOST) return notFound();
+
+    // otto/mamoru-astro#28: the Lab runner API is HMAC-signed, never session-gated — it must never pass through
+    // handleOps (which fails closed to the Google flow when GOOGLE_* is unset, and otherwise requires a
+    // session cookie). A request here with only a session cookie and no signature is refused by lab-runner-auth.ts,
+    // not treated as authenticated.
+    if (lower.startsWith("/ops/lab/runner/")) {
+      return handleLabRunner(request, env);
+    }
 
     if (path === "/ops" || path.startsWith("/ops/")) {
       return handleOps(request, env, ctx);
