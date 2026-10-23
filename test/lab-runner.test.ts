@@ -6,7 +6,7 @@ import worker, { type Env } from "../src/worker";
 import { sealSession } from "../src/ops";
 import { signRunnerRequest } from "../src/lab-sign";
 import { labDb, makeRun } from "./lab-fixture";
-import { claimJobById, finishJobDone, finishJobFailed, insertJob, jobById } from "../src/lab-store";
+import { claimJobById, finishJobDoneWithRun, finishJobFailed, insertJob, jobById } from "../src/lab-store";
 
 const SECRET = "test-runner-secret";
 
@@ -234,46 +234,109 @@ describe("lab-runner.ts: claim / heartbeat / result, with fencing", () => {
     expect(res.status).toBe(400);
   });
 
-  test("finishJobDone/finishJobFailed are also fenced directly at the store layer", async () => {
+  /** Builds finishJobDoneWithRun's `run` input from a full makeRun() result. */
+  function runInput(run: ReturnType<typeof makeRun>, nowIso: string) {
+    const { reasons, ops, series, ...summary } = run;
+    void reasons;
+    void ops;
+    void series;
+    return {
+      resultHash: run.resultHash,
+      specKey: run.specKey,
+      windowId: run.window.id,
+      summaryJson: JSON.stringify(summary),
+      runJson: JSON.stringify(run),
+      simVersion: run.simVersion,
+      createdAt: nowIso,
+    };
+  }
+
+  test("finishJobDoneWithRun/finishJobFailed are also fenced directly at the store layer", async () => {
     const db = labDb({ seed: false });
     const spec = { windowId: "feb2025", base: "live" as const, widthTicks: 2000, deposit: 1000 };
     await insertJob(db, { id: "job-7", requester: "r", spec, specKey: "feb2025|live|2000|1000", status: "queued", resultHash: null, now: new Date().toISOString() });
-    const ok = await finishJobDone(db, "job-7", "no-such-lease", "h", Math.floor(Date.now() / 1000), new Date().toISOString());
+    const run = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "x", resultHash: "h", vsHodl: -1 });
+    const ok = await finishJobDoneWithRun(db, { id: "job-7", leaseId: "no-such-lease", nowIso: new Date().toISOString(), run: runInput(run, new Date().toISOString()) });
     expect(ok).toBe(false);
   });
 
-  // GPT-6 Sol review (otto/mamoru-astro#28): finishJobDone/finishJobFailed must fence on more than lease_id —
-  // an expired-but-not-yet-reclaimed lease must not be able to finish, and a job already terminal must not be
-  // flipped by a late duplicate write.
-  test("finishJobDone refuses an expired lease even when lease_id still matches (nobody reclaimed it yet)", async () => {
+  // GPT-6 Sol review (otto/mamoru-astro#28): finishJobDoneWithRun/finishJobFailed must fence on more than
+  // lease_id — an expired-but-not-yet-reclaimed lease must not be able to finish, and a job already terminal
+  // must not be flipped by a late duplicate write.
+  test("finishJobDoneWithRun refuses an expired lease even when lease_id still matches (nobody reclaimed it yet)", async () => {
     const db = labDb({ seed: false });
     const spec = { windowId: "feb2025", base: "live" as const, widthTicks: 2000, deposit: 1000 };
     await insertJob(db, { id: "job-expired", requester: "r", spec, specKey: "feb2025|live|2000|1000", status: "queued", resultHash: null, now: new Date().toISOString() });
-    const claimed = await claimJobById(db, "job-expired", Math.floor(Date.now() / 1000), new Date().toISOString());
+    const claimed = await claimJobById(db, "job-expired", new Date().toISOString());
     expect(claimed).not.toBeNull();
     // Let the lease expire in place (no reclaim): lease_id is unchanged, lease_until is now in the past.
     db.raw.query("UPDATE lab_jobs SET lease_until = ? WHERE id = 'job-expired'").run(Math.floor(Date.now() / 1000) - 5);
-    const ok = await finishJobDone(db, "job-expired", claimed!.leaseId, "late-hash", Math.floor(Date.now() / 1000), new Date().toISOString());
+    const run = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "late", resultHash: "late-hash", vsHodl: -1 });
+    const ok = await finishJobDoneWithRun(db, { id: "job-expired", leaseId: claimed!.leaseId, nowIso: new Date().toISOString(), run: runInput(run, new Date().toISOString()) });
     expect(ok).toBe(false);
     const job = await jobById(db, "job-expired");
     expect(job?.status).toBe("running"); // untouched, not silently finished
+    const row = await db.prepare("SELECT 1 AS x FROM lab_runs WHERE result_hash = ?").bind("late-hash").first();
+    expect(row).toBeNull();
   });
 
   test("finishJobFailed cannot flip an already-done job back to failed", async () => {
     const db = labDb({ seed: false });
     const spec = { windowId: "feb2025", base: "live" as const, widthTicks: 2000, deposit: 1000 };
     await insertJob(db, { id: "job-done", requester: "r", spec, specKey: "feb2025|live|2000|1000", status: "queued", resultHash: null, now: new Date().toISOString() });
-    const now = Math.floor(Date.now() / 1000);
     const nowIso = new Date().toISOString();
-    const claimed = await claimJobById(db, "job-done", now, nowIso);
+    const claimed = await claimJobById(db, "job-done", nowIso);
     expect(claimed).not.toBeNull();
-    const doneOk = await finishJobDone(db, "job-done", claimed!.leaseId, "real-hash", now, nowIso);
+    const run = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "real", resultHash: "real-hash", vsHodl: -1 });
+    const doneOk = await finishJobDoneWithRun(db, { id: "job-done", leaseId: claimed!.leaseId, nowIso, run: runInput(run, nowIso) });
     expect(doneOk).toBe(true);
     // A late duplicate "error" write for the same lease arrives after the job already finished successfully.
-    const failOk = await finishJobFailed(db, "job-done", claimed!.leaseId, "LAB_JOB_TIMEOUT", now, nowIso);
+    const failOk = await finishJobFailed(db, "job-done", claimed!.leaseId, "LAB_JOB_TIMEOUT", nowIso);
     expect(failOk).toBe(false);
     const job = await jobById(db, "job-done");
     expect(job?.status).toBe("done");
     expect(job?.resultHash).toBe("real-hash");
+  });
+
+  // GPT-6 Sol review round 2 (otto/mamoru-astro#28): the job UPDATE and the run INSERT are one D1 transaction
+  // (finishJobDoneWithRun's db.batch([...])) specifically so a run-write failure can never leave a job stuck
+  // `done` with nothing in lab_runs to show for it. A broken lab_runs table (missing a column the INSERT
+  // writes to) makes the insert throw after the UPDATE would otherwise have matched; the whole batch must roll
+  // back, leaving the job exactly as it was.
+  test("finishJobDoneWithRun: when the run insert throws, the whole batch rolls back and the job stays running", async () => {
+    const db = labDb({ seed: false, brokenRunsTable: true });
+    const spec = { windowId: "feb2025", base: "live" as const, widthTicks: 2000, deposit: 1000 };
+    await insertJob(db, { id: "job-broken", requester: "r", spec, specKey: "feb2025|live|2000|1000", status: "queued", resultHash: null, now: new Date().toISOString() });
+    const nowIso = new Date().toISOString();
+    const claimed = await claimJobById(db, "job-broken", nowIso);
+    expect(claimed).not.toBeNull();
+    const run = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "x", resultHash: "would-be-hash", vsHodl: -1 });
+    let threw = false;
+    try {
+      await finishJobDoneWithRun(db, { id: "job-broken", leaseId: claimed!.leaseId, nowIso, run: runInput(run, nowIso) });
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+    const job = await jobById(db, "job-broken");
+    expect(job?.status).toBe("running"); // the UPDATE was rolled back along with the failed INSERT
+    expect(job?.resultHash).toBeNull();
+  });
+
+  // Same scenario through the full signed HTTP path: the runner gets a clear error, not a silently
+  // half-applied write, and a retry (the runner's own lease renewal / next claim cycle) can still resolve it.
+  test("POST /ops/lab/runner/result: a run-write failure answers 503 and leaves the job running, not stuck done", async () => {
+    const db = labDb({ seed: false, brokenRunsTable: true });
+    const env = opsEnv(db);
+    const spec = { windowId: "feb2025", base: "live" as const, widthTicks: 2000, deposit: 1000 };
+    await insertJob(db, { id: "job-http-broken", requester: "r", spec, specKey: "feb2025|live|2000|1000", status: "queued", resultHash: null, now: new Date().toISOString() });
+    const claim = (await (await signedFetch(env, "/ops/lab/runner/claim", {})).json()) as { job: { leaseId: string } };
+    const run = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "x", resultHash: "http-would-be-hash", vsHodl: -1 });
+    const res = await signedFetch(env, "/ops/lab/runner/result", { id: "job-http-broken", leaseId: claim.job.leaseId, run });
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("LAB_RUN_WRITE_FAILED");
+    const job = await jobById(db, "job-http-broken");
+    expect(job?.status).toBe("running");
   });
 });

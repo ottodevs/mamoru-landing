@@ -34,6 +34,37 @@ CREATE TABLE lab_jobs (
 CREATE TABLE lab_nonces (nonce TEXT PRIMARY KEY, seen_at INTEGER NOT NULL);
 `;
 
+// Deliberately missing `sim_version` (and selected via the same 7-column INSERT finishJobDoneWithRun uses):
+// inserting a run against this table throws "no such column", for the test proving a failed run write rolls
+// the whole batch back (GPT-6 Sol round 2, otto/mamoru-astro#28) rather than leaving the job stuck `done`.
+const SCHEMA_BROKEN_RUNS = `
+CREATE TABLE lab_runs (
+  result_hash TEXT PRIMARY KEY,
+  spec_key TEXT NOT NULL,
+  window_id TEXT NOT NULL,
+  summary_json TEXT NOT NULL,
+  run_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE lab_jobs (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  origin TEXT NOT NULL DEFAULT 'ops',
+  requester TEXT NOT NULL,
+  spec_json TEXT NOT NULL,
+  spec_key TEXT NOT NULL,
+  status TEXT NOT NULL,
+  lease_id TEXT,
+  lease_until INTEGER,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  result_hash TEXT,
+  error_code TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE lab_nonces (nonce TEXT PRIMARY KEY, seen_at INTEGER NOT NULL);
+`;
+
 function op(t: number, kind: string, pool: string, gas: number, fees: number, code: string) {
   return { t, kind, pool, gas, fees, code, reason: code };
 }
@@ -86,9 +117,11 @@ export function makeRun(opts: {
   };
 }
 
-export function labDb(opts: { seed?: boolean } = {}): D1Db & { raw: Database } {
+export function labDb(
+  opts: { seed?: boolean; brokenRunsTable?: boolean } = {},
+): D1Db & { raw: Database; batch(statements: { _sql: string; _values: unknown[] }[]): Promise<{ meta: { changes: number; last_row_id: number } }[]> } {
   const db = new Database(":memory:");
-  db.exec(SCHEMA);
+  db.exec(opts.brokenRunsTable ? SCHEMA_BROKEN_RUNS : SCHEMA);
   if (opts.seed ?? true) {
     const w1Live2000 = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "Política actual", resultHash: "hash-feb-live-2000-1000", vsHodl: -16.44 });
     const w1Live4000 = makeRun({ windowId: "feb2025", base: "live", widthTicks: 4000, deposit: 1000, variantLabel: "Rango ×2", resultHash: "hash-feb-live-4000-1000", vsHodl: -3.26 });
@@ -107,6 +140,8 @@ export function labDb(opts: { seed?: boolean } = {}): D1Db & { raw: Database } {
     }
   }
   const stmt = (sql: string, values: unknown[] = []): any => ({
+    _sql: sql,
+    _values: values,
     bind: (...v: unknown[]) => stmt(sql, v),
     first: async () => (db.query(sql).get(...(values as never[])) as unknown) ?? null,
     all: async () => ({ results: db.query(sql).all(...(values as never[])), success: true }),
@@ -115,5 +150,22 @@ export function labDb(opts: { seed?: boolean } = {}): D1Db & { raw: Database } {
       return { meta: { changes: r.changes, last_row_id: Number(r.lastInsertRowid) } };
     },
   });
-  return { raw: db, prepare: (sql: string) => stmt(sql) };
+  return {
+    raw: db,
+    prepare: (sql: string) => stmt(sql),
+    // Mirrors D1's real `batch()`: all statements run in one SQLite transaction (bun:sqlite's own
+    // `Database.transaction()`), so a throw from any statement rolls every earlier statement in the call back
+    // too — the same all-or-nothing semantics `finishJobDoneWithRun` (lab-store.ts) depends on.
+    batch: async (statements: { _sql: string; _values: unknown[] }[]) => {
+      const out: { meta: { changes: number; last_row_id: number } }[] = [];
+      const txn = db.transaction(() => {
+        for (const s of statements) {
+          const r = db.query(s._sql).run(...(s._values as never[]));
+          out.push({ meta: { changes: r.changes, last_row_id: Number(r.lastInsertRowid) } });
+        }
+      });
+      txn();
+      return out;
+    },
+  };
 }

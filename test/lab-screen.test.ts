@@ -184,6 +184,52 @@ describe("POST /ops/lab/api/jobs: dedupe by spec_key (B-04, LAB-AL-09)", () => {
     expect(body.job.id).toBe("already-running");
     expect(body.job.status).toBe("running");
   });
+
+  // GPT-6 Sol review round 2 (otto/mamoru-astro#28): returning an in-flight duplicate must not let a requester
+  // who is themselves already at the daily cap get service without ever creating a row of their own.
+  test("a requester already at the daily cap is refused 429 even when the spec they ask for is already in flight", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const { cookie, csrf } = await sessionCookie();
+    const now = new Date().toISOString();
+    for (let i = 0; i < MAX_JOBS_PER_DAY; i++) {
+      await insertJob(db, {
+        id: `cap-${i}`,
+        requester: "ottodevs@gmail.com",
+        spec: { windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000 },
+        specKey: "unused-key",
+        status: "done",
+        resultHash: "x",
+        now,
+      });
+    }
+    const dupSpec = { windowId: "feb2025", base: "guard" as const, widthTicks: 5000, deposit: 1000 };
+    const dupKey = "feb2025|guard|5000|1000";
+    await insertJob(db, { id: "in-flight", requester: "someone-else@example.com", spec: dupSpec, specKey: dupKey, status: "queued", resultHash: null, now });
+
+    const res = await postJob(env, cookie, csrf, { windowId: "feb2025", base: "guard", widthTicks: "5000", deposit: "1000" });
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("LAB_JOB_LIMIT");
+    // The in-flight job itself is untouched — still exactly one row for that spec, owned by the original requester.
+    const { results } = await db.prepare("SELECT requester FROM lab_jobs WHERE spec_key = ?").bind(dupKey).all<{ requester: string }>();
+    expect(results.length).toBe(1);
+    expect(results[0]!.requester).toBe("someone-else@example.com");
+  });
+
+  test("a requester under the daily cap still gets the in-flight duplicate job normally", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const { cookie, csrf } = await sessionCookie();
+    const dupSpec = { windowId: "feb2025", base: "guard" as const, widthTicks: 5500, deposit: 1000 };
+    const dupKey = "feb2025|guard|5500|1000";
+    await insertJob(db, { id: "in-flight-2", requester: "someone-else@example.com", spec: dupSpec, specKey: dupKey, status: "queued", resultHash: null, now: new Date().toISOString() });
+
+    const res = await postJob(env, cookie, csrf, { windowId: "feb2025", base: "guard", widthTicks: "5500", deposit: "1000" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { job: { id: string } };
+    expect(body.job.id).toBe("in-flight-2");
+  });
 });
 
 // GPT-6 Sol review (otto/mamoru-astro#28): the limits and the in-flight dedupe must be enforced by the write
