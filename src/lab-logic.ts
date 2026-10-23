@@ -190,6 +190,16 @@ export function labLogic() {
     return "Listo en " + input.elapsedSec + " s: «" + input.variantLabel + "» añadida a " + input.windowLabel + ".";
   };
 
+  /**
+   * The queued/running headline with no number in it (GPT-6 Sol review, otto/mamoru-astro#28 follow-up): the
+   * live region's announced text must change only on a real state change, never once a second just because the
+   * elapsed counter ticked — the number renders separately, in an aria-hidden span jobStatusText's full string
+   * is still right for (the chip, which is aria-hidden entirely, and the frozen one-time "done" text above).
+   */
+  var jobStatusHeadline = function (status: "queued" | "running"): string {
+    return status === "queued" ? "En cola" : "Calculando con el motor de producción";
+  };
+
   /** The queued sub-line, with the "still polling" notice appended past 60 s (running has no sub-line). */
   var jobSubText = function (status: "queued" | "running" | "done", elapsedSec: number): string {
     if (status !== "queued") return "";
@@ -214,6 +224,20 @@ export function labLogic() {
     if (errorCode === "LAB_JOB_LIMIT_DAILY") return "Has llegado a " + int(MAX_JOBS_PER_DAY) + " escenarios hoy";
     if (errorCode === "LAB_JOB_LIMIT_QUEUED") return "Ya tienes " + int(MAX_QUEUED_JOBS) + " en cola";
     return "Falló: " + (JOB_ERROR_WORDS[errorCode] || errorCode || "motivo desconocido");
+  };
+
+  /**
+   * The stale-completion guard (GPT-6 Sol review, otto/mamoru-astro#28 follow-up): a job's POST response, each
+   * poll, and the final runs-refresh are all tagged with the generation counter active when runScenario()
+   * started that attempt. Every one of those async steps calls this before writing anything to shared state —
+   * a completion for an older attempt that resolves after a newer one has already started is dropped outright,
+   * regardless of network arrival order, so it can never overwrite a newer run's selection or window. The rest
+   * of this orchestration (runScenario/pollJob/onJobDone in ops-client.ts) is DOM-coupled and has no test
+   * harness to drive it end to end; this predicate is the one piece of that guard pure enough to unit-test
+   * directly, and ops-client.ts calls this exact function rather than repeating the comparison inline.
+   */
+  var isCurrentJobGen = function (eventGen: number, liveGen: number): boolean {
+    return eventGen === liveGen;
   };
 
   return {
@@ -244,8 +268,10 @@ export function labLogic() {
     MAX_QUEUED_JOBS: MAX_QUEUED_JOBS,
     specWords: specWords,
     jobStatusText: jobStatusText,
+    jobStatusHeadline: jobStatusHeadline,
     jobSubText: jobSubText,
     jobFailedText: jobFailedText,
+    isCurrentJobGen: isCurrentJobGen,
   };
 }
 

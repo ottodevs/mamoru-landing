@@ -176,6 +176,13 @@ describe("lab-logic.ts (embedded client logic, same function the server-side bou
     expect(LAB.jobStatusText({ status: "running", elapsedSec: 8, variantLabel: "", windowLabel: "", alreadyExisted: false })).toBe("Calculando con el motor de producción · 8 s");
   });
 
+  test("jobStatusHeadline: the live-region announced text has no number in it, ever", () => {
+    expect(LAB.jobStatusHeadline("queued")).toBe("En cola");
+    expect(LAB.jobStatusHeadline("running")).toBe("Calculando con el motor de producción");
+    expect(LAB.jobStatusHeadline("queued")).not.toMatch(/\d/);
+    expect(LAB.jobStatusHeadline("running")).not.toMatch(/\d/);
+  });
+
   test("jobStatusText: done (new) names the strategy and the window it was added to", () => {
     const text = LAB.jobStatusText({ status: "done", elapsedSec: 9, variantLabel: "Rango ×2", windowLabel: "Caída feb 2025", alreadyExisted: false });
     expect(text).toBe("Listo en 9 s: «Rango ×2» añadida a Caída feb 2025.");
@@ -208,5 +215,14 @@ describe("lab-logic.ts (embedded client logic, same function the server-side bou
     expect(LAB.jobFailedText("LAB_HOLDOUT_DENIED")).toContain("reserva de prueba");
     expect(LAB.jobFailedText("LAB_RUN_WRITE_FAILED")).toContain("vuelve a intentarlo");
     expect(LAB.jobFailedText("SOMETHING_UNKNOWN")).toBe("Falló: SOMETHING_UNKNOWN");
+  });
+
+  test("isCurrentJobGen: only the generation matching the live counter is applied, regardless of arrival order", () => {
+    expect(LAB.isCurrentJobGen(1, 1)).toBe(true);
+    // A stale completion (older attempt) resolving after a newer one has already started: dropped.
+    expect(LAB.isCurrentJobGen(1, 2)).toBe(false);
+    // Arrival order does not matter — only the tag vs. the live counter does.
+    expect(LAB.isCurrentJobGen(2, 1)).toBe(false);
+    expect(LAB.isCurrentJobGen(0, 0)).toBe(true);
   });
 });
