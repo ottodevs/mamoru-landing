@@ -27,7 +27,7 @@ Pushing has side effects, which is why only the coordinator does it:
 
 - `main` → production, automatically: lady's `mamoru-github-deploy.timer` deploys the tip with a health check and automatic rollback.
 - `staging` → the `mamoru-lol-staging` Worker, shown at the gated `/ops/preview`. Visual or copy changes to the public pages go to `staging` first and are looked at there before `main`.
-- D1 `mamoru` belongs to `ottodevs/mamoru` (`migrations/d1/`): this Worker reads `accounts`, `users`, `account_activity` and writes only `metrics_daily`, `metrics_daily_v2` (otto/mamoru#130, keyed by day/chain/env), `metrics_daily_chain` (otto/mamoru#130, the chain-level relayer/ETH-price sibling, keyed by day/chain only — never per env, so it is never double counted by summing across env) and `exp_events`.
+- D1 `mamoru` belongs to `ottodevs/mamoru` (`migrations/d1/`): this Worker reads `accounts`, `users`, `account_activity` and writes only `metrics_daily`, `metrics_daily_v2` (otto/mamoru#130, keyed by day/chain/env), `metrics_daily_chain` (otto/mamoru#130, the chain-level relayer/ETH-price sibling, keyed by day/chain only — never per env, so it is never double counted by summing across env) `exp_events` and `account_cap_overrides` (otto/mamoru#26, insert-only, from /ops/accounts/cap).
 - Experiments change by code: status and winner are edited in `src/experiments.ts` and shipped by a release.
 
 Each release is announced in Mattermost `#mamoru` by `@mamorusan`.
