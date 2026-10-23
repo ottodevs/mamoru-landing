@@ -6,7 +6,7 @@ import worker, { type Env } from "../src/worker";
 import { sealSession } from "../src/ops";
 import { signRunnerRequest } from "../src/lab-sign";
 import { labDb, makeRun } from "./lab-fixture";
-import { finishJobDone, insertJob, jobById } from "../src/lab-store";
+import { claimJobById, finishJobDone, finishJobFailed, insertJob, jobById } from "../src/lab-store";
 
 const SECRET = "test-runner-secret";
 
@@ -137,6 +137,10 @@ describe("lab-runner.ts: claim / heartbeat / result, with fencing", () => {
     const staleRun = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "stale", resultHash: "stale-hash", vsHodl: -1 });
     const staleRes = await signedFetch(env, "/ops/lab/runner/result", { id: "job-3", leaseId: staleLease, run: staleRun });
     expect(staleRes.status).toBe(409);
+    // GPT-6 Sol review (otto/mamoru-astro#28): a refused result must never land in lab_runs either, not only
+    // leave the job's own resultHash untouched — this is what "fence before writing the run" actually buys.
+    const staleRow = await db.prepare("SELECT 1 AS x FROM lab_runs WHERE result_hash = ?").bind("stale-hash").first();
+    expect(staleRow).toBeNull();
 
     // The reclaiming runner's own result is accepted.
     const freshRun = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "fresh", resultHash: "fresh-hash-2", vsHodl: -1 });
@@ -145,6 +149,29 @@ describe("lab-runner.ts: claim / heartbeat / result, with fencing", () => {
 
     const job = await jobById(db, "job-3");
     expect(job?.resultHash).toBe("fresh-hash-2");
+    const freshRow = await db.prepare("SELECT 1 AS x FROM lab_runs WHERE result_hash = ?").bind("fresh-hash-2").first();
+    expect(freshRow).toBeTruthy();
+  });
+
+  // GPT-6 Sol review (otto/mamoru-astro#28): even when the cheap early-out (jobById) still matches at read
+  // time, the run must only be written once the atomic, fenced job update itself matched. Simulates the exact
+  // race by expiring the lease between the cheap check and the fenced update would require interleaving two
+  // in-flight requests; this instead proves the invariant the ordering establishes: a result call that the
+  // fenced update refuses never reaches lab_runs, regardless of why the fence failed (expired lease here, not
+  // just a reclaimed one).
+  test("a result call whose lease has merely expired (not reclaimed) is refused and writes nothing to lab_runs", async () => {
+    const db = labDb({ seed: false });
+    const env = opsEnv(db);
+    const spec = { windowId: "feb2025", base: "live" as const, widthTicks: 2000, deposit: 1000 };
+    await insertJob(db, { id: "job-expire-result", requester: "r", spec, specKey: "feb2025|live|2000|1000", status: "queued", resultHash: null, now: new Date().toISOString() });
+    const claim = (await (await signedFetch(env, "/ops/lab/runner/claim", {})).json()) as { job: { leaseId: string } };
+    // Let the lease expire in place: lease_id is unchanged (still what the runner holds), lease_until is past.
+    db.raw.query("UPDATE lab_jobs SET lease_until = ? WHERE id = 'job-expire-result'").run(Math.floor(Date.now() / 1000) - 5);
+    const run = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "late", resultHash: "expired-lease-hash", vsHodl: -1 });
+    const res = await signedFetch(env, "/ops/lab/runner/result", { id: "job-expire-result", leaseId: claim.job.leaseId, run });
+    expect(res.status).toBe(409);
+    const row = await db.prepare("SELECT 1 AS x FROM lab_runs WHERE result_hash = ?").bind("expired-lease-hash").first();
+    expect(row).toBeNull();
   });
 
   test("result with spec_key mismatch between the run and the job is refused", async () => {
@@ -211,7 +238,42 @@ describe("lab-runner.ts: claim / heartbeat / result, with fencing", () => {
     const db = labDb({ seed: false });
     const spec = { windowId: "feb2025", base: "live" as const, widthTicks: 2000, deposit: 1000 };
     await insertJob(db, { id: "job-7", requester: "r", spec, specKey: "feb2025|live|2000|1000", status: "queued", resultHash: null, now: new Date().toISOString() });
-    const ok = await finishJobDone(db, "job-7", "no-such-lease", "h", new Date().toISOString());
+    const ok = await finishJobDone(db, "job-7", "no-such-lease", "h", Math.floor(Date.now() / 1000), new Date().toISOString());
     expect(ok).toBe(false);
+  });
+
+  // GPT-6 Sol review (otto/mamoru-astro#28): finishJobDone/finishJobFailed must fence on more than lease_id —
+  // an expired-but-not-yet-reclaimed lease must not be able to finish, and a job already terminal must not be
+  // flipped by a late duplicate write.
+  test("finishJobDone refuses an expired lease even when lease_id still matches (nobody reclaimed it yet)", async () => {
+    const db = labDb({ seed: false });
+    const spec = { windowId: "feb2025", base: "live" as const, widthTicks: 2000, deposit: 1000 };
+    await insertJob(db, { id: "job-expired", requester: "r", spec, specKey: "feb2025|live|2000|1000", status: "queued", resultHash: null, now: new Date().toISOString() });
+    const claimed = await claimJobById(db, "job-expired", Math.floor(Date.now() / 1000), new Date().toISOString());
+    expect(claimed).not.toBeNull();
+    // Let the lease expire in place (no reclaim): lease_id is unchanged, lease_until is now in the past.
+    db.raw.query("UPDATE lab_jobs SET lease_until = ? WHERE id = 'job-expired'").run(Math.floor(Date.now() / 1000) - 5);
+    const ok = await finishJobDone(db, "job-expired", claimed!.leaseId, "late-hash", Math.floor(Date.now() / 1000), new Date().toISOString());
+    expect(ok).toBe(false);
+    const job = await jobById(db, "job-expired");
+    expect(job?.status).toBe("running"); // untouched, not silently finished
+  });
+
+  test("finishJobFailed cannot flip an already-done job back to failed", async () => {
+    const db = labDb({ seed: false });
+    const spec = { windowId: "feb2025", base: "live" as const, widthTicks: 2000, deposit: 1000 };
+    await insertJob(db, { id: "job-done", requester: "r", spec, specKey: "feb2025|live|2000|1000", status: "queued", resultHash: null, now: new Date().toISOString() });
+    const now = Math.floor(Date.now() / 1000);
+    const nowIso = new Date().toISOString();
+    const claimed = await claimJobById(db, "job-done", now, nowIso);
+    expect(claimed).not.toBeNull();
+    const doneOk = await finishJobDone(db, "job-done", claimed!.leaseId, "real-hash", now, nowIso);
+    expect(doneOk).toBe(true);
+    // A late duplicate "error" write for the same lease arrives after the job already finished successfully.
+    const failOk = await finishJobFailed(db, "job-done", claimed!.leaseId, "LAB_JOB_TIMEOUT", now, nowIso);
+    expect(failOk).toBe(false);
+    const job = await jobById(db, "job-done");
+    expect(job?.status).toBe("done");
+    expect(job?.resultHash).toBe("real-hash");
   });
 });

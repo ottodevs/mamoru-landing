@@ -940,10 +940,17 @@ export function opsClientScript(nonce: string): string {
       var box = $("lab-money");
       if (!state.runFull) { box.innerHTML = '<p class="lab-note">Cargando…</p>'; return; }
       var r = state.runFull, d = r.deposit;
+      var selSum = selected(), baseSum = baselineSummary();
+      // B-09: the ghost line is only ever meaningful between comparable runs (same window, deposit,
+      // simVersion) — a different deposit puts the baseline on a different absolute USDC scale entirely, so
+      // showing it (or letting it stretch this chart's axis) regardless of comparability is misleading, not
+      // just redundant when the two happen to be the same run (GPT-6 Sol review, otto/mamoru-astro#28). The
+      // "stay in USDC" line always reflects the selected run's own deposit, never the baseline's.
+      var comparable = Boolean(state.baselineFull && selSum && baseSum && selSum.resultHash !== baseSum.resultHash && LAB.canCompareToBaseline(selSum, baseSum));
       var f = frame(box, box.clientWidth < 560 ? 170 : 190, { l: 52, r: 64, t: 10, b: 22 });
       var vals = [];
       r.series.forEach(function (p) { vals.push(p.v, p.h); });
-      if (state.baselineFull) state.baselineFull.series.forEach(function (p) { vals.push(p.v); });
+      if (comparable) state.baselineFull.series.forEach(function (p) { vals.push(p.v); });
       vals.push(d);
       var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
       var pad = (hi - lo) * 0.08 || 1;
@@ -957,8 +964,7 @@ export function opsClientScript(nonce: string): string {
       svg("line", { x1: f.pad.l, x2: f.width - f.pad.r, y1: y(d), y2: y(d), stroke: cssVar("--usdc"), "stroke-width": 1.5, "stroke-dasharray": "1 4", "stroke-linecap": "round" }, f.svg);
       var path = function (s, k) { return s.map(function (p, i) { return (i ? "L" : "M") + f.x(p.t).toFixed(1) + "," + y(p[k]).toFixed(1); }).join(""); };
       svg("path", { d: path(r.series, "h"), fill: "none", stroke: cssVar("--hold"), "stroke-width": 1.8 }, f.svg);
-      var selSum = selected(), baseSum = baselineSummary();
-      if (state.baselineFull && selSum && baseSum && selSum.resultHash !== baseSum.resultHash) {
+      if (comparable) {
         svg("path", { d: path(state.baselineFull.series, "v"), fill: "none", stroke: cssVar("--ghost"), "stroke-width": 1.5, "stroke-dasharray": "4 3" }, f.svg);
       }
       svg("path", { d: path(r.series, "v"), fill: "none", stroke: cssVar("--mamoru"), "stroke-width": 2.2 }, f.svg);

@@ -84,16 +84,24 @@ async function handleResult(db: D1Db, body: unknown): Promise<Response> {
   if (typeof b.id !== "string" || typeof b.leaseId !== "string") return json({ error: "LAB_RUNNER_BAD_BODY" }, 400);
   const job = await jobById(db, b.id);
   if (!job || job.leaseId !== b.leaseId) return json({ error: "LAB_JOB_LEASE_LOST" }, 409);
+  const now = nowEpoch();
   const nowIso = new Date().toISOString();
   if (b.error !== undefined) {
     const code = typeof b.error === "string" && b.error ? b.error : "LAB_JOB_FAILED";
-    const ok = await finishJobFailed(db, b.id, b.leaseId, code, nowIso);
+    const ok = await finishJobFailed(db, b.id, b.leaseId, code, now, nowIso);
     if (!ok) return json({ error: "LAB_JOB_LEASE_LOST" }, 409);
     return json({ ok: true, status: "failed", errorCode: code });
   }
   const check = validateRunResult(b.run);
   if (!check.ok) return json({ error: check.error }, 400);
   if (check.run.specKey !== job.specKey) return json({ error: "LAB_RUN_SPEC_MISMATCH" }, 400);
+  // Fence BEFORE writing the run (GPT-6 Sol review, otto/mamoru-astro#28): the earlier jobById read above is
+  // only a cheap early-out, not the authoritative check — between it and here the lease could have been
+  // reclaimed. Doing the atomic, fenced job update first and only inserting into lab_runs when it actually
+  // matched means a stale runner's run can never land in the store, even though the job itself was already
+  // correctly protected either way.
+  const ok = await finishJobDone(db, b.id, b.leaseId, check.run.resultHash, now, nowIso);
+  if (!ok) return json({ error: "LAB_JOB_LEASE_LOST" }, 409);
   await upsertRun(db, {
     resultHash: check.run.resultHash,
     specKey: check.run.specKey,
@@ -103,8 +111,6 @@ async function handleResult(db: D1Db, body: unknown): Promise<Response> {
     simVersion: check.run.simVersion,
     createdAt: nowIso,
   });
-  const ok = await finishJobDone(db, b.id, b.leaseId, check.run.resultHash, nowIso);
-  if (!ok) return json({ error: "LAB_JOB_LEASE_LOST" }, 409);
   return json({ ok: true, status: "done", resultHash: check.run.resultHash });
 }
 
