@@ -652,7 +652,7 @@ export function opsClientScript(nonce: string): string {
     function cssVar(name) { return getComputedStyle(root).getPropertyValue(name).trim(); }
     function fp(v, pool) {
       var dp = (POOLS[pool] || {}).dp || 0;
-      return new Intl.NumberFormat("es-ES", { minimumFractionDigits: dp, maximumFractionDigits: dp }).format(v);
+      return new Intl.NumberFormat("es-ES", { minimumFractionDigits: dp, maximumFractionDigits: dp, useGrouping: "always" }).format(v);
     }
     function api(path, opts) {
       return fetch(path, Object.assign({ credentials: "same-origin", cache: "no-store" }, opts || {})).then(function (res) {
@@ -668,6 +668,7 @@ export function opsClientScript(nonce: string): string {
         windows: [], w: 0, selectedHash: null, pool: POOL_ORDER[0], at: 0, playing: false, speed: 1, tab: "ev", rtab: "probar",
         runFull: null, runFullHash: null, baselineFull: null, baselineHash: null,
         job: null, jobStart: 0, probe: { base: "live", width: 2000, deposit: 1000 },
+        initialCursorSet: false,
       };
     }
     function windowOf() { return state.windows[state.w] || null; }
@@ -730,7 +731,17 @@ export function opsClientScript(nonce: string): string {
         needBase ? api("/ops/lab/api/run/" + encodeURIComponent(base.resultHash)) : Promise.resolve(null),
       ]).then(function (res) {
         if (mine !== loadToken) return;
-        if (res[0] && res[0].ok && res[0].body && res[0].body.run) { state.runFull = res[0].body.run; state.runFullHash = sum.resultHash; }
+        if (res[0] && res[0].ok && res[0].body && res[0].body.run) {
+          state.runFull = res[0].body.run;
+          state.runFullHash = sum.resultHash;
+          // Once only, like the prototype's own bootstrap: open on the most telling moment of the first run
+          // shown, pool tab on Ether when present (otherwise the first pool this run actually has).
+          if (!state.initialCursorSet) {
+            state.initialCursorSet = true;
+            state.pool = state.runFull.pools.indexOf("pool:WETH/USDC/3000") !== -1 ? "pool:WETH/USDC/3000" : state.runFull.pools[0];
+            state.at = LAB.initialCursorIndex(state.runFull.series);
+          }
+        }
         if (res[1] && res[1].ok && res[1].body && res[1].body.run) { state.baselineFull = res[1].body.run; state.baselineHash = base.resultHash; }
         if (cb) cb();
       });
@@ -744,7 +755,8 @@ export function opsClientScript(nonce: string): string {
       state.windows.forEach(function (w, i) {
         var b = document.createElement("button");
         b.type = "button";
-        b.textContent = w.label || w.windowId;
+        b.textContent = LAB.windowShortLabel(w.regime, w.from);
+        b.title = w.label || w.windowId;
         b.setAttribute("aria-pressed", String(i === state.w));
         b.onclick = function () { pickWindow(i); };
         g.appendChild(b);
@@ -782,7 +794,9 @@ export function opsClientScript(nonce: string): string {
         b.className = "lab-var";
         b.type = "button";
         b.setAttribute("aria-pressed", String(r.resultHash === state.selectedHash));
-        b.innerHTML = "<b>" + esc(r.variantLabel) + '</b><span class="lab-n ' + LAB.cls(r.metrics.vsHodl) + '">' + esc(LAB.sg(r.metrics.vsHodl)) + "</span><small>" + esc(r.policyId) + "</small>";
+        var noteBits = r.specKey.split("|");
+        var note = LAB.strategyNote(noteBits[1], Number(noteBits[2]));
+        b.innerHTML = "<b>" + esc(r.variantLabel) + '</b><span class="lab-n ' + LAB.cls(r.metrics.vsHodl) + '">' + esc(LAB.sg(r.metrics.vsHodl)) + "</span><small>" + esc(note) + "</small>";
         b.title = "Resultado frente a mantener la mezcla";
         b.onclick = function () { state.selectedHash = r.resultHash; state.at = 0; stopPlay(); renderAll(); };
         g.appendChild(b);
@@ -793,12 +807,14 @@ export function opsClientScript(nonce: string): string {
       var w = windowOf();
       if (!r || !w) { $("lab-ass").innerHTML = ""; return; }
       var rows = [
+        ["Ventana", LAB.windowShortLabel(w.regime, w.from)],
+        ["Descripción", w.label || w.windowId],
         ["Depósito", LAB.money(r.deposit) + " USDC"],
-        ["Ventana", dF.format(new Date(w.from)) + " a " + dF.format(new Date(w.to))],
+        ["Fechas", dF.format(new Date(w.from)) + " a " + dF.format(new Date(w.to))],
         ["Tramo", w.split === "train" ? "entrenamiento" : w.split],
         ["Política", r.policyId],
         ["Base", r.specKey.split("|")[1] === "guard" ? "con guarda de caídas" : "política actual"],
-        ["Ancho de rango", r.specKey.split("|")[2] + " ticks"],
+        ["Ancho de rango", LAB.int(Number(r.specKey.split("|")[2])) + " ticks"],
         ["Resultado", r.resultHash.slice(0, 10) + "…"],
       ];
       $("lab-ass").innerHTML = rows.map(function (row) { return "<dt>" + esc(row[0]) + "</dt><dd>" + esc(row[1]) + "</dd>"; }).join("");
@@ -812,7 +828,7 @@ export function opsClientScript(nonce: string): string {
       var head = $("lab-headline");
       if (!r || !w) { head.textContent = ""; return; }
       var vs = r.metrics.vsHodl;
-      var txt = esc(w.label) + ": " + esc(r.variantLabel.toLowerCase()) + " termina <b>" + esc(LAB.money(Math.abs(vs))) + (vs >= 0 ? " por encima" : " por debajo") + "</b> de mantener la mezcla";
+      var txt = esc(LAB.windowHeadlineLabel(w.regime, w.from)) + ": " + esc(r.variantLabel.toLowerCase()) + " termina <b>" + esc(LAB.money(Math.abs(vs))) + (vs >= 0 ? " por encima" : " por debajo") + "</b> de mantener la mezcla";
       var base = baselineSummary();
       if (base && base.resultHash !== r.resultHash && LAB.canCompareToBaseline(r, base)) {
         var d = r.metrics.end - base.metrics.end;
@@ -936,7 +952,7 @@ export function opsClientScript(nonce: string): string {
       var g = svg("g", { class: "lab-axis" }, f.svg);
       LAB.ticks(lo, hi, 4).forEach(function (v) {
         svg("line", { x1: f.pad.l, x2: f.width - f.pad.r, y1: y(v), y2: y(v), stroke: cssVar("--grid") }, g);
-        svg("text", { x: f.pad.l - 6, y: y(v) + 3.5, "text-anchor": "end" }, g).textContent = new Intl.NumberFormat("es-ES").format(Math.round(v));
+        svg("text", { x: f.pad.l - 6, y: y(v) + 3.5, "text-anchor": "end" }, g).textContent = LAB.int(Math.round(v));
       });
       svg("line", { x1: f.pad.l, x2: f.width - f.pad.r, y1: y(d), y2: y(d), stroke: cssVar("--usdc"), "stroke-width": 1.5, "stroke-dasharray": "1 4", "stroke-linecap": "round" }, f.svg);
       var path = function (s, k) { return s.map(function (p, i) { return (i ? "L" : "M") + f.x(p.t).toFixed(1) + "," + y(p[k]).toFixed(1); }).join(""); };
@@ -1078,8 +1094,8 @@ export function opsClientScript(nonce: string): string {
         })
         .join("");
       box.innerHTML =
-        '<div class="lab-tbl"><table><thead><tr><th>' + esc(w.label) + "</th><th>Final</th><th>vs mantener</th><th>Comisiones</th><th>Gas</th><th>Operaciones</th><th>Peor caída</th></tr></thead><tbody>" + rows + "</tbody></table></div>" +
-        '<div class="lab-tbl" style="margin-top:18px"><table><thead><tr><th>Frente a mantener, por ventana</th>' + state.windows.map(function (win) { return "<th>" + esc(win.label) + "</th>"; }).join("") + "</tr></thead><tbody>" + mat + "</tbody></table></div>" +
+        '<div class="lab-tbl"><table><thead><tr><th title="' + esc(w.label || w.windowId) + '">' + esc(LAB.windowShortLabel(w.regime, w.from)) + "</th><th>Final</th><th>vs mantener</th><th>Comisiones</th><th>Gas</th><th>Operaciones</th><th>Peor caída</th></tr></thead><tbody>" + rows + "</tbody></table></div>" +
+        '<div class="lab-tbl" style="margin-top:18px"><table><thead><tr><th>Frente a mantener, por ventana</th>' + state.windows.map(function (win) { return '<th title="' + esc(win.label || win.windowId) + '">' + esc(LAB.windowShortLabel(win.regime, win.from)) + "</th>"; }).join("") + "</tr></thead><tbody>" + mat + "</tbody></table></div>" +
         '<p class="lab-note" style="margin-top:8px">Una estrategia que gana en una ventana y pierde en otra no está validada: mira todas las ventanas a la vez.</p>';
     }
     function renderDiag() {
@@ -1123,12 +1139,12 @@ export function opsClientScript(nonce: string): string {
       var w = windowOf();
       box.innerHTML =
         '<div class="lab-field"><label>Base</label><div class="lab-seg" id="lab-base"></div></div>' +
-        '<div class="lab-field"><label for="lab-width">Ancho del rango <span id="lab-width-v">' + state.probe.width + " ticks</span></label>" +
+        '<div class="lab-field"><label for="lab-width">Ancho del rango <span id="lab-width-v">' + esc(LAB.int(state.probe.width)) + " ticks</span></label>" +
         '<input id="lab-width" type="range" min="' + LAB.WIDTH_MIN + '" max="' + LAB.WIDTH_MAX + '" step="' + LAB.WIDTH_STEP + '" value="' + state.probe.width + '" />' +
         '<div class="lab-scale"><span>estrecho, cobra más</span><span>ancho, aguanta más</span></div></div>' +
-        '<div class="lab-field"><label for="lab-deposit">Depósito <span id="lab-deposit-v">' + state.probe.deposit + " USDC</span></label>" +
+        '<div class="lab-field"><label for="lab-deposit">Depósito <span id="lab-deposit-v">' + esc(LAB.int(state.probe.deposit)) + " USDC</span></label>" +
         '<input id="lab-deposit" type="range" min="' + LAB.DEPOSIT_MIN + '" max="' + LAB.DEPOSIT_MAX + '" step="100" value="' + state.probe.deposit + '" />' +
-        '<div class="lab-scale"><span>' + LAB.DEPOSIT_MIN + '</span><span>' + LAB.DEPOSIT_MAX + ' USDC</span></div></div>' +
+        '<div class="lab-scale"><span>' + esc(LAB.int(LAB.DEPOSIT_MIN)) + '</span><span>' + esc(LAB.int(LAB.DEPOSIT_MAX)) + ' USDC</span></div></div>' +
         '<div class="lab-field lab-later"><label>Choque de precio sintético</label><input type="range" disabled /></div>' +
         '<button type="button" class="lab-run" id="lab-run"' + (w ? "" : " disabled") + '>Ejecutar escenario</button>' +
         '<p class="lab-note">"Ejecutar escenario" encola un trabajo para el runner; esta columna muestra su estado y selecciona la estrategia cuando termina. Lo marcado «más adelante» necesita el generador de escenarios.</p>';
@@ -1143,8 +1159,8 @@ export function opsClientScript(nonce: string): string {
         btn.onclick = function () { state.probe.base = b; renderProbar(); };
         baseSeg.appendChild(btn);
       });
-      $("lab-width").oninput = function (e) { state.probe.width = Math.round(Number(e.target.value) / LAB.WIDTH_STEP) * LAB.WIDTH_STEP; $("lab-width-v").textContent = state.probe.width + " ticks"; };
-      $("lab-deposit").oninput = function (e) { state.probe.deposit = Math.round(Number(e.target.value)); $("lab-deposit-v").textContent = state.probe.deposit + " USDC"; };
+      $("lab-width").oninput = function (e) { state.probe.width = Math.round(Number(e.target.value) / LAB.WIDTH_STEP) * LAB.WIDTH_STEP; $("lab-width-v").textContent = LAB.int(state.probe.width) + " ticks"; };
+      $("lab-deposit").oninput = function (e) { state.probe.deposit = Math.round(Number(e.target.value)); $("lab-deposit-v").textContent = LAB.int(state.probe.deposit) + " USDC"; };
       $("lab-run").onclick = runScenario;
       renderJob();
     }
@@ -1250,6 +1266,9 @@ export function opsClientScript(nonce: string): string {
       if (state.tab === "ev") renderEvents();
     }
     function drawCharts() {
+      // The initial-cursor bootstrap (refreshRunData) may have just picked the pool tab, so the tabs are
+      // re-rendered here too, not only in renderAll()'s earlier synchronous pass.
+      renderPoolTabs();
       drawPrice();
       drawMoney();
       renderTicks();
