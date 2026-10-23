@@ -42,6 +42,7 @@ export function opsRouterLogic() {
     { id: "experiments", path: "/ops/experiments" },
     { id: "settings", path: "/ops/settings" },
     { id: "archive", path: "/ops/archive" },
+    { id: "lab", path: "/ops/lab" },
   ];
   /** A section this recent is painted without asking the server again. */
   var FRESH_MS = 15000;

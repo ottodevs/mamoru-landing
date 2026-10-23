@@ -11,6 +11,7 @@
 
 import { opsRouterLogic } from "./ops-router-logic";
 import { topupLogic } from "./topup-logic";
+import { labLogic } from "./lab-logic";
 
 /** Runs before first paint so nothing flashes in its final state and then restarts. */
 export function motionHeadScript(nonce: string): string {
@@ -23,6 +24,7 @@ export function opsClientScript(nonce: string): string {
   var __name = function (fn) { return fn; };
   var R = (/*router-logic*/${opsRouterLogic.toString()}/*end-router-logic*/)();
   var L = (/*topup-logic*/${topupLogic.toString()}/*end-topup-logic*/)();
+  var LAB = (/*lab-logic*/${labLogic.toString()}/*end-lab-logic*/)();
   var root = document.documentElement;
   var main = document.getElementById("ops-main");
   var live = document.getElementById("ops-live");
@@ -600,11 +602,724 @@ export function opsClientScript(nonce: string): string {
     return { init: init };
   })();
 
+  /* ---------- the Lab bench (otto/mamoru-astro#28, spec 008 phase 1) ---------- */
+  // Unlike every other section, this one's data is never in the server-rendered HTML: it is fetched from the
+  // screen API (B-06) at mount time, same reason the prototype's own DATA constant is gone (data comes from D1
+  // now, not a build-time dump). LAB (lab-logic.ts) holds the pure math; everything here is fetch + DOM.
+  var LabApp = (function () {
+    var SVGNS = "http://www.w3.org/2000/svg";
+    var POOLS = {
+      "pool:WETH/USDC/3000": { name: "Ether", pair: "WETH/USDC 0,3 %", dp: 0 },
+      "pool:USDC/cbBTC/500": { name: "Bitcoin", pair: "cbBTC/USDC 0,05 %", dp: 0 },
+      "pool:USDC/USDT/100": { name: "Dólares", pair: "USDC/USDT 0,01 %", dp: 4 },
+    };
+    var POOL_ORDER = ["pool:WETH/USDC/3000", "pool:USDC/cbBTC/500", "pool:USDC/USDT/100"];
+    var KIND = { enter_swap: "cambia tokens para entrar", enter_mint: "entra en el pool", harvest: "cobra las comisiones", rerange: "el precio salió del rango y recentra", reduce: "reduce la posición" };
+    var REASON = { DECIDE_IN_RANGE: "En rango, no hace nada", DECIDE_ENTER: "Entra", DECIDE_HARVEST: "Cobra comisiones", DECIDE_RANGE_ADJUST: "Recentra", EHG_PRICE_DIVERGENCE: "Espera: precio raro frente al TWAP", DECIDE_WAIT_DEPTH: "Espera profundidad" };
+    var ERROR_WORDS = {
+      LAB_JOB_LEASE_LOST: "el runner perdió este trabajo",
+      LAB_SPEC_INVALID: "el escenario pedido no es válido",
+      LAB_DATASET_MISSING: "esta ventana no tiene datos para esa base",
+      LAB_JOB_TIMEOUT: "se agotó el tiempo del trabajo",
+      LAB_RUN_INVALID: "el runner devolvió un resultado con forma inválida",
+      LAB_JOB_LIMIT: "se alcanzó el límite de trabajos",
+      LAB_SERVICE_UNAVAILABLE: "el banco no está disponible ahora mismo",
+      LAB_NETWORK: "no hubo respuesta del servidor",
+    };
+    var dF = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short", timeZone: "UTC" });
+    var tF = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
+
+    var root = null, scope = null, csrf = "", state = null, geo = {}, playTimer = null, jobTimer = null, loadToken = 0;
+
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === '"' ? "&quot;" : "&#39;";
+      });
+    }
+    function $(id) { return scope.querySelector("#" + id); }
+    function el(tag, cls, text) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text !== undefined) n.textContent = text;
+      return n;
+    }
+    function svg(tag, attrs, parent) {
+      var e = document.createElementNS(SVGNS, tag);
+      for (var k in attrs) e.setAttribute(k, attrs[k]);
+      if (parent) parent.appendChild(e);
+      return e;
+    }
+    function cssVar(name) { return getComputedStyle(root).getPropertyValue(name).trim(); }
+    function fp(v, pool) {
+      var dp = (POOLS[pool] || {}).dp || 0;
+      return new Intl.NumberFormat("es-ES", { minimumFractionDigits: dp, maximumFractionDigits: dp }).format(v);
+    }
+    function api(path, opts) {
+      return fetch(path, Object.assign({ credentials: "same-origin", cache: "no-store" }, opts || {})).then(function (res) {
+        return res
+          .json()
+          .catch(function () { return null; })
+          .then(function (body) { return { ok: res.ok, status: res.status, body: body }; });
+      });
+    }
+
+    function freshState() {
+      return {
+        windows: [], w: 0, selectedHash: null, pool: POOL_ORDER[0], at: 0, playing: false, speed: 1, tab: "ev", rtab: "probar",
+        runFull: null, runFullHash: null, baselineFull: null, baselineHash: null,
+        job: null, jobStart: 0, probe: { base: "live", width: 2000, deposit: 1000 },
+      };
+    }
+    function windowOf() { return state.windows[state.w] || null; }
+    function runsOf() { var w = windowOf(); return w ? w.runs : []; }
+    function findRun(hash) {
+      var runs = runsOf();
+      for (var i = 0; i < runs.length; i++) if (runs[i].resultHash === hash) return runs[i];
+      return null;
+    }
+    function selected() { return findRun(state.selectedHash) || runsOf()[0] || null; }
+    function baselineKey() {
+      var w = windowOf();
+      return w ? LAB.specKey({ windowId: w.windowId, base: "live", widthTicks: 2000, deposit: 1000 }) : "";
+    }
+    function baselineSummary() {
+      var key = baselineKey();
+      var runs = runsOf();
+      for (var i = 0; i < runs.length; i++) if (runs[i].specKey === key) return runs[i];
+      return null;
+    }
+
+    /* ---------- loading ---------- */
+
+    function loadAll() {
+      var mine = ++loadToken;
+      return api("/ops/lab/api/catalog").then(function (r) {
+        if (mine !== loadToken) return;
+        var windows = (r.body && r.body.windows) || [];
+        return Promise.all(
+          windows.map(function (w) {
+            return api("/ops/lab/api/runs?window=" + encodeURIComponent(w.windowId)).then(function (rr) {
+              return { windowId: w.windowId, label: w.label, regime: w.regime, split: w.split, from: w.from, to: w.to, bases: w.bases || [], runs: (rr.body && rr.body.runs) || [] };
+            });
+          }),
+        ).then(function (full) {
+          if (mine !== loadToken) return;
+          state.windows = full;
+          if (!full.length) {
+            $("lab-empty").hidden = false;
+            renderProbar();
+            return;
+          }
+          var base = baselineSummary() || (full[0].runs[0] || null);
+          state.selectedHash = base ? base.resultHash : null;
+          renderAll();
+        });
+      }).catch(function () { $("lab-empty").hidden = false; });
+    }
+
+    function refreshRunData(cb) {
+      var mine = ++loadToken;
+      var sum = selected();
+      var base = baselineSummary();
+      var needSel = sum && state.runFullHash !== sum.resultHash;
+      var needBase = base && state.baselineHash !== base.resultHash;
+      if (!base) { state.baselineFull = null; state.baselineHash = null; }
+      if (!needSel && !needBase) { if (cb) cb(); return; }
+      Promise.all([
+        needSel ? api("/ops/lab/api/run/" + encodeURIComponent(sum.resultHash)) : Promise.resolve(null),
+        needBase ? api("/ops/lab/api/run/" + encodeURIComponent(base.resultHash)) : Promise.resolve(null),
+      ]).then(function (res) {
+        if (mine !== loadToken) return;
+        if (res[0] && res[0].ok && res[0].body && res[0].body.run) { state.runFull = res[0].body.run; state.runFullHash = sum.resultHash; }
+        if (res[1] && res[1].ok && res[1].body && res[1].body.run) { state.baselineFull = res[1].body.run; state.baselineHash = base.resultHash; }
+        if (cb) cb();
+      });
+    }
+
+    /* ---------- left column ---------- */
+
+    function renderWindows() {
+      var g = $("lab-windows");
+      g.innerHTML = "";
+      state.windows.forEach(function (w, i) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = w.label || w.windowId;
+        b.setAttribute("aria-pressed", String(i === state.w));
+        b.onclick = function () { pickWindow(i); };
+        g.appendChild(b);
+      });
+    }
+    function pickWindow(i) {
+      state.w = i;
+      state.at = 0;
+      stopPlay();
+      var base = baselineSummary();
+      state.selectedHash = (base || runsOf()[0] || {}).resultHash || null;
+      renderAll();
+    }
+    function renderCap() {
+      var r = selected();
+      var box = $("lab-cap");
+      if (!r || !state.runFull || state.runFullHash !== r.resultHash) {
+        box.innerHTML = '<div class="lab-k">Capital simulado</div><div class="lab-v lab-num">…</div>';
+        return;
+      }
+      var p = state.runFull.series[Math.min(state.at, state.runFull.series.length - 1)];
+      var m = r.metrics;
+      box.innerHTML =
+        '<div class="lab-k">Capital simulado · ' + esc(tF.format(p.t * 1000)) + "</div>" +
+        '<div class="lab-v lab-num">' + esc(LAB.money(p.v)) + "<small>USDC</small></div>" +
+        '<div class="lab-d"><span>al final <b class="lab-num">' + esc(LAB.money(m.end)) + '</b></span>' +
+        '<span class="' + LAB.cls(m.vsHodl) + '">' + esc(LAB.sg(m.vsHodl)) + " frente a mantener</span>" +
+        '<span class="' + LAB.cls(m.end - r.deposit) + '">' + esc(LAB.sg(m.end - r.deposit)) + " frente a USDC</span></div>";
+    }
+    function renderVariants() {
+      var g = $("lab-variants");
+      g.innerHTML = "";
+      runsOf().forEach(function (r) {
+        var b = document.createElement("button");
+        b.className = "lab-var";
+        b.type = "button";
+        b.setAttribute("aria-pressed", String(r.resultHash === state.selectedHash));
+        b.innerHTML = "<b>" + esc(r.variantLabel) + '</b><span class="lab-n ' + LAB.cls(r.metrics.vsHodl) + '">' + esc(LAB.sg(r.metrics.vsHodl)) + "</span><small>" + esc(r.policyId) + "</small>";
+        b.title = "Resultado frente a mantener la mezcla";
+        b.onclick = function () { state.selectedHash = r.resultHash; state.at = 0; stopPlay(); renderAll(); };
+        g.appendChild(b);
+      });
+    }
+    function renderAssum() {
+      var r = selected();
+      var w = windowOf();
+      if (!r || !w) { $("lab-ass").innerHTML = ""; return; }
+      var rows = [
+        ["Depósito", LAB.money(r.deposit) + " USDC"],
+        ["Ventana", dF.format(new Date(w.from)) + " a " + dF.format(new Date(w.to))],
+        ["Tramo", w.split === "train" ? "entrenamiento" : w.split],
+        ["Política", r.policyId],
+        ["Base", r.specKey.split("|")[1] === "guard" ? "con guarda de caídas" : "política actual"],
+        ["Ancho de rango", r.specKey.split("|")[2] + " ticks"],
+        ["Resultado", r.resultHash.slice(0, 10) + "…"],
+      ];
+      $("lab-ass").innerHTML = rows.map(function (row) { return "<dt>" + esc(row[0]) + "</dt><dd>" + esc(row[1]) + "</dd>"; }).join("");
+    }
+
+    /* ---------- bench ---------- */
+
+    function renderHead() {
+      var r = selected();
+      var w = windowOf();
+      var head = $("lab-headline");
+      if (!r || !w) { head.textContent = ""; return; }
+      var vs = r.metrics.vsHodl;
+      var txt = esc(w.label) + ": " + esc(r.variantLabel.toLowerCase()) + " termina <b>" + esc(LAB.money(Math.abs(vs))) + (vs >= 0 ? " por encima" : " por debajo") + "</b> de mantener la mezcla";
+      var base = baselineSummary();
+      if (base && base.resultHash !== r.resultHash && LAB.canCompareToBaseline(r, base)) {
+        var d = r.metrics.end - base.metrics.end;
+        txt += ", y <b>" + esc(LAB.money(Math.abs(d))) + (d >= 0 ? " mejor" : " peor") + "</b> que la política actual";
+      }
+      head.innerHTML = txt + ".";
+    }
+    function renderTiles() {
+      var r = selected();
+      var box = $("lab-tiles");
+      if (!r) { box.innerHTML = ""; return; }
+      var m = r.metrics;
+      var tile = function (cls, lab, col, v, sub) {
+        return '<div class="lab-tile ' + cls + '"><div class="lab-k"><i style="border-color:' + col + '"></i>' + esc(lab) + '</div><div class="lab-v lab-num">' + esc(LAB.money(v)) + '</div><div class="lab-s ' + LAB.cls(v - r.deposit) + '">' + esc(LAB.pct((v - r.deposit) / r.deposit, 2)) + (sub ? " · " + esc(sub) : "") + "</div></div>";
+      };
+      box.innerHTML =
+        tile("lab-main", r.variantLabel, "var(--mamoru)", m.end, LAB.money(m.fees) + " en comisiones") +
+        tile("", "Mantener", "var(--hold)", m.hodl, "sin tocar") +
+        tile("", "USDC", "var(--usdc)", r.deposit, "no hacer nada");
+    }
+    function renderPoolTabs() {
+      var g = $("lab-pooltabs");
+      g.innerHTML = "";
+      var r = selected();
+      if (!r) return;
+      POOL_ORDER.forEach(function (p) {
+        if (r.pools.indexOf(p) === -1) return;
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = POOLS[p].name;
+        b.title = POOLS[p].pair;
+        b.setAttribute("aria-pressed", String(p === state.pool));
+        b.onclick = function () { state.pool = p; drawPrice(); drawCursor(); };
+        g.appendChild(b);
+      });
+      if (r.pools.indexOf(state.pool) === -1) state.pool = r.pools[0];
+    }
+
+    function keyOpsOf(run) { return run ? LAB.keyOps(run.ops) : []; }
+
+    function frame(box, height, pad) {
+      box.innerHTML = "";
+      var width = Math.max(260, box.clientWidth || 260);
+      var s = svg("svg", { viewBox: "0 0 " + width + " " + height }, box);
+      var series = state.runFull ? state.runFull.series : [];
+      var t0 = series.length ? series[0].t : 0;
+      var t1 = series.length ? series[series.length - 1].t : 1;
+      var x = function (t) { return pad.l + ((t - t0) / (t1 - t0 || 1)) * (width - pad.l - pad.r); };
+      return { svg: s, width: width, height: height, x: x, t0: t0, t1: t1, pad: pad };
+    }
+    function drawPrice() {
+      var box = $("lab-price");
+      if (!state.runFull) { box.innerHTML = '<p class="lab-note">Cargando…</p>'; return; }
+      var r = state.runFull, pool = state.pool;
+      var f = frame(box, box.clientWidth < 560 ? 220 : 270, { l: 52, r: 64, t: 26, b: 22 });
+      var pts = r.series.filter(function (p) { return Number.isFinite(p.price[pool]); });
+      if (!pts.length) { box.innerHTML = '<p class="lab-note">Sin datos de precio para este pool en esta ventana.</p>'; return; }
+      var vals = [];
+      pts.forEach(function (p) { vals.push(p.price[pool]); if (p.band[pool]) vals.push(p.band[pool][0], p.band[pool][1]); });
+      if (state.baselineFull) state.baselineFull.series.forEach(function (p) { if (p.band[pool]) vals.push(p.band[pool][0], p.band[pool][1]); });
+      var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+      var pad = (hi - lo) * 0.06 || hi * 0.001 || 1;
+      lo -= pad; hi += pad;
+      var y = function (v) { return f.pad.t + (1 - (v - lo) / (hi - lo)) * (f.height - f.pad.t - f.pad.b); };
+      var g = svg("g", { class: "lab-axis" }, f.svg);
+      LAB.ticks(lo, hi, 4).forEach(function (v) {
+        svg("line", { x1: f.pad.l, x2: f.width - f.pad.r, y1: y(v), y2: y(v), stroke: cssVar("--grid") }, g);
+        svg("text", { x: f.pad.l - 6, y: y(v) + 3.5, "text-anchor": "end" }, g).textContent = fp(v, pool);
+      });
+      var ppd = (f.width - f.pad.l - f.pad.r) / ((f.t1 - f.t0) / 86400 || 1);
+      var every = [1, 2, 3, 7, 14].filter(function (k) { return k * ppd >= 56; })[0] || 14;
+      for (var t = Math.ceil(f.t0 / 86400) * 86400; t <= f.t1; t += 86400 * every) {
+        svg("text", { x: f.x(t), y: f.height - 5, "text-anchor": "middle" }, g).textContent = dF.format(t * 1000);
+      }
+      var flush = function (ss, fill, stroke, dash) {
+        if (ss.length > 1) {
+          var top = ss.map(function (p, i) { return (i ? "L" : "M") + f.x(p.t).toFixed(1) + "," + y(p.band[pool][1]).toFixed(1); }).join("");
+          var bot = ss.slice().reverse().map(function (p) { return "L" + f.x(p.t).toFixed(1) + "," + y(p.band[pool][0]).toFixed(1); }).join("");
+          svg("path", { d: top + bot + "Z", fill: fill, stroke: stroke, "stroke-width": 1, "stroke-dasharray": dash || "" }, f.svg);
+        }
+      };
+      var seg = [];
+      pts.forEach(function (p) { if (p.band[pool]) seg.push(p); else { flush(seg, cssVar("--band"), cssVar("--bandedge")); seg = []; } });
+      flush(seg, cssVar("--band"), cssVar("--bandedge"));
+      var selSum = selected(), baseSum = baselineSummary();
+      if (state.baselineFull && selSum && baseSum && selSum.resultHash !== baseSum.resultHash) {
+        seg = [];
+        state.baselineFull.series.forEach(function (p) { if (p.band[pool]) seg.push(p); else { flush(seg, "none", cssVar("--ghost"), "4 3"); seg = []; } });
+        flush(seg, "none", cssVar("--ghost"), "4 3");
+      }
+      svg("path", { d: pts.map(function (p, i) { return (i ? "L" : "M") + f.x(p.t).toFixed(1) + "," + y(p.price[pool]).toFixed(1); }).join(""), fill: "none", stroke: cssVar("--ink"), "stroke-width": 1.5, "stroke-linejoin": "round" }, f.svg);
+      var near = function (t) {
+        var q = pts[0];
+        pts.forEach(function (p) { if (Math.abs(p.t - t) < Math.abs(q.t - t)) q = p; });
+        return q;
+      };
+      keyOpsOf(r).filter(function (o) { return o.pool === pool; }).forEach(function (o) {
+        var cx = f.x(o.t), cy = y(near(o.t).price[pool]);
+        if (o.kind === "rerange") svg("path", { d: "M" + cx + "," + (cy - 5) + " l4.5,8 h-9 Z", fill: cssVar("--loss"), stroke: cssVar("--paper"), "stroke-width": 1.5 }, f.svg);
+        else if (o.kind === "harvest") svg("circle", { cx: cx, cy: cy, r: 3.2, fill: cssVar("--mamoru"), stroke: cssVar("--paper"), "stroke-width": 1.5 }, f.svg);
+        else svg("path", { d: "M" + cx + "," + (cy - 4.5) + " l4.5,4.5 l-4.5,4.5 l-4.5,-4.5 Z", fill: cssVar("--ink"), stroke: cssVar("--paper"), "stroke-width": 1.5 }, f.svg);
+      });
+      var last = pts[pts.length - 1];
+      svg("text", { class: "lab-lblb", x: f.width - f.pad.r + 6, y: y(last.price[pool]) + 4 }, f.svg).textContent = fp(last.price[pool], pool);
+      geo.price = { f: f, y: y };
+      hoverOn(f, "price");
+    }
+    function drawMoney() {
+      var box = $("lab-money");
+      if (!state.runFull) { box.innerHTML = '<p class="lab-note">Cargando…</p>'; return; }
+      var r = state.runFull, d = r.deposit;
+      var f = frame(box, box.clientWidth < 560 ? 170 : 190, { l: 52, r: 64, t: 10, b: 22 });
+      var vals = [];
+      r.series.forEach(function (p) { vals.push(p.v, p.h); });
+      if (state.baselineFull) state.baselineFull.series.forEach(function (p) { vals.push(p.v); });
+      vals.push(d);
+      var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+      var pad = (hi - lo) * 0.08 || 1;
+      lo -= pad; hi += pad;
+      var y = function (v) { return f.pad.t + (1 - (v - lo) / (hi - lo)) * (f.height - f.pad.t - f.pad.b); };
+      var g = svg("g", { class: "lab-axis" }, f.svg);
+      LAB.ticks(lo, hi, 4).forEach(function (v) {
+        svg("line", { x1: f.pad.l, x2: f.width - f.pad.r, y1: y(v), y2: y(v), stroke: cssVar("--grid") }, g);
+        svg("text", { x: f.pad.l - 6, y: y(v) + 3.5, "text-anchor": "end" }, g).textContent = new Intl.NumberFormat("es-ES").format(Math.round(v));
+      });
+      svg("line", { x1: f.pad.l, x2: f.width - f.pad.r, y1: y(d), y2: y(d), stroke: cssVar("--usdc"), "stroke-width": 1.5, "stroke-dasharray": "1 4", "stroke-linecap": "round" }, f.svg);
+      var path = function (s, k) { return s.map(function (p, i) { return (i ? "L" : "M") + f.x(p.t).toFixed(1) + "," + y(p[k]).toFixed(1); }).join(""); };
+      svg("path", { d: path(r.series, "h"), fill: "none", stroke: cssVar("--hold"), "stroke-width": 1.8 }, f.svg);
+      var selSum = selected(), baseSum = baselineSummary();
+      if (state.baselineFull && selSum && baseSum && selSum.resultHash !== baseSum.resultHash) {
+        svg("path", { d: path(state.baselineFull.series, "v"), fill: "none", stroke: cssVar("--ghost"), "stroke-width": 1.5, "stroke-dasharray": "4 3" }, f.svg);
+      }
+      svg("path", { d: path(r.series, "v"), fill: "none", stroke: cssVar("--mamoru"), "stroke-width": 2.2 }, f.svg);
+      geo.money = { f: f, y: y };
+      hoverOn(f, "money");
+    }
+    function hoverOn(f, which) {
+      var hit = svg("rect", { x: f.pad.l, y: 0, width: Math.max(0, f.width - f.pad.l - f.pad.r), height: f.height, fill: "transparent", style: "cursor:crosshair" }, f.svg);
+      var pick = function (ev) {
+        var rc = f.svg.getBoundingClientRect();
+        var px = ((ev.clientX - rc.left) / rc.width) * f.width;
+        var t = f.t0 + ((px - f.pad.l) / (f.width - f.pad.l - f.pad.r || 1)) * (f.t1 - f.t0);
+        return LAB.nearestIndex(state.runFull ? state.runFull.series : [], t);
+      };
+      hit.addEventListener("pointerdown", function (ev) { stopPlay(); state.at = pick(ev); tickAll(); });
+      hit.addEventListener("pointermove", function (ev) { if (ev.buttons) { state.at = pick(ev); tickAll(); } });
+    }
+    function drawCursor() {
+      if (!state.runFull || !state.runFull.series.length) return;
+      var at = Math.min(state.at, state.runFull.series.length - 1);
+      var p = state.runFull.series[at];
+      ["price", "money"].forEach(function (k) {
+        var g = geo[k];
+        if (!g) return;
+        var old = g.f.svg.querySelector(".lab-cur");
+        if (old) old.remove();
+        var cur = svg("g", { class: "lab-cur", "pointer-events": "none" }, g.f.svg);
+        svg("line", { x1: g.f.x(p.t), x2: g.f.x(p.t), y1: g.f.pad.t - 4, y2: g.f.height - g.f.pad.b, stroke: cssVar("--ink"), "stroke-width": 1, opacity: 0.35 }, cur);
+        if (k === "price" && Number.isFinite(p.price[state.pool])) svg("circle", { cx: g.f.x(p.t), cy: g.y(p.price[state.pool]), r: 4, fill: cssVar("--ink"), stroke: cssVar("--paper"), "stroke-width": 2 }, cur);
+        if (k === "money") {
+          svg("circle", { cx: g.f.x(p.t), cy: g.y(p.v), r: 4, fill: cssVar("--mamoru"), stroke: cssVar("--paper"), "stroke-width": 2 }, cur);
+          svg("circle", { cx: g.f.x(p.t), cy: g.y(p.h), r: 3.5, fill: cssVar("--hold"), stroke: cssVar("--paper"), "stroke-width": 2 }, cur);
+        }
+      });
+    }
+    function renderNarr() {
+      var box = $("lab-narr");
+      if (!state.runFull || !state.runFull.series.length) { box.innerHTML = ""; return; }
+      var r = state.runFull;
+      var at = Math.min(state.at, r.series.length - 1);
+      var p = r.series[at];
+      var band = p.band[state.pool], price = p.price[state.pool];
+      var last = r.ops.filter(function (o) { return o.t <= p.t && o.kind !== "enter_swap"; }).slice(-1)[0];
+      var inside = band && price >= band[0] && price <= band[1];
+      var poolName = (POOLS[state.pool] || {}).name || state.pool;
+      var stateTxt = !band
+        ? poolName + ": sin posición todavía."
+        : inside
+        ? poolName + " está dentro del rango (" + fp(band[0], state.pool) + " a " + fp(band[1], state.pool) + "): la posición cobra comisiones."
+        : poolName + " está fuera del rango: la posición no cobra hasta que Mamoru recentre.";
+      var diff = p.v - p.h;
+      box.innerHTML =
+        '<span class="lab-when">' + esc(tF.format(p.t * 1000)) + " UTC" + (last ? " · último movimiento: " + esc((POOLS[last.pool] || {}).name || last.pool) + " " + esc(KIND[last.kind] || last.kind) + " (" + esc(tF.format(last.t * 1000)) + ")" : "") + "</span>" +
+        "<span>" + esc(stateTxt) + ' Tu dinero va <b class="' + LAB.cls(diff) + '">' + esc(LAB.sg(diff)) + "</b> frente a mantener.</span>";
+    }
+    function renderTicks() {
+      if (!state.runFull) return;
+      var r = state.runFull, s = r.series;
+      if (!s.length) return;
+      var t0 = s[0].t, t1 = s[s.length - 1].t;
+      var g = $("lab-ticks");
+      g.innerHTML = "";
+      keyOpsOf(r).forEach(function (o) {
+        var sp = document.createElement("span");
+        sp.style.left = (((o.t - t0) / (t1 - t0 || 1)) * 100) + "%";
+        sp.style.background = o.kind === "rerange" ? cssVar("--loss") : o.kind === "harvest" ? cssVar("--mamoru") : cssVar("--ink2");
+        g.appendChild(sp);
+      });
+      var scrub = $("lab-scrub");
+      scrub.max = String(s.length - 1);
+      scrub.value = String(Math.min(state.at, s.length - 1));
+    }
+
+    /* ---------- bottom tabs ---------- */
+
+    function renderEvents() {
+      if (!state.runFull) { $("lab-t-ev").innerHTML = ""; return; }
+      var r = state.runFull, s = r.series;
+      var at = Math.min(state.at, s.length - 1);
+      var p = s[at];
+      var ev = keyOpsOf(r);
+      var cur = ev.filter(function (o) { return o.t <= p.t; }).slice(-1)[0];
+      var rows = ev
+        .map(function (o, i) {
+          var pool = POOLS[o.pool] || { name: o.pool };
+          return (
+            '<button type="button" class="lab-ev' + (o === cur ? " lab-cur" : "") + '" data-i="' + i + '"><span class="lab-t">' + esc(tF.format(o.t * 1000)) +
+            '</span><span class="lab-p">' + esc(pool.name) + "</span><span>" + esc(KIND[o.kind] || o.kind) + '</span><span class="lab-m">' +
+            (o.fees ? '<span class="lab-pos">+' + esc(LAB.money(o.fees)) + "</span> · " : "") + "gas " + esc(LAB.money(o.gas)) + "</span></button>"
+          );
+        })
+        .join("");
+      $("lab-t-ev").innerHTML = '<div class="lab-evlist">' + (rows || '<p class="lab-note">Sin movimientos en esta ventana.</p>') + "</div>";
+      $("lab-t-ev").querySelectorAll(".lab-ev").forEach(function (b) {
+        b.onclick = function () {
+          var o = ev[Number(b.getAttribute("data-i"))];
+          state.pool = o.pool;
+          state.at = LAB.idxAt(s, o.t);
+          stopPlay();
+          renderPoolTabs();
+          drawPrice();
+          tickAll();
+        };
+      });
+    }
+    function renderCompare() {
+      var box = $("lab-t-cmp");
+      var w = windowOf();
+      if (!w) { box.innerHTML = ""; return; }
+      var rows = runsOf()
+        .map(function (r) {
+          return (
+            '<tr class="' + (r.resultHash === state.selectedHash ? "lab-cur" : "") + '"><td>' + esc(r.variantLabel) + "</td><td>" + esc(LAB.money(r.metrics.end)) +
+            '</td><td class="' + LAB.cls(r.metrics.vsHodl) + '">' + esc(LAB.sg(r.metrics.vsHodl)) + '</td><td class="lab-pos">' + esc(LAB.money(r.metrics.fees)) +
+            "</td><td>" + esc(LAB.money(r.metrics.gas)) + "</td><td>" + esc(String(Object.values(r.metrics.operations).reduce(function (a, n) { return a + n; }, 0))) +
+            "</td><td>−" + esc((r.metrics.maxDrawdownBps / 100).toFixed(1)) + " %</td></tr>"
+          );
+        })
+        .join("");
+      var matrixRows = LAB.compareMatrix(state.windows);
+      var mat = matrixRows
+        .map(function (row) {
+          var cells = state.windows
+            .map(function (win) {
+              var x = row.byWindow[win.windowId];
+              if (x === undefined || x === null) return "<td>—</td>";
+              var a = Math.min(1, Math.abs(x) / 20);
+              var bg = x >= 0 ? "rgba(19,128,90," + (a * 0.35).toFixed(2) + ")" : "rgba(155,44,44," + (a * 0.35).toFixed(2) + ")";
+              return '<td><span class="lab-cell" style="background:' + bg + '">' + esc(LAB.sg(x)) + "</span></td>";
+            })
+            .join("");
+          return "<tr><td>" + esc(row.variantLabel) + "</td>" + cells + "</tr>";
+        })
+        .join("");
+      box.innerHTML =
+        '<div class="lab-tbl"><table><thead><tr><th>' + esc(w.label) + "</th><th>Final</th><th>vs mantener</th><th>Comisiones</th><th>Gas</th><th>Operaciones</th><th>Peor caída</th></tr></thead><tbody>" + rows + "</tbody></table></div>" +
+        '<div class="lab-tbl" style="margin-top:18px"><table><thead><tr><th>Frente a mantener, por ventana</th>' + state.windows.map(function (win) { return "<th>" + esc(win.label) + "</th>"; }).join("") + "</tr></thead><tbody>" + mat + "</tbody></table></div>" +
+        '<p class="lab-note" style="margin-top:8px">Una estrategia que gana en una ventana y pierde en otra no está validada: mira todas las ventanas a la vez.</p>';
+    }
+    function renderDiag() {
+      var box = $("lab-t-dg");
+      var r = selected();
+      if (!r || !state.runFull || state.runFullHash !== r.resultHash) { box.innerHTML = '<p class="lab-note">Cargando…</p>'; return; }
+      var full = state.runFull;
+      var reasons = Object.entries(full.reasons || {}).sort(function (a, b) { return b[1] - a[1]; });
+      var tot = reasons.reduce(function (a, kv) { return a + kv[1]; }, 0) || 1;
+      var opsE = Object.entries(r.metrics.operations).filter(function (kv) { return kv[1]; });
+      box.innerHTML =
+        '<div class="lab-diag"><div style="display:grid;gap:6px"><div class="lab-k">Qué decidió en cada revisión</div>' +
+        reasons.map(function (kv) { return '<div class="lab-bar" title="' + esc(kv[0]) + '"><span>' + esc(REASON[kv[0]] || kv[0]) + '</span><span class="lab-mono lab-num" style="text-align:right">' + ((kv[1] / tot) * 100).toFixed(1) + " %</span></div>"; }).join("") +
+        '</div><div style="display:grid;gap:6px"><div class="lab-k">Operaciones</div>' +
+        opsE.map(function (kv) { return '<div class="lab-bar"><span>' + esc(KIND[kv[0]] || kv[0]) + '</span><span class="lab-mono lab-num" style="text-align:right">' + esc(String(kv[1])) + "</span></div>"; }).join("") +
+        '</div><div style="display:grid;gap:6px"><div class="lab-k">Riesgo</div>' +
+        '<div class="lab-bar"><span>Tiempo en rango</span><span class="lab-mono lab-num" style="text-align:right">' + Math.round(r.metrics.timeInRangeBps / 100) + " %</span></div>" +
+        '<div class="lab-bar"><span>Peor caída</span><span class="lab-mono lab-num" style="text-align:right">−' + (r.metrics.maxDrawdownBps / 100).toFixed(1) + " %</span></div>" +
+        '<div class="lab-bar"><span>Gas sobre comisiones</span><span class="lab-mono lab-num" style="text-align:right">' + Math.round((r.metrics.gas / Math.max(r.metrics.fees, 0.01)) * 100) + " %</span></div>" +
+        '</div></div><p class="lab-note lab-mono" style="margin-top:10px">Resultado ' + esc(r.resultHash.slice(0, 18)) + "… · simVersion " + esc(r.simVersion) + " · simulación sobre historia real de Base.</p>";
+    }
+    function setTab(t) {
+      state.tab = t;
+      scope.querySelectorAll(".lab-tab").forEach(function (b) { b.setAttribute("aria-selected", String(b.getAttribute("data-lab-t") === t)); });
+      ["ev", "cmp", "dg"].forEach(function (k) { $("lab-t-" + k).hidden = k !== t; });
+      if (t === "ev") renderEvents();
+      else if (t === "cmp") renderCompare();
+      else renderDiag();
+    }
+    function setRTab(t) {
+      state.rtab = t;
+      scope.querySelectorAll(".lab-rtabs button").forEach(function (b) { b.setAttribute("aria-selected", String(b.getAttribute("data-lab-r") === t)); });
+      $("lab-r-probar").hidden = t !== "probar";
+      $("lab-r-preguntar").hidden = t !== "preguntar";
+    }
+
+    /* ---------- right: Probar (B-07, B-08) ---------- */
+
+    function renderProbar() {
+      var box = $("lab-r-probar");
+      var w = windowOf();
+      box.innerHTML =
+        '<div class="lab-field"><label>Base</label><div class="lab-seg" id="lab-base"></div></div>' +
+        '<div class="lab-field"><label for="lab-width">Ancho del rango <span id="lab-width-v">' + state.probe.width + " ticks</span></label>" +
+        '<input id="lab-width" type="range" min="' + LAB.WIDTH_MIN + '" max="' + LAB.WIDTH_MAX + '" step="' + LAB.WIDTH_STEP + '" value="' + state.probe.width + '" />' +
+        '<div class="lab-scale"><span>estrecho, cobra más</span><span>ancho, aguanta más</span></div></div>' +
+        '<div class="lab-field"><label for="lab-deposit">Depósito <span id="lab-deposit-v">' + state.probe.deposit + " USDC</span></label>" +
+        '<input id="lab-deposit" type="range" min="' + LAB.DEPOSIT_MIN + '" max="' + LAB.DEPOSIT_MAX + '" step="100" value="' + state.probe.deposit + '" />' +
+        '<div class="lab-scale"><span>' + LAB.DEPOSIT_MIN + '</span><span>' + LAB.DEPOSIT_MAX + ' USDC</span></div></div>' +
+        '<div class="lab-field lab-later"><label>Choque de precio sintético</label><input type="range" disabled /></div>' +
+        '<button type="button" class="lab-run" id="lab-run"' + (w ? "" : " disabled") + '>Ejecutar escenario</button>' +
+        '<p class="lab-note">"Ejecutar escenario" encola un trabajo para el runner; esta columna muestra su estado y selecciona la estrategia cuando termina. Lo marcado «más adelante» necesita el generador de escenarios.</p>';
+      var baseSeg = $("lab-base");
+      ["live", "guard"].forEach(function (b) {
+        var allowed = !w || w.bases.indexOf(b) !== -1;
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = b === "guard" ? "Con guarda de caídas" : "Política actual";
+        btn.setAttribute("aria-pressed", String(state.probe.base === b));
+        btn.disabled = !allowed;
+        btn.onclick = function () { state.probe.base = b; renderProbar(); };
+        baseSeg.appendChild(btn);
+      });
+      $("lab-width").oninput = function (e) { state.probe.width = Math.round(Number(e.target.value) / LAB.WIDTH_STEP) * LAB.WIDTH_STEP; $("lab-width-v").textContent = state.probe.width + " ticks"; };
+      $("lab-deposit").oninput = function (e) { state.probe.deposit = Math.round(Number(e.target.value)); $("lab-deposit-v").textContent = state.probe.deposit + " USDC"; };
+      $("lab-run").onclick = runScenario;
+      renderJob();
+    }
+
+    function runScenario() {
+      var w = windowOf();
+      if (!w) return;
+      var spec = { windowId: w.windowId, base: state.probe.base, widthTicks: state.probe.width, deposit: state.probe.deposit };
+      if (!LAB.validSpec(spec)) return;
+      var btn = $("lab-run");
+      if (btn) btn.disabled = true;
+      var body = new URLSearchParams({ csrf: csrf, windowId: spec.windowId, base: spec.base, widthTicks: String(spec.widthTicks), deposit: String(spec.deposit) }).toString();
+      api("/ops/lab/api/jobs", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: body })
+        .then(function (r) {
+          if (btn) btn.disabled = false;
+          if (!r.ok || !r.body || !r.body.job) {
+            state.job = { status: "failed", errorCode: (r.body && r.body.error) || "LAB_NETWORK" };
+            renderJob();
+            return;
+          }
+          state.job = r.body.job;
+          state.jobStart = Date.now();
+          renderJob();
+          if (state.job.status === "done") onJobDone(state.job);
+          else pollJob(state.job.id, 0);
+        })
+        .catch(function () {
+          if (btn) btn.disabled = false;
+          state.job = { status: "failed", errorCode: "LAB_NETWORK" };
+          renderJob();
+        });
+    }
+    function pollJob(id, attempt) {
+      clearTimeout(jobTimer);
+      jobTimer = setTimeout(function () {
+        api("/ops/lab/api/jobs/" + encodeURIComponent(id)).then(function (r) {
+          if (!state.job || state.job.id !== id) return;
+          if (!r.ok || !r.body || !r.body.job) { pollJob(id, attempt + 1); return; }
+          state.job = r.body.job;
+          renderJob();
+          if (state.job.status === "queued" || state.job.status === "running") pollJob(id, attempt + 1);
+          else if (state.job.status === "done") onJobDone(state.job);
+        });
+      }, LAB.pollDelayMs(attempt));
+    }
+    function onJobDone(job) {
+      var w = windowOf();
+      if (!w) return;
+      api("/ops/lab/api/runs?window=" + encodeURIComponent(w.windowId)).then(function (rr) {
+        w.runs = (rr.body && rr.body.runs) || w.runs;
+        state.selectedHash = job.resultHash || state.selectedHash;
+        state.job = null;
+        state.at = 0;
+        renderAll();
+      });
+    }
+    function renderJob() {
+      var box = $("lab-job");
+      if (!box) return;
+      if (!state.job) { box.hidden = true; return; }
+      box.hidden = false;
+      box.className = "lab-jobline" + (state.job.status === "failed" ? " lab-failed" : "");
+      if (state.job.status === "queued" || state.job.status === "running") {
+        var secs = Math.max(0, Math.round((Date.now() - state.jobStart) / 1000));
+        box.textContent = (state.job.status === "queued" ? "En cola" : "Corriendo") + "… " + secs + " s";
+      } else if (state.job.status === "failed") {
+        box.textContent = "Falló: " + (ERROR_WORDS[state.job.errorCode] || state.job.errorCode || "motivo desconocido");
+      } else {
+        box.hidden = true;
+      }
+    }
+
+    /* ---------- playback ---------- */
+
+    function stopPlay() {
+      state.playing = false;
+      clearTimeout(playTimer);
+      var b = $("lab-play");
+      if (b) b.textContent = "Reproducir";
+    }
+    function stepPlay() {
+      if (!state.playing || !state.runFull) return;
+      var n = state.runFull.series.length - 1;
+      if (state.at >= n) { stopPlay(); return; }
+      state.at = Math.min(n, state.at + state.speed);
+      tickAll();
+      playTimer = setTimeout(stepPlay, 90);
+    }
+    function jump(dir) {
+      stopPlay();
+      if (!state.runFull) return;
+      var ev = keyOpsOf(state.runFull);
+      var t = state.runFull.series[Math.min(state.at, state.runFull.series.length - 1)].t;
+      var o = dir > 0 ? ev.filter(function (e) { return e.t > t + 1; })[0] : ev.filter(function (e) { return e.t < t - 1; }).slice(-1)[0];
+      if (o) { state.pool = o.pool; state.at = LAB.idxAt(state.runFull.series, o.t); renderPoolTabs(); drawPrice(); tickAll(); }
+    }
+
+    function tickAll() {
+      renderCap();
+      drawCursor();
+      renderNarr();
+      renderTicks();
+      if (state.tab === "ev") renderEvents();
+    }
+    function drawCharts() {
+      drawPrice();
+      drawMoney();
+      renderTicks();
+      tickAll();
+    }
+    function renderAll() {
+      renderWindows();
+      renderVariants();
+      renderAssum();
+      renderHead();
+      renderTiles();
+      renderPoolTabs();
+      renderProbar();
+      refreshRunData(drawCharts);
+      setTab(state.tab);
+    }
+
+    function wire() {
+      scope.querySelectorAll(".lab-tab").forEach(function (b) { b.onclick = function () { setTab(b.getAttribute("data-lab-t")); }; });
+      scope.querySelectorAll(".lab-rtabs button").forEach(function (b) { b.onclick = function () { setRTab(b.getAttribute("data-lab-r")); }; });
+      var play = $("lab-play");
+      if (play) play.onclick = function () {
+        if (state.playing) { stopPlay(); return; }
+        if (!state.runFull) return;
+        if (state.at >= state.runFull.series.length - 1) state.at = 0;
+        state.playing = true;
+        play.textContent = "Pausa";
+        stepPlay();
+      };
+      var speed = $("lab-speed");
+      if (speed) speed.onclick = function () { state.speed = state.speed === 1 ? 4 : state.speed === 4 ? 12 : 1; speed.textContent = state.speed + "×"; };
+      var next = $("lab-next"); if (next) next.onclick = function () { jump(1); };
+      var prev = $("lab-prev"); if (prev) prev.onclick = function () { jump(-1); };
+      var scrub = $("lab-scrub"); if (scrub) scrub.oninput = function (e) { stopPlay(); state.at = Number(e.target.value); tickAll(); };
+    }
+
+    function init(s) {
+      root = s.closest(".lab-root") || s.querySelector(".lab-root");
+      if (!root) return function () {};
+      scope = s;
+      csrf = root.getAttribute("data-lab-csrf") || "";
+      state = freshState();
+      geo = {};
+      wire();
+      loadAll();
+      var onResize = function () { drawPrice(); drawMoney(); drawCursor(); };
+      var resizeTimer;
+      var onResizeDebounced = function () { clearTimeout(resizeTimer); resizeTimer = setTimeout(onResize, 150); };
+      window.addEventListener("resize", onResizeDebounced);
+      return function () {
+        clearTimeout(playTimer);
+        clearTimeout(jobTimer);
+        clearTimeout(resizeTimer);
+        window.removeEventListener("resize", onResizeDebounced);
+        loadToken++;
+        root = null;
+        scope = null;
+        state = null;
+      };
+    }
+
+    return { init: init };
+  })();
+
   var modules = {
     overview: function (scope, quiet) { return mountMotion(scope, quiet); },
     mails: function (scope, quiet) { return mountMotion(scope, quiet); },
     experiments: function (scope, quiet) { return mountMotion(scope, quiet); },
     settings: function (scope, quiet) { return mountMotion(scope, quiet); },
+    lab: function (scope) { return LabApp.init(scope); },
     infra: function (scope, quiet) {
       var offMotion = mountMotion(scope, quiet);
       var offTopup = Topup.init(scope);
