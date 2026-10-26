@@ -1,7 +1,7 @@
 ---
 import Allocation from "../components/Allocation.astro";
-import WorksStory from "../components/WorksStory.astro";
 import Base from "../layouts/Base.astro";
+import FlowStory from "../components/FlowStory.astro";
 import { APP_HREF, OPEN_COPY as copy } from "../open-copy";
 
 const emailHref = `mailto:${copy.footer.email}`;
@@ -35,7 +35,7 @@ const emailHref = `mailto:${copy.footer.email}`;
     </section>
 
     <section class="band flow" aria-label="How it works">
-      <WorksStory />
+      <FlowStory />
     </section>
 
     <Allocation />
@@ -94,6 +94,7 @@ const emailHref = `mailto:${copy.footer.email}`;
         </svg>
         <span>{copy.footer.x.handle}</span>
       </a>
+      <img class="seal" src="/seal-mamoru.png" width="40" height="40" alt="" />
     </div>
   </footer>
 
@@ -205,6 +206,26 @@ const emailHref = `mailto:${copy.footer.email}`;
   :global(html > body) {
     overflow-y: visible;
   }
+  /* The eyebrows are set in Plex Mono, as on the slides. Only this page loads it. */
+  @font-face {
+    font-family: "IBM Plex Mono";
+    src: url("/fonts/plex-mono-400.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+  }
+  /* Kami A, the dashboard's screen paper (otto/mamoru#198), on the whole landing. */
+  :global(html),
+  :global(html > body) {
+    background-color: var(--rice);
+    background-image: url("/kami-a-tile.png");
+    background-image: image-set(
+      url("/kami-a-tile.webp") type("image/webp"),
+      url("/kami-a-tile.png") type("image/png")
+    );
+    background-repeat: repeat;
+    background-size: 1024px 1024px;
+  }
 
   .skip {
     position: absolute;
@@ -232,13 +253,13 @@ const emailHref = `mailto:${copy.footer.email}`;
     max-height: 4.5rem;
     padding: 0.55rem clamp(1rem, 4vw, 2rem);
     background-color: var(--rice);
-    background-image: url("/rice-washi-tile.png");
+    background-image: url("/kami-a-tile.png");
     background-image: image-set(
-      url("/rice-washi-tile.webp") type("image/webp"),
-      url("/rice-washi-tile.png") type("image/png")
+      url("/kami-a-tile.webp") type("image/webp"),
+      url("/kami-a-tile.png") type("image/png")
     );
     background-repeat: repeat;
-    background-size: 256px 256px;
+    background-size: 1024px 1024px;
     border-bottom: 1px solid color-mix(in srgb, var(--ink) 8%, transparent);
   }
 
@@ -466,6 +487,12 @@ const emailHref = `mailto:${copy.footer.email}`;
     display: inline-flex;
     align-items: center;
     gap: 0.45rem;
+  }
+  /* The seal signs the end of the page, as on the dashboard. */
+  .seal {
+    width: 2.5rem;
+    height: auto;
+    display: block;
   }
   .x-logo {
     width: 0.95rem;
