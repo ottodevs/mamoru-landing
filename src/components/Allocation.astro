@@ -1,38 +1,27 @@
 ---
 import { OPEN_COPY } from "../open-copy";
 
-interface Props {
-  variant?: "page" | "aside";
-}
-
-const { variant = "page" } = Astro.props;
-const { eyebrow, heading, body, note, mix } = OPEN_COPY.allocation;
+// Slide 3 v3: one column, 240 x 640 on the 1920 board, its legend centred on each tramo. No seal here: the seal
+// signs the end of the page.
+const { eyebrow, heading, mix } = OPEN_COPY.allocation;
 const label = mix.map((seg) => `${seg.pct}% ${seg.name}`).join(", ");
+const rows = mix.map((seg) => `${seg.pct}fr`).join(" ");
 ---
-<section class:list={["alloc", variant]} id="allocation" aria-labelledby="alloc-title">
+<section class="alloc" id="allocation" aria-labelledby="alloc-title">
   <div class="alloc-wrap">
-    <div class="alloc-copy">
-      <p class="eyebrow">{eyebrow}</p>
-      <h2 id="alloc-title">
-        {heading.map((line) => <span>{line}</span>)}
-      </h2>
-      <p class="lead">{body}</p>
-      <p class="note">{note}</p>
-    </div>
+    <p class="eyebrow">{eyebrow}</p>
+    <h2 id="alloc-title">
+      {heading.map((line) => <span>{line}</span>)}
+    </h2>
 
-    <figure class="board" role="img" aria-label={label}>
+    <figure class="board" role="img" aria-label={label} style={`grid-template-rows:${rows}`}>
+      <div class="column" aria-hidden="true" style={`grid-row:1 / span ${mix.length}`}>
+        {mix.map((seg) => <span class={`seg ${seg.tone}`} style={`flex:${seg.pct}`}></span>)}
+      </div>
       {mix.map((seg, index) => (
-        <>
-          <div class={`seg ${seg.tone}`} style={`grid-row:${index + 1}`}>{seg.pct}%</div>
-          <div class={`key ${seg.tone}`} style={`grid-row:${index + 1}`}>
-            <span class="tick" aria-hidden="true"><span class="dot"></span></span>
-            <span class="key-text">
-              <span class="key-name">{seg.name}</span>
-              <span class="key-pct">{seg.pct}%</span>
-              {seg.note ? <span class="key-note">{seg.note}</span> : null}
-            </span>
-          </div>
-        </>
+        <p class={`key ${seg.tone}`} style={`grid-row:${index + 1}`} aria-hidden="true">
+          {seg.pct}% {seg.name}
+        </p>
       ))}
     </figure>
   </div>
@@ -40,174 +29,111 @@ const label = mix.map((seg) => `${seg.pct}% ${seg.name}`).join(", ");
 
 <style>
   .alloc {
-    --tone-stables: var(--emerald);
-    --tone-paired: #0e1b2e;
-    --tone-mercenary: var(--stone);
+    --tone-growth: #9fc4b0;
+    --tone-balance: #8aa4c0;
+    --tone-stables: #3d5a80;
     width: 100%;
-    padding: clamp(4rem, 9vw, 6.5rem) clamp(1.15rem, 5vw, 4.5rem);
+    padding: clamp(4rem, 9vw, 7rem) clamp(1.15rem, 5vw, 4.5rem);
     box-sizing: border-box;
     scroll-margin-top: var(--nav-h, 4.5rem);
   }
   .alloc-wrap {
-    max-width: 68rem;
+    max-width: 72rem;
     margin-inline: auto;
     display: grid;
-    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
-    gap: clamp(2rem, 6vw, 5rem);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: clamp(2rem, 6vw, 5rem);
     align-items: start;
+  }
+  /* Eyebrow on its own row, so the column starts level with the headline. */
+  .eyebrow {
+    grid-column: 1;
+  }
+  h2 {
+    grid-column: 1;
+    grid-row: 2;
   }
 
   .eyebrow {
     display: flex;
     align-items: center;
-    gap: 1rem;
-    margin: 0 0 clamp(1.25rem, 3vw, 2rem);
-    font-size: 0.75rem;
+    gap: clamp(2rem, 8vw, 12rem);
+    margin: 0 0 clamp(1.75rem, 4vw, 3.25rem);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
     letter-spacing: 0.24em;
     text-transform: uppercase;
     color: var(--emerald);
   }
   .eyebrow::after {
     content: "";
-    width: 2rem;
+    width: 2.5rem;
     height: 1px;
     background: currentColor;
   }
+  /* Four lines, as on the slide: Three / positions. / One growing / reserve. */
   h2 {
     margin: 0;
-    font-size: clamp(2.2rem, 5vw, 3.6rem);
+    max-width: 7em;
+    font-size: clamp(2.6rem, 5.6vw, 5.5rem);
     font-weight: 400;
     letter-spacing: 0.005em;
-    line-height: 1.08;
+    line-height: 1.1;
   }
   h2 span {
     display: block;
   }
-  .lead {
-    margin: clamp(1.25rem, 3vw, 1.75rem) 0 0;
-    max-width: 20rem;
-    font-size: 1.125rem;
-    line-height: 1.5;
-    color: color-mix(in srgb, var(--ink) 62%, var(--paper));
-  }
 
-  /* One quiet fact under the lead, set like the eyebrow. */
-  .note {
-    margin: clamp(1.5rem, 3vw, 2rem) 0 0;
-    padding-top: 1rem;
-    max-width: 20rem;
-    border-top: 1px solid var(--wash);
-    font-size: 0.75rem;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: var(--emerald);
-  }
-
+  /* The column sits level with the headline, the legend to its right. */
   .board {
+    --col-w: clamp(7rem, 12.5vw, 15rem);
+    grid-column: 2;
+    grid-row: 2;
     margin: 0;
     display: grid;
-    grid-template-columns: clamp(6rem, 12vw, 8.75rem) 1fr;
-    grid-template-rows: 15fr 35fr 50fr;
-    height: clamp(26rem, 44vw, 32rem);
-    column-gap: 0;
+    grid-template-columns: var(--col-w) auto;
+    column-gap: clamp(1.5rem, 3.3vw, 4rem);
+    justify-content: center;
   }
-  .aside {
-    padding: 0;
-  }
-  .aside .alloc-wrap {
-    max-width: none;
-    grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
-    gap: clamp(1.25rem, 3vw, 2.5rem);
-  }
-  .aside .board {
-    height: clamp(18rem, 38vw, 26rem);
-  }
-  .seg {
+  .column {
     grid-column: 1;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: clamp(1.05rem, 1.6vw, 1.25rem);
-    letter-spacing: 0.02em;
+    flex-direction: column;
+    aspect-ratio: 240 / 640;
+    border-radius: clamp(0.9rem, 1.25vw, 1.5rem);
+    overflow: hidden;
+    position: relative;
   }
-  .seg.mercenary {
-    background: var(--tone-mercenary);
-    color: var(--ink);
-    border-radius: 0.55rem 0.55rem 0 0;
+  /* Soft-light grain over the solid tramos, as in the slide. */
+  .column::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: url("/grain-softlight-tile.webp") 0 0 / 512px 512px repeat;
+    mix-blend-mode: soft-light;
+    pointer-events: none;
   }
-  .seg.paired {
-    background: var(--tone-paired);
-    color: var(--paper);
+  .seg {
+    display: block;
+    min-height: 0;
+  }
+  .seg.growth {
+    background: var(--tone-growth);
+  }
+  .seg.balance {
+    background: var(--tone-balance);
   }
   .seg.stables {
     background: var(--tone-stables);
-    color: var(--paper);
-    border-radius: 0 0 0.55rem 0.55rem;
   }
 
   .key {
     grid-column: 2;
-    display: grid;
-    grid-template-columns: auto 1fr;
-    align-items: center;
-    gap: 1rem;
-    min-height: 0;
-  }
-  .tick {
-    position: relative;
-    display: block;
-    width: 4rem;
-    height: 1px;
-    margin-left: 1rem;
-    background: color-mix(in srgb, var(--ink) 22%, transparent);
-  }
-  .dot {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 0.9rem;
-    height: 0.9rem;
-    border-radius: 50%;
-    transform: translate(-50%, -50%);
-    box-shadow: 0 0 0 0.45rem var(--rice);
-  }
-  .mercenary .dot {
-    background: var(--tone-mercenary);
-  }
-  .paired .dot {
-    background: var(--tone-paired);
-  }
-  .stables .dot {
-    background: var(--tone-stables);
-  }
-  .key-text {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-  }
-  .key-name {
-    font-size: clamp(1.15rem, 1.8vw, 1.35rem);
-    line-height: 1.25;
-  }
-  .key-pct {
-    font-size: 1rem;
-    letter-spacing: 0.02em;
-  }
-  .mercenary .key-pct {
-    color: var(--tone-mercenary);
-  }
-  .stables .key-pct {
-    color: var(--tone-stables);
-  }
-  .paired .key-pct {
-    color: var(--tone-paired);
-  }
-  .key-note {
-    max-width: 16rem;
-    margin-top: 0.35rem;
-    font-size: 0.95rem;
-    line-height: 1.45;
-    color: color-mix(in srgb, var(--ink) 58%, var(--paper));
+    align-self: center;
+    margin: 0;
+    font-size: clamp(1.6rem, 2.95vw, 3.5rem);
+    line-height: 1.1;
+    white-space: nowrap;
   }
 
   @media (max-width: 760px) {
@@ -215,18 +141,16 @@ const label = mix.map((seg) => `${seg.pct}% ${seg.name}`).join(", ");
       grid-template-columns: 1fr;
     }
     .board {
-      grid-template-columns: 4.75rem 1fr;
-      height: 28rem;
+      grid-column: 1;
+      grid-row: 3;
+      margin-top: 2.75rem;
     }
-    .tick {
-      width: 2.25rem;
-      margin-left: 0.6rem;
+    .eyebrow {
+      gap: 1.25rem;
     }
-    .key {
-      gap: 0.75rem;
-    }
-    .key-note {
-      font-size: 0.9rem;
+    .board {
+      --col-w: 7.5rem;
+      justify-content: start;
     }
   }
 </style>
