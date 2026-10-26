@@ -96,6 +96,8 @@ export const OPEN_COPY = {
   allocation: {
     eyebrow: "Portfolio allocation",
     heading: ["Three positions.", "One growing reserve."],
+    body: "Capital works. The yield is captured in stablecoins.",
+    note: "Half in stablecoins by rule",
     mix: [
       { pct: 15, name: "Growth", tone: "growth" },
       { pct: 35, name: "Balance", tone: "balance" },

@@ -64,6 +64,8 @@ describe("open instant", () => {
     expect(OPEN_COPY.allocation.heading).toEqual(["Three positions.", "One growing reserve."]);
     expect(OPEN_COPY.allocation.mix.reduce((sum, m) => sum + m.pct, 0)).toBe(100);
     expect(OPEN_COPY.allocation.mix.map((m) => `${m.pct}% ${m.name}`)).toEqual(["15% Growth", "35% Balance", "50% Stables"]);
+    expect(OPEN_COPY.allocation.body).toBe("Capital works. The yield is captured in stablecoins.");
+    expect(OPEN_COPY.allocation.note).toBe("Half in stablecoins by rule");
     expect(OPEN_COPY.flow.lines).toEqual(["Mamoru puts it all to work.", "Reinvested. Always working."]);
   });
 });

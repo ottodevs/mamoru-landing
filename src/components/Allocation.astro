@@ -3,16 +3,20 @@ import { OPEN_COPY } from "../open-copy";
 
 // Slide 3 v3: one column, 240 x 640 on the 1920 board, its legend centred on each tramo. No seal here: the seal
 // signs the end of the page.
-const { eyebrow, heading, mix } = OPEN_COPY.allocation;
+const { eyebrow, heading, body, note, mix } = OPEN_COPY.allocation;
 const label = mix.map((seg) => `${seg.pct}% ${seg.name}`).join(", ");
 const rows = mix.map((seg) => `${seg.pct}fr`).join(" ");
 ---
 <section class="alloc" id="allocation" aria-labelledby="alloc-title">
   <div class="alloc-wrap">
     <p class="eyebrow">{eyebrow}</p>
-    <h2 id="alloc-title">
-      {heading.map((line) => <span>{line}</span>)}
-    </h2>
+    <div class="alloc-copy">
+      <h2 id="alloc-title">
+        {heading.map((line) => <span>{line}</span>)}
+      </h2>
+      <p class="lead">{body}</p>
+      <p class="note">{note}</p>
+    </div>
 
     <figure class="board" role="img" aria-label={label} style={`grid-template-rows:${rows}`}>
       <div class="column" aria-hidden="true" style={`grid-row:1 / span ${mix.length}`}>
@@ -49,7 +53,7 @@ const rows = mix.map((seg) => `${seg.pct}fr`).join(" ");
   .eyebrow {
     grid-column: 1;
   }
-  h2 {
+  .alloc-copy {
     grid-column: 1;
     grid-row: 2;
   }
@@ -82,6 +86,24 @@ const rows = mix.map((seg) => `${seg.pct}fr`).join(" ");
   }
   h2 span {
     display: block;
+  }
+  .lead {
+    margin: clamp(1.5rem, 3vw, 2.25rem) 0 0;
+    max-width: 22rem;
+    font-size: clamp(1.125rem, 1.5vw, 1.35rem);
+    line-height: 1.5;
+    color: color-mix(in srgb, var(--ink) 62%, var(--paper));
+  }
+  /* One quiet fact under the lead, set like the eyebrow. */
+  .note {
+    margin: clamp(1.5rem, 3vw, 2rem) 0 0;
+    padding-top: 1rem;
+    max-width: 22rem;
+    border-top: 1px solid var(--wash);
+    font-size: 0.75rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--emerald);
   }
 
   /* The column sits level with the headline, the legend to its right. */
