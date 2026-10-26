@@ -27,6 +27,8 @@ const askAt = [
       <img src="/mark-two-stones.png" width="26" height="26" alt="" />
       <span>Mamoru</span>
     </header>
+    <!-- The 守 seal signs every slide, as it signs the app's dashboard. -->
+    <img class="seal" src="/seal-mamoru.png" width="40" height="40" alt="" />
 
     <!-- 01 Cover: the landing hero -->
     <section class="slide cover" data-slide="1" aria-roledescription="slide" aria-label="Mamoru">
@@ -341,6 +343,11 @@ const askAt = [
   :global(body) {
     height: 100%;
     overflow: hidden;
+    /* Kami A, the brand's screen paper (the app's dashboard since otto/mamoru#198), on every slide. */
+    background-color: #f1eee5;
+    background-image: url("/kami-a-tile.png");
+    background-image: image-set(url("/kami-a-tile.webp") type("image/webp"), url("/kami-a-tile.png") type("image/png"));
+    background-size: 1024px 1024px;
   }
   /* Type grows with the screen, so a projector reads like a laptop. */
   :global(html) {
@@ -368,6 +375,15 @@ const askAt = [
     gap: 0.55rem;
     font-size: 1.05rem;
     letter-spacing: 0.02em;
+  }
+
+  .seal {
+    position: absolute;
+    left: clamp(1rem, 4vw, 3rem);
+    bottom: clamp(0.9rem, 2.6vh, 1.6rem);
+    z-index: 2;
+    width: 2rem;
+    height: 2rem;
   }
 
   /* Slides stack in place and cross-fade. */
