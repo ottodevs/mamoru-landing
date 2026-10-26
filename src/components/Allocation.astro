@@ -162,10 +162,24 @@ const rows = mix.map((seg) => `${seg.pct}fr`).join(" ");
     .alloc-wrap {
       grid-template-columns: 1fr;
     }
+    /* On the phone the rule closes the section, under the column. */
+    .alloc-copy {
+      display: contents;
+    }
+    h2 {
+      grid-row: 2;
+    }
+    .lead {
+      grid-row: 3;
+    }
     .board {
       grid-column: 1;
-      grid-row: 3;
+      grid-row: 4;
       margin-top: 2.75rem;
+    }
+    .note {
+      grid-row: 5;
+      margin-top: 2.5rem;
     }
     .eyebrow {
       gap: 1.25rem;
