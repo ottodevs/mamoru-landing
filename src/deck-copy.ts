@@ -1,6 +1,6 @@
 /**
  * Words for mamoru.lol/deck. The cover takes its words from the landing hero (open-copy.ts), and the
- * third slide is the landing's own "How it works". Slides guide, the speaker tells.
+ * third slide is a silent cut of the launch film (public/deck-media). Slides guide, the speaker tells.
  * Past decks are kept in /ops/archive (src/archive.ts), not as more public routes.
  */
 
@@ -19,8 +19,8 @@ export const DECK = {
   },
   loop: {
     eyebrow: "The solution",
-    // Names for the three positions, shown on the deck only. On the landing the allocation chart names them.
-    labels: { paired: "Bluechips", mercenary: "Mercenary", stables: "Stablecoins" },
+    // The slide is a silent film (public/deck-media): USDC fills Stable, Balance and Growth; while you sleep, profits go to Stable.
+    aria: "USDC fills three positions, Stable, Balance and Growth. While you sleep, the profits of Balance and Growth are reinvested in Stable.",
   },
   // Six lines the speaker explains. A click brings the explanations up, for whoever reads the deck alone.
   trust: {

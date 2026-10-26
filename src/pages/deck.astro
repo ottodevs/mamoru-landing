@@ -1,6 +1,5 @@
 ---
 import Base from "../layouts/Base.astro";
-import WorksStory from "../components/WorksStory.astro";
 import { DECK } from "../deck-copy";
 import { OPEN_COPY } from "../open-copy";
 
@@ -70,9 +69,16 @@ const askAt = [
       </p>
     </section>
 
-    <!-- 03 The solution: the landing's How it works loop, under the deck's own name -->
-    <section class="slide how" data-slide="3" aria-roledescription="slide" aria-label={OPEN_COPY.works.heading}>
-      <WorksStory eyebrow={loop.eyebrow} labels={loop.labels} />
+    <!-- 03 The solution: the launch film's allocation and night (Brais, 26 Oct): USDC fills the three positions, then
+         while you sleep the profits of Balance and Growth fall into Stable. Silent; it plays each time the slide arrives. -->
+    <section class="slide how" data-slide="3" aria-roledescription="slide" aria-label={loop.aria}>
+      <div class="film">
+        <p class="eyebrow rise" style="--d:0">{loop.eyebrow}</p>
+        <video class="js-how" muted playsinline preload="auto" aria-label={loop.aria}>
+          <source src="/deck-media/how-it-works.webm" type="video/webm" />
+          <source src="/deck-media/how-it-works.mp4" type="video/mp4" />
+        </video>
+      </div>
     </section>
 
     <!-- 04 Why trust Mamoru: six lines to speak to. A click brings up what each one means. -->
@@ -194,9 +200,7 @@ const askAt = [
       // Once the fall has given way to the question, its stage stays out of sight until the fall starts again.
       if (onFall && step > 0) fall?.classList.add("spent");
       playFall(onFall && step === 0);
-      if (at !== shown && slides[at]?.classList.contains("how")) {
-        slides[at]?.querySelector("#works")?.dispatchEvent(new Event("works:restart"));
-      }
+      if (at !== shown) playHow(slides[at]?.classList.contains("how") === true);
       shown = at;
       dots.forEach((d, k) => d.setAttribute("aria-current", k === at ? "step" : "false"));
       now.textContent = String(at + 1).padStart(2, "0");
@@ -275,6 +279,21 @@ const askAt = [
           fallFrame = requestAnimationFrame(tick);
         }, FALL_WAIT),
       );
+    }
+
+    // 03: the film starts over each time the slide arrives and rests on its last frame. Reduced motion shows that frame.
+    const how = deck.querySelector<HTMLVideoElement>(".js-how");
+    function playHow(on: boolean) {
+      if (!how) return;
+      if (!on) return how.pause();
+      if (quiet) {
+        const end = () => { how.currentTime = Math.max(0, how.duration - 0.05); };
+        if (how.readyState >= 1) end();
+        else how.addEventListener("loadedmetadata", end, { once: true });
+        return;
+      }
+      how.currentTime = 0;
+      how.play().catch(() => {});
     }
 
     function next() {
@@ -694,25 +713,20 @@ const askAt = [
     transition-delay: 0.25s;
   }
 
-  /* 03 The solution: the landing section, drawn as large as the screen allows so a room can read it.
-     The slide gives up some of its padding, and the scene is sized by height: about 58% of the screen. */
+  /* 03 The solution: the film, as large as the slide allows at 16:9, on the paper. */
   .slide.how {
     padding-block: clamp(3rem, 6vh, 4.5rem);
   }
-  .how :global(.scene-w) {
-    max-width: min(66rem, 104vh);
-    margin-block: clamp(0.5rem, 1.6vh, 1.25rem);
+  .film {
+    width: min(100%, calc((100dvh - 11rem) * 16 / 9));
   }
-  .how :global(.scene-t) {
-    max-width: min(26rem, 46vh);
-    margin-block: 0.75rem;
-  }
-  .how :global(.disc-tag),
-  .how :global(.coin-tag) {
-    font-size: 11.5px;
-  }
-  .how :global(.steps) {
-    max-width: 64rem;
+  .film video {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 14px;
+    background: #0a0d0c;
+    box-shadow: 0 1px 0 rgb(15 15 14 / 0.06), 0 18px 48px -24px rgb(15 15 14 / 0.45);
   }
 
   .versus {
@@ -1114,6 +1128,9 @@ const askAt = [
       align-items: flex-start;
       overflow-y: auto;
       padding-bottom: 5rem;
+    }
+    .slide.how {
+      align-items: center;
     }
   }
 
