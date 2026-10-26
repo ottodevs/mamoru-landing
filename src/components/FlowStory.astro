@@ -220,12 +220,14 @@ const tones = OPEN_COPY.allocation.mix.map((seg) => ({ pct: seg.pct, tone: seg.t
             g!.fillRect(s.x, s.y + s.h - fh - 1, s.w, 2);
           }
         }
-        // The film's thin white line between tramos, once the lower one is full.
+        // A thin cut of paper between tramos (the canvas is cleared there, so the page shows through),
+        // as in the allocation column below. It opens once the lower tramo is full.
+        g!.globalCompositeOperation = "destination-out";
         for (const s of S.slice(1)) {
-          g!.globalAlpha = fade * soft(span(fillK(s.k, t), 0.9, 1));
-          g!.fillStyle = "rgba(255,255,255,0.7)";
-          g!.fillRect(s.x, s.y - 0.75, s.w, 1.5);
+          g!.globalAlpha = soft(span(fillK(s.k, t), 0.9, 1));
+          g!.fillRect(s.x, s.y - 1.25, s.w, 2.5);
         }
+        g!.globalCompositeOperation = "source-over";
         g!.globalAlpha = fade;
         g!.restore();
         const per = 2 * (bar.w + (bot - top));

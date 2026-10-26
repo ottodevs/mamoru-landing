@@ -124,29 +124,25 @@ const rows = mix.map((seg) => `${seg.pct}fr`).join(" ");
     aspect-ratio: 240 / 640;
     border-radius: clamp(0.9rem, 1.25vw, 1.5rem);
     overflow: hidden;
-    position: relative;
+    /* A thin cut of paper between tramos, so the blocks breathe and never touch. */
+    gap: clamp(2px, 0.2vw, 3px);
   }
-  /* Soft-light grain over the solid tramos, as in the slide. */
-  .column::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: url("/grain-softlight-tile.webp") 0 0 / 512px 512px repeat;
-    mix-blend-mode: soft-light;
-    pointer-events: none;
-  }
+  /* Soft-light grain over each solid tramo, as in the slide. */
   .seg {
     display: block;
     min-height: 0;
+    background-image: url("/grain-softlight-tile.webp");
+    background-size: 512px 512px;
+    background-blend-mode: soft-light;
   }
   .seg.growth {
-    background: var(--tone-growth);
+    background-color: var(--tone-growth);
   }
   .seg.balance {
-    background: var(--tone-balance);
+    background-color: var(--tone-balance);
   }
   .seg.stables {
-    background: var(--tone-stables);
+    background-color: var(--tone-stables);
   }
 
   .key {
