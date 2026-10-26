@@ -713,7 +713,7 @@ const askAt = [
     transition-delay: 0.25s;
   }
 
-  /* 03 The solution: the film, as large as the slide allows at 16:9, on the paper. */
+  /* 03 The solution: the film, as large as the slide allows at 16:9, on the same paper. */
   .slide.how {
     padding-block: clamp(3rem, 6vh, 4.5rem);
   }
@@ -724,9 +724,9 @@ const askAt = [
     display: block;
     width: 100%;
     aspect-ratio: 16 / 9;
-    border-radius: 14px;
-    background: #0a0d0c;
-    box-shadow: 0 1px 0 rgb(15 15 14 / 0.06), 0 18px 48px -24px rgb(15 15 14 / 0.45);
+    /* The film is drawn on Kami A too: no frame, its edges fade into the slide's paper. */
+    -webkit-mask-image: radial-gradient(ellipse 72% 68% at 50% 50%, #000 70%, transparent 100%);
+    mask-image: radial-gradient(ellipse 72% 68% at 50% 50%, #000 70%, transparent 100%);
   }
 
   .versus {
