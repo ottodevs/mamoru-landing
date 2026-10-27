@@ -486,7 +486,10 @@ describe('/ops never drops settings it has no field for (otto/mamoru#218)', () =
     await seed(db, { env: 'prod', accountKeys: [A], template: 'canary edit', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
     const newest = async () => (await listVersions(db))![0].settings as unknown as Record<string, unknown>
     expect((await newest()).rerange).toEqual(EAGER2)
-    await seed(db, { env: 'prod', accountKeys: [A, B], template: 'wider canary', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    // A and B run different hidden settings (canary eager vs env-wide lazy): one version cannot keep both.
+    await expect(seed(db, { env: 'prod', accountKeys: [A, B], template: 'wider canary', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })).rejects.toThrow('different re-range')
+    // Accounts outside the canary keep the env-wide setting.
+    await seed(db, { env: 'prod', accountKeys: [B], template: 'other canary', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
     expect((await newest()).rerange).toEqual(LAZY)
   })
 
