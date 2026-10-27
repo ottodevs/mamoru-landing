@@ -29,10 +29,9 @@ const films = [
             width={f.w}
             height={f.h}
             muted
-            autoplay
             loop
             playsinline
-            preload="metadata"
+            preload="auto"
             poster={`/flow-media/flow5-${f.id}.webp`}
             aria-label={aria}
           >
@@ -64,6 +63,7 @@ const films = [
   const MESSAGES = OPEN_COPY.flow.messages;
   const root = document.querySelector<HTMLElement>(".flow-pin");
   const pin = root?.querySelector<HTMLElement>(".pin");
+  const stage = root?.querySelector<HTMLElement>(".stage");
   const films = [...(root?.querySelectorAll<HTMLVideoElement>("video") ?? [])];
   const msgs = [...(root?.querySelectorAll<HTMLElement>(".msg") ?? [])];
 
@@ -82,7 +82,7 @@ const films = [
   const easeOut = (k: number) => 1 - Math.pow(1 - clamp(k), 3);
   const smooth = (k: number) => ((k = clamp(k)), k * k * k * (k * (k * 6 - 15) + 10));
 
-  if (root && pin && films.length) {
+  if (root && pin && stage && films.length) {
     const live = () => films.find((v) => v.offsetParent !== null) ?? films[0];
     let phase: "flow" | "alloc" = "flow";
     let onscreen = false;
@@ -122,6 +122,19 @@ const films = [
     const place = () => {
       const pr = pin.getBoundingClientRect(); // the pin's paper in register with the page's (tile origin: the document)
       pin.style.backgroundPosition = `${-(pr.left + scrollX)}px ${-(pr.top + scrollY)}px`;
+      // The loop starts, from the deposit, once the stage is nearly all in view (85 %), so the reader sees the
+      // capital arrive; it stops only once the stage is all but gone (under 10 %), where nobody sees it stop.
+      const st = stage.getBoundingClientRect();
+      const seen = st.height > 0 ? clamp((Math.min(innerHeight, st.bottom) - Math.max(0, st.top)) / st.height) : 0;
+      const was = onscreen;
+      onscreen = onscreen ? seen > 0.1 : seen >= 0.85;
+      if (onscreen !== was) {
+        if (onscreen) {
+          if (phase === "flow") live().currentTime = 0; // each visit starts at the deposit
+          if (!raf) raf = requestAnimationFrame(draw);
+        }
+        sync();
+      }
       const r = root.getBoundingClientRect();
       const run = r.height - pin.offsetHeight;
       const top = parseFloat(getComputedStyle(pin).top) || 0;
@@ -143,18 +156,6 @@ const films = [
     window.addEventListener("scroll", () => requestAnimationFrame(place), { passive: true });
     window.addEventListener("resize", () => requestAnimationFrame(place));
     window.matchMedia("(max-width: 760px)").addEventListener("change", sync);
-    new IntersectionObserver(
-      (entries) => {
-        const was = onscreen;
-        onscreen = entries.some((e) => e.isIntersecting);
-        if (onscreen && !was) {
-          if (phase === "flow") live().currentTime = 0; // each visit starts at the deposit
-          if (!raf) raf = requestAnimationFrame(draw);
-        }
-        sync();
-      },
-      { threshold: 0 },
-    ).observe(pin);
     place();
     sync();
   }
