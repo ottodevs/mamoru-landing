@@ -6,6 +6,8 @@ import { consoleClientScript, themeHeadScript } from "./console-client";
 import { CONSOLE_STYLE } from "./console-style";
 import { motionHeadScript, opsClientScript } from "./ops-client";
 import { LAB_STYLE } from "./lab-style";
+import { SETTINGS_STYLE } from "./settings-style";
+import { FUNDING_STYLE } from "./funding-style";
 import { esc, sameSecret } from "./text";
 
 const COOKIE = "mamoru_list";
@@ -742,7 +744,7 @@ export function renderDocument(
   <link rel="icon" href="/mark-two-stones.png" type="image/png" />
   <title>${esc(view.title)}${TITLE_SUFFIX}</title>
   ${themeHeadScript(opts.nonce)}
-  <style>${OPS_STYLE}${CONSOLE_STYLE}${LAB_STYLE}</style>
+  <style>${OPS_STYLE}${CONSOLE_STYLE}${LAB_STYLE}${SETTINGS_STYLE}${FUNDING_STYLE}</style>
   ${motionHeadScript(opts.nonce)}
 </head>
 <body>

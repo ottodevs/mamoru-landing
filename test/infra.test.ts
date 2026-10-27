@@ -597,7 +597,7 @@ describe("ops-infra.ts render", () => {
 
   test("healthy: the relayer leads, status in words, cost ledger, accounts, and no leftovers", () => {
     const html = render({ snapshot: HEALTHY });
-    expect(html).toContain("Infra and costs");
+    expect(html).toContain("<h1>Funding</h1>");
     expect(html).toContain("Relayer balance");
     expect(html).toContain(">0.0251<");
     expect(html).toContain("Healthy");
@@ -681,8 +681,8 @@ describe("ops-infra.ts render", () => {
   test("the page never carries an RPC URL", () => {
     const html = render({ snapshot: HEALTHY });
     expect(html).not.toMatch(/alchemy|publicnode|drpc/i);
-    // The only RPC URL is the public one used for the wallet's "add Base" prompt.
-    expect(html.match(/https:\/\/[a-z.]*base\.org/g)).toEqual(["https://mainnet.base.org"]);
+    // The only RPC URL is the public one used for the wallet's "add Base" prompt (once per Base wallet).
+    expect([...new Set(html.match(/https:\/\/[a-z.]*base\.org/g))]).toEqual(["https://mainnet.base.org"]);
   });
 });
 

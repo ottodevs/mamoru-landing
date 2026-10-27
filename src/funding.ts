@@ -29,6 +29,14 @@ export interface FundingTarget {
   pays: string;
   /** Below this the wallet is "low", in wei. */
   lowWei: bigint;
+  /** What a healthy wallet holds, in wei: the plan tops each one up to this. */
+  targetWei: bigint;
+  /** The plan rounds an amount up to a multiple of this, in wei, so it reads as a round number. */
+  stepWei: bigint;
+  /** Kind of line, for grouping: what keeps accounts starting, or what keeps them safe. */
+  kind: "relayer" | "safety";
+  /** What one use costs and what must stay behind, when that is a fixed figure; "N more uses" is read from them. */
+  runway?: { perUseWei: bigint; floorWei: bigint; use: string };
   /** Amount buttons, in the native asset. */
   presets: string[];
   /** Price the native asset with the ETH price (true only for ETH). */
@@ -38,7 +46,8 @@ export interface FundingTarget {
 }
 
 const E18 = 10n ** 18n;
-const milli = (n: number) => (BigInt(n) * E18) / 1000n;
+/** Thousandths of the native unit, to a tenth of one: milli(5) = 0.005, milli(0.2) = 0.0002. */
+const milli = (n: number) => (BigInt(Math.round(n * 10)) * E18) / 10_000n;
 
 export const BASE: FundingChain = {
   chainId: 8453,
@@ -82,6 +91,12 @@ const FORGEJO = "https://git.ot2.me/otto/mamoru/issues/";
 /** The relayer that funds activations on Monad: its own key, not Base's (operator `mamoru-operator-monad`, 23 Oct). */
 export const MONAD_RELAYER_ADDRESS = "0xE41175b9CEBD25b9F45B745C922002BC052B5C88";
 
+/**
+ * The policy's guardian (MamoruActionPolicyV2.GUARDIAN on Base, immutable): an EOA that only pauses and resumes an
+ * account's sessions. It lives outside the operator and pays its own gas.
+ */
+export const GUARDIAN_ADDRESS = "0xA8E6EF87e612fA5c54668Cc1fF0aC809e1321FdD";
+
 /** One relayer per chain. Base and Ethereum share the Base relayer's key; Monad has its own. */
 export const FUNDING_TARGETS: readonly FundingTarget[] = [
   {
@@ -92,6 +107,9 @@ export const FUNDING_TARGETS: readonly FundingTarget[] = [
     chain: BASE,
     pays: "Safe deploys, activations and each new account's gas reserve on Base.",
     lowWei: milli(5),
+    targetWei: milli(20),
+    stepWei: milli(1),
+    kind: "relayer",
     presets: ["0.005", "0.01", "0.02"],
     priceAsEth: true,
   },
@@ -105,6 +123,10 @@ export const FUNDING_TARGETS: readonly FundingTarget[] = [
     // balance rule), so one activation needs ~5.8 MON on top of a 10 MON floor (ottodevs/mamoru#124).
     pays: "Activations on Monad: about 6 MON each, and it must always keep 10 MON. Below 16 MON no account can start.",
     lowWei: 16n * E18,
+    targetWei: 30n * E18,
+    stepWei: E18,
+    kind: "relayer",
+    runway: { perUseWei: 6n * E18, floorWei: 10n * E18, use: "activation" },
     presets: ["10", "20", "30"],
     priceAsEth: false,
     ticket: { label: "otto/mamoru#68", href: FORGEJO + "68" },
@@ -117,11 +139,47 @@ export const FUNDING_TARGETS: readonly FundingTarget[] = [
     chain: ETHEREUM,
     pays: "Deploying the owner's Safe on Ethereum to move USDC sent there back to Base.",
     lowWei: milli(3),
+    targetWei: milli(6),
+    stepWei: milli(1),
+    kind: "relayer",
     presets: ["0.002", "0.005", "0.01"],
     priceAsEth: true,
     ticket: { label: "otto/mamoru#180", href: FORGEJO + "180" },
   },
+  {
+    id: "guardian-base",
+    label: "Guardian on Base",
+    recipientName: "the guardian",
+    address: GUARDIAN_ADDRESS,
+    chain: BASE,
+    // One pause is one plain call to the policy: tens of thousands of gas, a few cents on Base.
+    pays: "Pausing an account's sessions in an emergency (MamoruActionPolicy v2). Without gas it cannot pause anything.",
+    lowWei: milli(0.2),
+    targetWei: milli(0.5),
+    stepWei: milli(0.1),
+    kind: "safety",
+    presets: ["0.0005", "0.001"],
+    priceAsEth: true,
+  },
 ];
+
+/**
+ * What a wallet lacks to reach its healthy level, rounded up to its step; null when unread. Within 10% of the level
+ * it counts as enough: the gas of one activation must not turn a full wallet into a line to fund.
+ */
+export function shortfallWei(balanceWei: bigint | null, t: Pick<FundingTarget, "targetWei" | "stepWei">): bigint | null {
+  if (balanceWei === null) return null;
+  if (balanceWei * 10n >= t.targetWei * 9n) return 0n;
+  const gap = t.targetWei - balanceWei;
+  return ((gap + t.stepWei - 1n) / t.stepWei) * t.stepWei;
+}
+
+/** How many more uses the balance pays for, when the target has a fixed cost per use. null when unread or not fixed. */
+export function usesLeft(balanceWei: bigint | null, t: Pick<FundingTarget, "runway">): number | null {
+  if (balanceWei === null || !t.runway) return null;
+  const room = balanceWei - t.runway.floorWei;
+  return room <= 0n ? 0 : Number(room / t.runway.perUseWei);
+}
 
 export function fundingStatus(balanceWei: bigint | null, lowWei: bigint): FundingStatus {
   if (balanceWei === null) return "unknown";
@@ -192,5 +250,7 @@ export function widgetTarget(row: FundingRow) {
     },
     presets: t.presets,
     priceAsEth: t.priceAsEth,
+    shortWei: (shortfallWei(row.balanceWei, t) ?? 0n).toString(),
+    stepWei: t.stepWei.toString(),
   };
 }
