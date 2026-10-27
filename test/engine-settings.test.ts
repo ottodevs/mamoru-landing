@@ -460,3 +460,47 @@ describe("settings form units (otto/mamoru-astro#22)", () => {
     expect(parse({ min_entry_on: "1", min_entry_gas: "5" }).minEntry).toEqual({ gasMultiple: 5 });
   });
 });
+
+describe('/ops never drops settings it has no field for (otto/mamoru#218)', () => {
+  const LAZY = { mode: 'lazy', edgeBufferTicks: 100, minDwellSeconds: 1800, horizonSeconds: 86_400, lvrWeightBps: 10_000 }
+  const WITH_LAZY = { ...DEFAULT_SETTINGS, capUsdc: 1000, depth: { impactBps: 30, shareBps: 500 }, rerange: LAZY } as unknown as EngineSettings
+  const stored = async (db: D1Db) => (await listVersions(db))!.find((v) => v.env === 'prod')!.settings as unknown as Record<string, unknown>
+
+  test('a form write keeps the lazy re-range of the version in effect', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'lazy', settings: WITH_LAZY, author: 'x', reason: 'r' })
+    // The form has no rerange field: its settings come without the key.
+    await seed(db, { env: 'prod', accountKeys: null, template: 'custom', settings: { ...DEFAULT_SETTINGS, capUsdc: 900, depth: { impactBps: 30, shareBps: 500 } }, author: 'x', reason: 'cap' })
+    const s = await stored(db)
+    expect(s.capUsdc).toBe(900)
+    expect(s.rerange).toEqual(LAZY)
+  })
+
+  test('a canary edit keeps what its accounts run: the canary in effect when they are all in it, else env-wide', async () => {
+    const db = memoryDb()
+    const A = '11111111-aaaa-4bbb-8ccc-00000000000a'
+    const B = '11111111-aaaa-4bbb-8ccc-00000000000b'
+    const EAGER2 = { mode: 'eager', maxPerWeek: 2 }
+    await seed(db, { env: 'prod', accountKeys: null, template: 'wide lazy', settings: WITH_LAZY, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: [A], template: 'canary eager', settings: { ...DEFAULT_SETTINGS, rerange: EAGER2 } as unknown as EngineSettings, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: [A], template: 'canary edit', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    const newest = async () => (await listVersions(db))![0].settings as unknown as Record<string, unknown>
+    expect((await newest()).rerange).toEqual(EAGER2)
+    // A and B run different hidden settings (canary eager vs env-wide lazy): one version cannot keep both.
+    await expect(seed(db, { env: 'prod', accountKeys: [A, B], template: 'wider canary', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })).rejects.toThrow('different re-range')
+    // Accounts outside the canary keep the env-wide setting.
+    await seed(db, { env: 'prod', accountKeys: [B], template: 'other canary', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    expect((await newest()).rerange).toEqual(LAZY)
+  })
+
+  test('only the same env is a source, and a rollback writes its target as is', async () => {
+    const db = memoryDb()
+    const plain = await seed(db, { env: 'prod', accountKeys: null, template: 'plain', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    await seed(db, { env: 'beta', accountKeys: null, template: 'lazy beta', settings: WITH_LAZY, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: null, template: 'form', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    expect((await stored(db)).rerange).toBeUndefined()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'lazy', settings: WITH_LAZY, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: null, template: 'plain', settings: DEFAULT_SETTINGS, author: 'x', reason: 'back', rollbackOf: plain })
+    expect((await stored(db)).rerange).toBeUndefined()
+  })
+})

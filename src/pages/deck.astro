@@ -69,15 +69,18 @@ const askAt = [
       </p>
     </section>
 
-    <!-- 03 The solution: the launch film's allocation and night (Brais, 26 Oct): USDC fills the three positions, then
-         while you sleep the profits of Balance and Growth fall into Stable. Silent; it plays each time the slide arrives. -->
+    <!-- 03 The solution: the landing's How it works (flow v4) on the deck's clock and its night (Brais, 27 Oct): one deposit of
+         USDC on Base rises into the column, which parts into Growth, Balance and Stables; while you sleep their yield is
+         taken in by Stables. Silent; it plays each time the slide arrives. -->
     <section class="slide how" data-slide="3" aria-roledescription="slide" aria-label={loop.aria}>
       <div class="film">
         <p class="eyebrow rise" style="--d:0">{loop.eyebrow}</p>
-        <video class="js-how" muted playsinline preload="auto" aria-label={loop.aria}>
-          <source src="/deck-media/how-it-works.webm" type="video/webm" />
-          <source src="/deck-media/how-it-works.mp4" type="video/mp4" />
-        </video>
+        <div class="print js-print">
+          <video class="js-how" muted playsinline preload="auto" aria-label={loop.aria}>
+            <source src="/deck-media/flow4-deck.webm" type="video/webm" />
+            <source src="/deck-media/flow4-deck.mp4" type="video/mp4" />
+          </video>
+        </div>
       </div>
     </section>
 
@@ -283,9 +286,21 @@ const askAt = [
 
     // 03: the film starts over each time the slide arrives and rests on its last frame. Reduced motion shows that frame.
     const how = deck.querySelector<HTMLVideoElement>(".js-how");
+    // Its box carries the page's paper: offset by where the box sits once the slide is in place (no slide transform).
+    const print = deck.querySelector<HTMLElement>(".js-print");
+    function registerPaper() {
+      if (!print) return;
+      const r = print.getBoundingClientRect();
+      const slide = print.closest<HTMLElement>(".slide");
+      const shift = slide ? new DOMMatrixReadOnly(getComputedStyle(slide).transform).m41 : 0;
+      print.style.backgroundPosition = `${-(r.left - shift)}px ${-r.top}px`;
+    }
+    registerPaper();
+    window.addEventListener("resize", registerPaper);
     function playHow(on: boolean) {
       if (!how) return;
       if (!on) return how.pause();
+      registerPaper();
       if (quiet) {
         const end = () => { how.currentTime = Math.max(0, how.duration - 0.05); };
         if (how.readyState >= 1) end();
@@ -720,13 +735,27 @@ const askAt = [
   .film {
     width: min(100%, calc((100dvh - 11rem) * 16 / 9));
   }
+  /* Printed on the page, as on the landing: the film is drawn on white with its tones divided by Kami (flow-v2 deck.js
+     ?print) and multiplied over the paper. The slide is its own stacking context (opacity, transform), so the box
+     carries the page's Kami A, kept in register with the page by the script: no edge, no second paper. */
+  .print {
+    isolation: isolate;
+    overflow: hidden;
+    background-color: #f1eee5;
+    background-image: url("/kami-a-tile.png");
+    background-image: image-set(url("/kami-a-tile.webp") type("image/webp"), url("/kami-a-tile.png") type("image/png"));
+    background-size: 1024px 1024px;
+  }
+  .print {
+    aspect-ratio: 16 / 9;
+  }
+  /* A pixel past the box on every side: the scaled frame's edge pixel would show as a light hairline. */
   .film video {
     display: block;
-    width: 100%;
+    width: calc(100% + 4px);
+    margin: -2px;
     aspect-ratio: 16 / 9;
-    /* The film is drawn on Kami A too: no frame, its edges fade into the slide's paper. */
-    -webkit-mask-image: radial-gradient(ellipse 72% 68% at 50% 50%, #000 70%, transparent 100%);
-    mask-image: radial-gradient(ellipse 72% 68% at 50% 50%, #000 70%, transparent 100%);
+    mix-blend-mode: multiply;
   }
 
   .versus {

@@ -19,8 +19,9 @@ export const DECK = {
   },
   loop: {
     eyebrow: "The solution",
-    // The slide is a silent film (public/deck-media): USDC fills Stable, Balance and Growth; while you sleep, profits go to Stable.
-    aria: "USDC fills three positions, Stable, Balance and Growth. While you sleep, the profits of Balance and Growth are reinvested in Stable.",
+    // The slide is a silent film (public/deck-media, the landing's flow v4): one USDC deposit becomes Growth, Balance and
+    // Stables; while you sleep, the yield of Growth and Balance is taken in by Stables.
+    aria: "One deposit of USDC on Base becomes three positions: 15% Growth, 35% Balance and 50% Stables. While you sleep, the yield of Growth and Balance is reinvested in Stables.",
   },
   // Six lines the speaker explains. A click brings the explanations up, for whoever reads the deck alone.
   trust: {
