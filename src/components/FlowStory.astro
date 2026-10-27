@@ -1,300 +1,74 @@
 ---
 import { OPEN_COPY } from "../open-copy";
 
-// The launch film's allocation scene (mamoru-video films/v12-launch, v19), on paper: USDC streams into the column,
+// The launch film's allocation scene (mamoru-video films/v12-launch, v19), on Kami A: USDC streams into the column,
 // which fills tramo by tramo; then the yield of Growth and Balance flows into Stables, which grows. No words inside
-// the animation. The colours are the allocation's (slide 3 v3), so the column reads the same in the next section.
+// the film. It is a recorded loop, not a live canvas: the canvas version did not paint in Brave (2026-10-27), and a
+// video plays the same everywhere, like slide 3 of the deck. One loop is 12 s; the caption follows its clock.
+// Sources: frames of the canvas version, rendered frame by frame (wide 1920x800, tall 704x1112).
 const { eyebrow, lines, aria } = OPEN_COPY.flow;
-const tones = OPEN_COPY.allocation.mix.map((seg) => ({ pct: seg.pct, tone: seg.tone }));
+const films = [
+  { id: "wide", w: 1920, h: 800 },
+  { id: "tall", w: 704, h: 1112 },
+];
 ---
 <section class="flow-story" id="works" aria-labelledby="works-title">
   <h2 class="eyebrow" id="works-title">{eyebrow}</h2>
-  <canvas class="stage" role="img" aria-label={aria} data-tones={JSON.stringify(tones)}></canvas>
+  {films.map((f) => (
+    <video
+      class={`stage stage-${f.id}`}
+      width={f.w}
+      height={f.h}
+      muted
+      loop
+      playsinline
+      preload="metadata"
+      poster={`/flow-media/flow-${f.id}.webp`}
+      aria-label={aria}
+    >
+      <source src={`/flow-media/flow-${f.id}.webm`} type="video/webm" />
+      <source src={`/flow-media/flow-${f.id}.mp4`} type="video/mp4" />
+    </video>
+  ))}
   <p class="caption">
     {lines.map((line, index) => <span data-line={index}>{line}</span>)}
   </p>
 </section>
 
 <script>
-  type Pt = [number, number];
-  type Layout = {
-    w: number;
-    h: number;
-    logo: { x: number; y: number; r: number };
-    bar: { cx: number; top: number; w: number; h: number };
-    // where the USDC streams leave the logo, how they bend, and how the yield arcs bend
-    src: Pt;
-    bend: (cy: number) => Pt;
-    arc: number;
-  };
-
-  const WIDE: Layout = {
-    w: 960,
-    h: 400,
-    logo: { x: 240, y: 200, r: 58 },
-    bar: { cx: 660, top: 28, w: 112, h: 320 },
-    src: [318, 200],
-    bend: (cy) => [0, (cy - 200) * -0.15],
-    arc: 170,
-  };
-  const TALL: Layout = {
-    w: 360,
-    h: 570,
-    logo: { x: 180, y: 62, r: 42 },
-    bar: { cx: 196, top: 196, w: 104, h: 320 },
-    src: [168, 120],
-    bend: () => [-120, 0],
-    arc: 96,
-  };
-
-  const COL: Record<string, string> = { growth: "#9fc4b0", balance: "#8aa4c0", stables: "#3d5a80" };
-  const USDC = "#2775ca";
-  const GOLD = "#c99a2e";
-  const INK = "15,15,14";
-
-  // One clock, in seconds.
-  const LOOP = 12;
-  const LOGO = [0, 0.7] as const;
-  const OUTLINE = [0.4, 1.3] as const;
-  const FILL = [1.2, 4.4] as const;
-  const YIELD = [5.4, 9.2] as const;
-  const OUT = [10.4, 11.3] as const;
-  const STILL = 10;
-  const GROW = 0.16;
-
-  const clamp = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
-  const span = (t: number, a: number, b: number) => clamp((t - a) / (b - a));
-  const soft = (x: number) => x * x * (3 - 2 * x);
-  const out3 = (x: number) => 1 - (1 - x) ** 3;
-  const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
-  const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)) as [number, number, number];
-  const mixHex = (a: string, b: string, k: number) => {
-    const [x, y] = [rgb(a), rgb(b)];
-    return `rgb(${x.map((v, i) => Math.round(lerp(v, y[i]!, k))).join(",")})`;
-  };
-  const rng = (seed: number) => () => {
-    seed = (seed * 1664525 + 1013904223) % 4294967296;
-    return seed / 4294967296;
-  };
-
-  const USDC_GLYPH = new Path2D(
-    "M20.4 17.4c0-2.2-1.3-2.9-4-3.2-1.9-.2-2.3-.6-2.3-1.4 0-.8.6-1.4 1.8-1.4 1.1 0 1.7.4 2 1.2l2.3-.9c-.5-1.3-1.7-2.2-3.4-2.4V7.5h-2.2v1.8c-1.8.3-3 1.5-3 3.1 0 2.1 1.3 2.8 4 3.2 1.8.3 2.2.7 2.2 1.4 0 .8-.7 1.5-1.9 1.5-1.4 0-2.3-.6-2.6-1.6l-2.3.9c.6 1.6 2 2.6 4 2.9v1.8h2.2v-1.8c1.9-.3 3.2-1.6 3.2-3.4z",
-  );
-
+  // The yield phase of the loop starts at 5.4 s: the second line goes with it.
+  const YIELD_AT = 5.4;
   const root = document.querySelector<HTMLElement>(".flow-story");
-  const canvas = root?.querySelector<HTMLCanvasElement>(".stage");
-  const g = canvas?.getContext("2d");
+  const films = [...(root?.querySelectorAll<HTMLVideoElement>(".stage") ?? [])];
+  const quiet = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  if (root && canvas && g) {
-    const tones = JSON.parse(canvas.dataset.tones ?? "[]") as { pct: number; tone: string }[];
-    const narrow = window.matchMedia("(max-width: 760px)");
-    const quiet = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    let L = narrow.matches ? TALL : WIDE;
-    let scale = 1;
-
-    const fit = () => {
-      L = narrow.matches ? TALL : WIDE;
-      canvas.style.aspectRatio = `${L.w} / ${L.h}`;
-      canvas.style.maxWidth = narrow.matches ? "22.5rem" : "60rem";
-      const cssW = canvas.clientWidth || L.w;
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
-      canvas.width = Math.round(cssW * dpr);
-      canvas.height = Math.round(((cssW * L.h) / L.w) * dpr);
-      scale = (cssW / L.w) * dpr;
-    };
-
-    // Stables (the last tramo) grows downward while the yield lands.
-    const growK = (t: number) => soft(span(t, YIELD[0] + 0.6, YIELD[1] + 0.6));
-    const segs = (t: number) => {
-      const { bar } = L;
-      let y = bar.top;
-      return tones.map((s, k) => {
-        const h = (bar.h * s.pct) / 100 * (k === tones.length - 1 ? 1 + GROW * growK(t) : 1);
-        const r = { ...s, k, x: bar.cx - bar.w / 2, y, w: bar.w, h, cy: y + h / 2 };
-        y += h;
-        return r;
-      });
-    };
-    // Top tramo first, as the film fills it.
-    const fillK = (k: number, t: number) => soft(span(t, FILL[0] + 0.28 * k, FILL[1] - 0.56 + 0.28 * k));
-
-    function stream(t: number, t0: number, t1: number, A: Pt, B: Pt, bend: Pt, col: (u: number) => string, n: number, lw: number, seed: number) {
-      if (t < t0 - 0.1 || t > t1 + 1.2) return;
-      const env = soft(span(t, t0, t0 + 0.35)) * (1 - soft(span(t, t1 - 0.2, t1 + 0.6)));
-      if (env <= 0.002) return;
-      const C: Pt = [(A[0] + B[0]) / 2 + bend[0], (A[1] + B[1]) / 2 + bend[1]];
-      const at = (u: number): Pt => [
-        (1 - u) * (1 - u) * A[0] + 2 * (1 - u) * u * C[0] + u * u * B[0],
-        (1 - u) * (1 - u) * A[1] + 2 * (1 - u) * u * C[1] + u * u * B[1],
-      ];
-      const rr = rng(seed);
-      for (let i = 0; i < n; i++) {
-        const off = rr(), sp = 0.55 + 0.5 * rr(), lane = (rr() - 0.5) * lw, sz = 0.6 + 0.8 * rr();
-        const u = ((t - t0) * sp + off) % 1;
-        const [x, y] = at(u), [x2, y2] = at(Math.min(1, u + 0.01));
-        const nx = -(y2 - y), ny = x2 - x, nl = Math.hypot(nx, ny) || 1;
-        const ends = Math.sin(Math.PI * u);
-        g!.globalAlpha = env * (0.3 + 0.6 * ends) * 0.9;
-        g!.fillStyle = col(u);
-        g!.beginPath();
-        g!.arc(x + (nx / nl) * lane * ends, y + (ny / nl) * lane * ends, 3.2 * sz * (0.6 + 0.6 * ends), 0, 7);
-        g!.fill();
-      }
-      // chevrons along the centre line
-      g!.strokeStyle = `rgb(${INK})`;
-      g!.lineWidth = 1.6;
-      g!.lineCap = "round";
-      g!.lineJoin = "round";
-      for (let c = 0; c < 3; c++) {
-        const u = ((t - t0) * 0.55 + c / 3) % 1;
-        const [x, y] = at(u), [x2, y2] = at(Math.min(1, u + 0.02));
-        g!.globalAlpha = env * Math.sin(Math.PI * u) * 0.45;
-        g!.save();
-        g!.translate(x, y);
-        g!.rotate(Math.atan2(y2 - y, x2 - x));
-        g!.beginPath();
-        g!.moveTo(-6, -7);
-        g!.lineTo(2, 0);
-        g!.lineTo(-6, 7);
-        g!.stroke();
-        g!.restore();
-      }
-      g!.globalAlpha = 1;
-    }
-
-    function draw(t: number) {
-      g!.setTransform(1, 0, 0, 1, 0, 0);
-      g!.clearRect(0, 0, canvas!.width, canvas!.height);
-      g!.setTransform(scale, 0, 0, scale, 0, 0);
-      const fade = 1 - soft(span(t, OUT[0], OUT[1]));
-      if (fade <= 0) return;
-      const { logo, bar } = L;
-      const S = segs(t);
-
-      // USDC, the source: it settles in, breathes while it sends, and steps back while the yield works.
-      const li = out3(span(t, LOGO[0], LOGO[1]));
-      const sending = span(t, FILL[0] - 0.2, FILL[0] + 0.2) * (1 - span(t, FILL[1] - 0.4, FILL[1]));
-      const la = li * (1 - 0.35 * soft(span(t, YIELD[0] - 0.2, YIELD[0] + 0.6))) * fade;
-      if (la > 0) {
-        // two rings ripple out while it sends
-        for (let k = 0; k < 2; k++) {
-          const p = (((t - FILL[0]) * 0.9 + k / 2) % 1 + 1) % 1;
-          g!.globalAlpha = sending * (1 - p) * 0.35 * fade;
-          g!.strokeStyle = USDC;
-          g!.lineWidth = 1.2;
-          g!.beginPath();
-          g!.arc(logo.x, logo.y, logo.r * (1 + 0.55 * p), 0, 7);
-          g!.stroke();
-        }
-        const r = logo.r * lerp(0.86, 1, li) * (1 + 0.015 * Math.sin(t * 3.1) * sending);
-        g!.globalAlpha = la;
-        g!.save();
-        g!.translate(logo.x - r, logo.y - r);
-        g!.scale(r / 16, r / 16);
-        g!.fillStyle = USDC;
-        g!.beginPath();
-        g!.arc(16, 16, 16, 0, 7);
-        g!.fill();
-        g!.fillStyle = "#fff";
-        g!.fill(USDC_GLYPH);
-        g!.restore();
-        g!.globalAlpha = 1;
-      }
-
-      // The column: outline draws in, tramos fill from the bottom.
-      const oa = out3(span(t, OUTLINE[0], OUTLINE[1]));
-      if (oa > 0) {
-        const top = S[0]!.y, bot = S[S.length - 1]!.y + S[S.length - 1]!.h, x0 = bar.cx - bar.w / 2, rad = 14;
-        g!.globalAlpha = fade;
-        g!.save();
-        g!.beginPath();
-        g!.roundRect(x0, top, bar.w, bot - top, rad);
-        g!.clip();
-        for (const s of S) {
-          const f = fillK(s.k, t), fh = s.h * f;
-          if (fh <= 0.5) continue;
-          g!.fillStyle = COL[s.tone] ?? "#000";
-          g!.fillRect(s.x, s.y + s.h - fh, s.w, fh + (s.k === S.length - 1 ? 0 : 0.5));
-          if (f < 1) {
-            g!.fillStyle = "rgba(255,255,255,0.75)";
-            g!.fillRect(s.x, s.y + s.h - fh - 1, s.w, 2);
-          }
-        }
-        // A thin cut of paper between tramos (the canvas is cleared there, so the page shows through),
-        // as in the allocation column below. It opens once the lower tramo is full.
-        g!.globalCompositeOperation = "destination-out";
-        for (const s of S.slice(1)) {
-          g!.globalAlpha = soft(span(fillK(s.k, t), 0.9, 1));
-          g!.fillRect(s.x, s.y - 1.25, s.w, 2.5);
-        }
-        g!.globalCompositeOperation = "source-over";
-        g!.globalAlpha = fade;
-        g!.restore();
-        const per = 2 * (bar.w + (bot - top));
-        g!.globalAlpha = oa * fade * (1 - 0.6 * fillK(S.length - 1, t));
-        g!.strokeStyle = `rgba(${INK},0.32)`;
-        g!.lineWidth = 1.2;
-        g!.setLineDash([per * oa, per]);
-        g!.beginPath();
-        g!.roundRect(x0, top, bar.w, bot - top, rad);
-        g!.stroke();
-        g!.setLineDash([]);
-        g!.globalAlpha = 1;
-
-        // USDC streams in, one per tramo.
-        for (const s of S) {
-          const B: Pt = [x0 - 10, s.cy];
-          const t0 = FILL[0] + 0.28 * s.k - 0.3, t1 = FILL[1] - 0.7 + 0.28 * s.k;
-          g!.globalAlpha = fade;
-          stream(t, t0, t1, L.src, B, L.bend(s.cy), (u) => (u > 0.85 ? COL[s.tone]! : USDC), [34, 46, 58][s.k] ?? 40, 16, 17 + s.k * 31);
-        }
-
-        // The yield: it leaves Growth and Balance, turns into USDC on the way, and lands in Stables.
-        const st = S[S.length - 1]!;
-        for (const s of S.slice(0, -1)) {
-          const A: Pt = [x0 + bar.w + 10, s.cy];
-          const B: Pt = [x0 + bar.w + 10, st.y + st.h * 0.42];
-          const lag = s.k === 0 ? 0 : 0.35;
-          const conv = (u: number) => mixHex(GOLD, USDC, soft(span(u, 0.4, 0.66)));
-          stream(t, YIELD[0] + lag, YIELD[1], A, B, [L.arc * (s.k === 0 ? 1.25 : 0.9), 0], conv, s.k === 0 ? 42 : 54, 14, 101 + s.k * 7);
-        }
-      }
-    }
-
-    // One line under the animation, the one for the phase in play.
-    const caption = (t: number) => (t < YIELD[0] ? "0" : "1");
-
-    fit();
+  if (root && films.length) {
+    const live = () => films.find((v) => getComputedStyle(v).display !== "none");
     if (quiet) {
-      draw(STILL);
+      // The poster is the loop's settled frame; the line under it is the second one.
       root.dataset.line = "1";
-      narrow.addEventListener("change", () => (fit(), draw(STILL)));
-      new ResizeObserver(() => (fit(), draw(STILL))).observe(canvas);
     } else {
-      let clock = 0;
-      let last = 0;
-      let running = false;
-      const tick = (now: number) => {
-        if (!running) return;
-        clock = (clock + Math.min(0.064, (now - last) / 1000)) % LOOP;
-        last = now;
-        draw(clock);
-        root.dataset.line = caption(clock);
-        requestAnimationFrame(tick);
+      let seen = false;
+      const sync = () => {
+        const v = live();
+        films.forEach((f) => f !== v && !f.paused && f.pause());
+        if (!v) return;
+        if (seen && v.paused) v.play().catch(() => {});
+        if (!seen && !v.paused) v.pause();
       };
-      draw(0);
-      new ResizeObserver(() => (fit(), draw(clock))).observe(canvas);
+      films.forEach((v) =>
+        v.addEventListener("timeupdate", () => {
+          if (v === live()) root.dataset.line = v.currentTime < YIELD_AT ? "0" : "1";
+        }),
+      );
       new IntersectionObserver(
         (entries) => {
-          const seen = entries.some((e) => e.isIntersecting);
-          if (seen === running) return;
-          running = seen;
-          if (!seen) return;
-          last = performance.now();
-          requestAnimationFrame(tick);
+          seen = entries.some((e) => e.isIntersecting);
+          sync();
         },
-        { threshold: 0.3 },
-      ).observe(canvas);
+        { threshold: 0.25 },
+      ).observe(root);
+      window.matchMedia("(max-width: 760px)").addEventListener("change", sync);
     }
   }
 </script>
@@ -324,6 +98,15 @@ const tones = OPEN_COPY.allocation.mix.map((seg) => ({ pct: seg.pct, tone: seg.t
     aspect-ratio: 960 / 400;
     height: auto;
     margin: clamp(1.75rem, 4vw, 3rem) auto clamp(1.5rem, 3vw, 2.25rem);
+    background: transparent;
+    /* Drawn on Kami A too: no frame, its edges fade into the page's paper, as on slide 3 of the deck. */
+    -webkit-mask-image: radial-gradient(ellipse 72% 68% at 50% 50%, #000 70%, transparent 100%);
+    mask-image: radial-gradient(ellipse 72% 68% at 50% 50%, #000 70%, transparent 100%);
+  }
+  .stage-tall {
+    display: none;
+    max-width: 22.5rem;
+    aspect-ratio: 704 / 1112;
   }
   /* Both lines share one cell; the one in play fades in. */
   .caption {
@@ -346,9 +129,11 @@ const tones = OPEN_COPY.allocation.mix.map((seg) => ({ pct: seg.pct, tone: seg.t
   }
 
   @media (max-width: 760px) {
-    .stage {
-      max-width: 22.5rem;
-      aspect-ratio: 360 / 570;
+    .stage-wide {
+      display: none;
+    }
+    .stage-tall {
+      display: block;
     }
   }
   @media (prefers-reduced-motion: reduce) {
