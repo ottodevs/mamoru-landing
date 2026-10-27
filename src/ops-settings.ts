@@ -9,7 +9,7 @@
 
 import { BOUNDS, DEFAULT_CAP_USDC, DEFAULT_SETTINGS, RECOMMENDED_SETTINGS, pctOf, usdcOf, type EngineSettings } from "./engine-settings-model";
 import type { Env, InEffect, TemplateRow, VersionRow } from "./engine-settings-store";
-import { csrfField, noticeHtml, pageHead, type SectionView } from "./ops";
+import { csrfField, maskEmail, noticeHtml, pageHead, type SectionView } from "./ops";
 import { esc } from "./text";
 
 export const RECOMMENDED_TEMPLATE = "recommended";
@@ -76,7 +76,7 @@ function envNow(env: Env, inEffect: InEffect): string {
     .map(([k, line]) => `<div class="set-say"><dt>${esc(k)}</dt><dd>${esc(line)}</dd></div>`)
     .join("");
   const version = v
-    ? `<p class="set-ver">v${v.id} · ${esc(v.template)}<br>${esc(v.author)}, ${esc(when(v.createdAt))}</p>`
+    ? `<p class="set-ver">v${v.id} · ${esc(v.template)}<br>${esc(maskEmail(v.author))}, ${esc(when(v.createdAt))}</p>`
     : `<p class="set-ver">No version written: the code defaults.</p>`;
   // One canary at most is live per environment: the newest, if newer than the environment-wide version.
   const c = inEffect.canary;
@@ -366,7 +366,7 @@ function historyBlock(csrf: string, versions: readonly VersionRow[]): string {
         <div class="set-h-body">
           <p class="set-h-why">${esc(v.reason)}</p>
           ${what}
-          <p class="set-h-meta">${esc(v.template)}${v.rollbackOf ? `, rollback to v${v.rollbackOf}` : ""} · ${esc(v.author)}, ${esc(when(v.createdAt))}</p>
+          <p class="set-h-meta">${esc(v.template)}${v.rollbackOf ? `, rollback to v${v.rollbackOf}` : ""} · ${esc(maskEmail(v.author))}, ${esc(when(v.createdAt))}</p>
         </div>
         <details class="set-rb"><summary>Roll back to v${v.id}</summary><form method="post" action="/ops/settings/rollback" data-ops-form data-ops-no-retry>${csrfField(csrf)}<input type="hidden" name="id" value="${v.id}" /><span class="set-in wide"><input name="reason" required maxlength="500" placeholder="why" aria-label="Why roll back to v${v.id}" /></span><button class="link" type="submit">Roll back</button></form></details>
       </li>`;

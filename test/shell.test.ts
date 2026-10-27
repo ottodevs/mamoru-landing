@@ -207,7 +207,8 @@ describe("one frame for every section", () => {
       expect(html).toMatch(new RegExp(`<h1[^>]*>${s.title}</h1>`));
       expect(html).toContain(s.marker);
       expect(html).toContain('<form class="ops-who" method="post" action="/ops/logout">');
-      expect(html).toContain("ottodevs@gmail.com");
+      expect(html).toContain("ot•••@gm•••.com");
+      expect(html).not.toContain("ottodevs@gmail.com");
       expect(html.match(/<style>/g)?.length).toBe(1);
       // Theme (head, before paint), motion (head), the router, and the console client.
       expect(html.match(/<script /g)?.length).toBe(4);
