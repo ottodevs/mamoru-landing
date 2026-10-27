@@ -47,6 +47,7 @@ import {
 import { type PoolState, priceOfBaseInQuote, sameAddress, valuePosition } from "./uniswap-math";
 import { type AccountRow, type D1Db, fetchChainAccounts, fetchInfraCounts } from "./d1-infra";
 import type { AccountFilter } from "./account-filter";
+import { type OutsideHolding, readOutsideBase } from "./outside-base";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
@@ -106,6 +107,9 @@ export interface AccountView {
   env: string;
   chainId: number;
   isTest: boolean;
+  /** Holdings at the same address on Ethereum Mainnet (otto/mamoru-astro#31). Not part of the working Base
+   * value above. Unset = the Ethereum read failed or was not tried ("not read"), never zero. */
+  outside?: OutsideHolding;
 }
 
 /** Whether an account belongs in a filtered view (otto/mamoru#130). `env: 'test'` matches is_test regardless
@@ -163,6 +167,8 @@ export interface InfraSnapshot {
 
 export interface InfraEnv {
   BASE_RPC_URL?: string;
+  /** Optional secret, comma separated. Tried before the public Ethereum RPCs (otto/mamoru-astro#31). */
+  ETHEREUM_RPC_URLS?: string;
   MAMORU_DB?: D1Db;
 }
 
@@ -472,6 +478,31 @@ async function buildAccountsView(
 }
 
 /**
+ * Reads the same addresses on Ethereum and sets `row.outside` on those that answered. Mutates `accounts`
+ * in place and never throws: the Base figures and the `unread`/`partial` bookkeeping are untouched.
+ */
+async function attachOutsideBase(
+  accounts: AccountsView | null,
+  env: InfraEnv,
+  baseEthUsd: number | null,
+  fetchFn: (input: string, init?: RequestInit) => Promise<Response>,
+): Promise<void> {
+  if (!accounts || accounts.rows.length === 0) return;
+  try {
+    const held = await readOutsideBase(
+      accounts.rows.map((r) => r.address),
+      { rpcUrls: env.ETHEREUM_RPC_URLS, baseEthUsd, fetchFn },
+    );
+    for (const row of accounts.rows) {
+      const o = held.get(row.address.toLowerCase());
+      if (o) row.outside = o;
+    }
+  } catch {
+    // Left as "not read".
+  }
+}
+
+/**
  * `client` defaults to a real Base client; tests inject a fake one so none of
  * this ever makes a real network call.
  */
@@ -533,6 +564,7 @@ export async function computeInfraSnapshot(
   };
 
   const [accounts, funding] = await Promise.all([buildAccountsView(env, client, prices), fundingOf(relayerBalanceWei)]);
+  await attachOutsideBase(accounts, env, prices.ethUsd, fetchFn);
 
   // A missing ETH price leaves every USD figure blank; unread accounts leave totals short.
   const parts = new Set<UnreadPart>(accounts?.unreadParts ?? []);
