@@ -73,8 +73,11 @@ import {
   type SectionView,
   sessionCookie,
   type Flash,
+  withSubnav,
 } from "./ops";
 import { infraSection } from "./ops-infra";
+import { withOutside } from "./ops-outside";
+import type { InfraSnapshot } from "./infra-snapshot";
 import { loadInfraReading } from "./infra-cache";
 import { captureDaily } from "./metrics-store";
 import type { D1Db } from "./d1-infra";
@@ -396,7 +399,36 @@ function withNotice(view: SectionView, text: string, tone: "plain" | "bad" = "pl
 }
 
 /** Sections a stranger is sent to Google from, and returned to after signing in. */
-const SECTION_PATHS = new Set(["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/functions", "/ops/archive", "/ops/lab"]);
+const SECTION_PATHS = new Set(["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/functions", "/ops/archive", "/ops/lab", "/ops/money", "/ops/money/funding", "/ops/engine/settings", "/ops/engine/functions"]);
+
+/**
+ * otto/mamoru-astro#35: Engine (Status, Settings, Functions) and Money (Costs, Funding) replaced five sections.
+ * Old GET paths, and anything under them, answer with a redirect to the new place, query kept. POST actions
+ * keep answering on their old paths too (POST_ALIASES), so a form rendered before a deploy still works.
+ */
+const LEGACY_PREFIXES: readonly (readonly [string, string])[] = [
+  ["/ops/settings", "/ops/engine/settings"],
+  ["/ops/functions", "/ops/engine/functions"],
+  ["/ops/costs", "/ops/money"],
+  ["/ops/infra", "/ops/money/funding"],
+];
+
+export function legacyTarget(pathname: string): string | null {
+  const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  for (const [from, to] of LEGACY_PREFIXES) {
+    if (path === from) return to;
+    if (path.startsWith(`${from}/`)) return to + path.slice(from.length);
+  }
+  return null;
+}
+
+/** The POST endpoints under their new paths; the handlers below match on the old ones. */
+const POST_ALIASES: Readonly<Record<string, string>> = {
+  "/ops/engine/settings/apply": "/ops/settings/apply",
+  "/ops/engine/settings/rollback": "/ops/settings/rollback",
+  "/ops/engine/functions/apply": "/ops/functions/apply",
+  "/ops/money/funding/refresh": "/ops/infra/refresh",
+};
 
 /** Anyone who is not signed in and allowlisted sees the landing. Nothing else. */
 function toRoot(request: Request, cookies: string[] = []): Response {
@@ -463,6 +495,8 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
   if (!oauth) return toRoot(request);
 
   const url = new URL(request.url);
+  // POST actions answer on their new paths and the old ones; the handlers below match the old.
+  const actionPath = request.method === "POST" ? (POST_ALIASES[url.pathname] ?? url.pathname) : url.pathname;
   const secure = secureRequest(request);
   const cookieHeader = request.headers.get("cookie");
   // Must match the URI registered on the Google client byte for byte.
@@ -567,6 +601,14 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     return notFound();
   }
 
+  // Old addresses (otto/mamoru-astro#35): behind the same gate as the new ones, never before it.
+  const moved = request.method === "GET" || request.method === "HEAD" ? legacyTarget(url.pathname) : null;
+  if (moved) {
+    const headers = opsHeaders();
+    headers.set("location", moved + url.search);
+    return new Response(null, { status: 301, headers });
+  }
+
   if (
     (url.pathname === "/ops/landing" || url.pathname === "/ops/landing/") &&
     request.method === "GET"
@@ -598,11 +640,11 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     if (fragment) {
       const headers = fragmentHeaders();
       for (const cookie of cookies) headers.append("set-cookie", cookie);
-      return new Response(fragmentBody(view), { status: view.status ?? 200, headers });
+      return new Response(fragmentBody(withSubnav(view)), { status: view.status ?? 200, headers });
     }
     const nonce = randomToken(16);
     return opsResponse(
-      renderDocument(view, { csrf: session.csrf, who: session.email, nonce }),
+      renderDocument(withSubnav(view), { csrf: session.csrf, who: session.email, nonce }),
       cookies,
       view.status ?? 200,
       nonce,
@@ -633,7 +675,7 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
   const form = request.method === "POST" ? await request.formData().catch(() => null) : null;
   const csrfOk = form ? await sameSecret(String(form.get("csrf") ?? ""), session.csrf) : false;
   /** After an action: the updated section in place for the router, a redirect with a flash otherwise. */
-  const settle = async (to: "/ops" | "/ops/mails" | "/ops/infra", outcome: Flash, view: () => Promise<SectionView>): Promise<Response> => {
+  const settle = async (to: "/ops" | "/ops/mails" | "/ops/money/funding", outcome: Flash, view: () => Promise<SectionView>): Promise<Response> => {
     if (!fragment) {
       if (!outcome) return new Response(null, { status: 303, headers: { location: to, "cache-control": "no-store" } });
       return redirectOps(request, outcome, [], to);
@@ -644,7 +686,7 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     return respond(withNotice(fresh, FLASH_COPY[outcome], outcome === "bad" ? "bad" : "plain"));
   };
   /** A wrong CSRF token never runs the action. The router gets a 403 with the section and the reason. */
-  const refuse = async (to: "/ops" | "/ops/mails" | "/ops/infra", view: () => Promise<SectionView>): Promise<Response> => {
+  const refuse = async (to: "/ops" | "/ops/mails" | "/ops/money/funding", view: () => Promise<SectionView>): Promise<Response> => {
     if (!fragment) return redirectOps(request, "bad", [], to);
     const base = await view();
     return respond({ ...(to === "/ops/mails" ? base : withNotice(base, FLASH_COPY.bad, "bad")), status: 403 });
@@ -655,13 +697,13 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     return toRoot(request, [clearSessionCookie(secure, url.hostname)]);
   }
 
-  if (url.pathname === "/ops/infra/refresh" && request.method === "POST") {
-    if (!csrfOk) return refuse("/ops/infra", () => infraView(false));
+  if (actionPath === "/ops/infra/refresh" && request.method === "POST") {
+    if (!csrfOk) return refuse("/ops/money/funding", () => infraView(false));
     const view = await infraView(true);
-    return settle("/ops/infra", "", async () => view);
+    return settle("/ops/money/funding", "", async () => view);
   }
 
-  if (sectionPath === "/ops/infra" && request.method === "GET") {
+  if (sectionPath === "/ops/money/funding" && request.method === "GET") {
     return flashed(await infraView(url.searchParams.get("fresh") === "1"));
   }
 
@@ -702,18 +744,20 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
 
   // ---- console views (otto/mamoru-astro#24): one model, read fresh per request, scoped by ?env= ----
   let consoleRefreshing = false;
+  let consoleSnapshot: InfraSnapshot | null = null;
   const consoleModel = async () => {
     const reading = await loadInfraReading(sources, false, undefined, behind);
     // The relayer figures come from the cached Infra reading: when it is being recomputed, the view says so.
     consoleRefreshing = Boolean(reading.refreshing);
+    consoleSnapshot = reading.snapshot;
     return loadConsole(env.MAMORU_DB, parseConsoleEnv(url.searchParams.get("env")), new Date(), reading.snapshot);
   };
   const consoleViews: Record<string, (m: Awaited<ReturnType<typeof consoleModel>>, now: Date) => SectionView> = {
     "/ops": pulseSection,
     "/ops/yield": yieldConsoleView,
-    "/ops/accounts": (m, now) => accountsView(m, now, { csrf: session.csrf }),
+    "/ops/accounts": (m, now) => withOutside(accountsView(m, now, { csrf: session.csrf }), consoleSnapshot),
     "/ops/engine": engineView,
-    "/ops/costs": costsView,
+    "/ops/money": costsView,
   };
   const consoleRoute = consoleViews[sectionPath];
   if (consoleRoute && request.method === "GET") {
@@ -819,11 +863,11 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     return { ...functionsSection({ states, history, csrf: session.csrf, ...over }), status };
   };
 
-  if (sectionPath === "/ops/functions" && request.method === "GET") {
+  if (sectionPath === "/ops/engine/functions" && request.method === "GET") {
     return flashed(await functionsView());
   }
 
-  if (url.pathname === "/ops/functions/apply" && request.method === "POST") {
+  if (actionPath === "/ops/functions/apply" && request.method === "POST") {
     if (!csrfOk || !form) return respond(await functionsView({ notice: { text: FLASH_COPY.bad, tone: "bad" } }, 403));
     const db = env.MAMORU_DB;
     if (!db) return respond(await functionsView({}, 503));
@@ -885,18 +929,18 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     return { ...settingsSection({ versions, templates, active: activeAll, csrf: session.csrf, draft, ...over }), status };
   };
 
-  if (sectionPath === "/ops/settings" && request.method === "GET") {
+  if (sectionPath === "/ops/engine/settings" && request.method === "GET") {
     return flashed(await settingsView());
   }
 
-  if ((url.pathname === "/ops/settings/apply" || url.pathname === "/ops/settings/rollback") && request.method === "POST") {
+  if ((actionPath === "/ops/settings/apply" || actionPath === "/ops/settings/rollback") && request.method === "POST") {
     if (!csrfOk || !form) return respond(await settingsView({ notice: { text: FLASH_COPY.bad, tone: "bad" } }, 403));
     const db = env.MAMORU_DB;
     if (!db) return respond(await settingsView({}, 503));
     const templates = withPresets((await listTemplates(db)) ?? []);
     let draft: SettingsPage["draft"];
     let rollbackOf: number | undefined;
-    if (url.pathname === "/ops/settings/rollback") {
+    if (actionPath === "/ops/settings/rollback") {
       const id = Number(form.get("id"));
       const target = Number.isSafeInteger(id) ? await versionById(db, id) : null;
       if (!target) return respond(await settingsView({ notice: { text: "That version does not exist or cannot be read.", tone: "bad" } }, 400));
@@ -1158,6 +1202,10 @@ const RETURN_TO = new Set([
   "https://mamoru.lol/ops/yield",
   "https://mamoru.lol/ops/mails",
   "https://mamoru.lol/ops/infra",
+  "https://mamoru.lol/ops/money",
+  "https://mamoru.lol/ops/money/funding",
+  "https://mamoru.lol/ops/engine/settings",
+  "https://mamoru.lol/ops/engine/functions",
   "https://mamoru.lol/ops/experiments",
   "https://mamoru.lol/ops/functions",
   "https://mamoru.lol/ops/lab",

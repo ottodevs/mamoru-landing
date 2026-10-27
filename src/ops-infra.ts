@@ -2,15 +2,11 @@
 
 import type { RelayerStatus } from "./cost";
 import type { InfraReading } from "./infra-cache";
-import type { AccountView, InfraSnapshot } from "./infra-snapshot";
+import type { InfraSnapshot } from "./infra-snapshot";
 import { fmtInt, fmtUsd } from "./metrics-math";
-import { outsideLine, summarizeOutside } from "./outside-base";
 import { countUp, csrfField, noticeHtml, pageHead, renderDocument, type SectionView, when } from "./ops";
 import { fundingSection } from "./ops-funding";
 import { esc } from "./text";
-
-/** Rows of the accounts ledger before the rest is summed in one line. */
-const ACCOUNT_ROWS = 25;
 
 const STATUS_WORDS: Record<RelayerStatus, string> = { ok: "Healthy", low: "Running low", empty: "Empty" };
 
@@ -29,7 +25,7 @@ function shortAddr(address: string): string {
 const count = countUp;
 
 function retryForm(csrf: string): string {
-  return `<form method="post" action="/ops/infra/refresh" data-ops-form>${csrfField(csrf)}<button type="submit">Retry</button></form>`;
+  return `<form method="post" action="/ops/money/funding/refresh" data-ops-form>${csrfField(csrf)}<button type="submit">Retry</button></form>`;
 }
 
 /** The line that says what the reader is looking at when it is not a clean, current reading. */
@@ -108,74 +104,7 @@ function costSection(s: InfraSnapshot): string {
   </section>`;
 }
 
-/** The Ethereum holdings of one account: kept apart from the Base columns, which are the working value. */
-function outsideCell(row: AccountView): string {
-  const o = row.outside;
-  if (!o) return "not read";
-  if (o.eth === 0 && o.usdc === 0) return "—";
-  const parts: string[] = [];
-  if (o.eth > 0) parts.push(`${fmtEth(o.eth)} ETH`);
-  if (o.usdc > 0) parts.push(`${fmtUsd(o.usdc)} USDC`);
-  return `${parts.join(" + ")}${o.usd === null ? "" : ` · ${fmtUsd(o.usd)}`}`;
-}
-
-function accountRow(row: AccountView): string {
-  const cell = (text: string, cls = "") =>
-    row.unread ? `<td class="unread ${cls}">${esc(text)}</td>` : `<td${cls ? ` class="${cls}"` : ""}>${esc(text)}</td>`;
-  return `<tr>
-    <td class="a-key wide-only">${esc(row.accountKey)}</td>
-    <td class="a-addr"><a href="${esc(row.basescanUrl)}">${esc(shortAddr(row.address))}</a>${row.unread ? ` <span class="soft">not fully read</span>` : ""}</td>
-    ${cell(fmtEth(row.ethBalance), "wide-only")}
-    ${cell(fmtUsd(row.usdcIdle))}
-    ${cell(fmtUsd(row.lpUsd))}
-    ${cell(row.positions ? `${row.inRange} of ${row.positions}` : "—")}
-    <td class="a-out">${esc(outsideCell(row))}</td>
-  </tr>`;
-}
-
-function accountsSection(s: InfraSnapshot): string {
-  const a = s.accounts;
-  if (!a) {
-    return `<section class="sec full" style="--s:0ms"><div class="sec-head"><h2>Accounts and value</h2></div><p class="soft sum">The accounts database is not connected.</p></section>`;
-  }
-  // Funded and unread accounts first, by value; the ones that never held anything are only counted.
-  const value = (r: AccountView) => r.usdcIdle + r.lpUsd;
-  const listed = a.rows.filter((r) => r.unread || r.ethBalance > 0 || value(r) > 0 || (r.outside && (r.outside.eth > 0 || r.outside.usdc > 0))).sort((x, y) => value(y) - value(x));
-  const empty = a.rows.length - listed.length;
-  // Unread accounts are always shown; beyond that the ledger stops at the largest ones.
-  const shown = listed.filter((r, i) => r.unread || i < ACCOUNT_ROWS);
-  const folded = listed.length - shown.length;
-  const foldedUsd = listed.filter((r) => !shown.includes(r)).reduce((sum, r) => sum + value(r), 0);
-  const unread = a.unreadAccounts ?? 0;
-  const table = listed.length
-    ? `<table class="accts">
-        <thead><tr><th class="a-key wide-only">Account</th><th class="a-addr">Address</th><th class="wide-only">Gas, ETH</th><th>Idle USDC</th><th>In positions</th><th>In range</th><th>On Ethereum</th></tr></thead>
-        <tbody>${shown.map(accountRow).join("")}</tbody>
-      </table>`
-    : "";
-  const tail = a.error
-    ? ""
-    : listed.length
-      ? `${folded ? `<p class="soft sum">${fmtInt(folded)} more funded ${folded === 1 ? "account holds" : "accounts hold"} ${esc(fmtUsd(foldedUsd))} between them.</p>` : ""}${
-          empty ? `<p class="soft sum">${fmtInt(empty)} more ${empty === 1 ? "account has" : "accounts have"} never been funded.</p>` : ""
-        }`
-      : `<p class="sum">${a.rows.length ? "No funded accounts yet." : "No accounts yet."}</p>`;
-  const totals = a.error
-    ? `<p class="soft sum">${esc(a.error)}</p>`
-    : `<p class="sum">${unread ? "At least " : ""}${esc(fmtUsd(a.tvlUsd))} held: ${esc(fmtUsd(a.lpUsd))} in positions and ${esc(fmtUsd(a.idleUsdcUsd))} idle USDC. Gas reserves of ${esc(fmtEth(a.gasReservesEth))} ETH sit in the Safes, apart from that.</p><p class="sum soft">Outside Base (not working, not in the figure above): ${esc(outsideLine(summarizeOutside(a.rows), fmtUsd))}.</p>${
-        unread
-          ? `<p class="sum status-low">Some balances could not be read: ${fmtInt(unread)} of ${fmtInt(a.rows.length)} ${a.rows.length === 1 ? "account" : "accounts"}. They are listed and marked; none were counted as zero.</p>`
-          : ""
-      }`;
-  return `<section class="sec full" style="--s:0ms">
-    <div class="sec-head"><h2>Accounts and value</h2><p class="asof">${fmtInt(a.totalUsers)} users · ${fmtInt(a.totalAccounts)} accounts · ${fmtInt(a.last7d)} new in 7 days</p></div>
-    ${totals}
-    ${table}
-    ${tail}
-  </section>`;
-}
-
-/** Infra as a section body: the relayer figures, then Funding (src/ops-funding.ts), the cost ledger and the accounts. */
+/** Infra as a section body: the relayer figures, then Funding (src/ops-funding.ts), and the cost ledger. The per-account value table moved to Accounts (Pulse and Accounts already show it); the Ethereum column lives in src/ops-outside.ts. */
 export function infraSection(reading: InfraReading, csrf: string): SectionView {
   const s = reading.snapshot;
   const notice = noticeFor(reading);
@@ -183,13 +112,12 @@ export function infraSection(reading: InfraReading, csrf: string): SectionView {
     section: "infra",
     title: "Funding",
     ...(reading.refreshing ? { refreshing: true } : {}),
-    html: `${pageHead({ title: "Funding", asOf: s.asOf, refresh: { action: "/ops/infra/refresh", csrf } })}
+    html: `${pageHead({ title: "Funding", asOf: s.asOf, refresh: { action: "/ops/money/funding/refresh", csrf } })}
     ${notice ? noticeHtml(notice, { action: retryForm(csrf) }) : ""}
     ${figures(s)}
     <div class="cols">
       ${fundingSection(s)}
       ${costSection(s)}
-      ${accountsSection(s)}
     </div>
     <p class="quiet-line">RPC usage and automatic top-up alerts are not live yet.</p>`,
   };

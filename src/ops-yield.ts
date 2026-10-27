@@ -132,7 +132,7 @@ function accountsTable(o: YieldOverview): string {
 
 function emptyBody(o: YieldOverview): string {
   if (o.missing0009) return `<p class="empty">Migration 0009 is not applied yet; nothing can be shown.</p>`;
-  if (!o.flagOn) return `<p class="empty">The yield ledger is off. <a href="/ops/functions">Turn it on in Functions</a>.</p>`;
+  if (!o.flagOn) return `<p class="empty">The yield ledger is off. <a href="/ops/engine/functions">Turn it on in Functions</a>.</p>`;
   return `<p class="empty">Waiting for the first snapshot. The Worker stores one every 10 minutes.</p>`;
 }
 

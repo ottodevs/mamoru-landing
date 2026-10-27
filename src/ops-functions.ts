@@ -1,5 +1,5 @@
 /**
- * Renders /ops/functions (otto/mamoru-astro#20): the runtime flags of packages/policy/src/ops-flags.ts
+ * Renders /ops/engine/functions (otto/mamoru-astro#20): the runtime flags of packages/policy/src/ops-flags.ts
  * (ops-flags-model.ts's local copy), one row per flag in the registry, a form to flip each one, a confirm
  * step for turning one on (ops-flags-confirm.ts, same pattern as engine settings' spec 006), and the
  * append-only history. Pure string building; the worker does the D1 reads and writes.
@@ -23,7 +23,7 @@ function lastChange(row: FlagChangeRow | undefined): string {
 function toggleForm(csrf: string, flag: OpsFlagName, enabled: boolean): string {
   const next = enabled ? "0" : "1";
   const label = enabled ? "Turn off" : "Turn on";
-  return `<form method="post" action="/ops/functions/apply" class="fn-toggle" data-ops-form data-ops-no-retry>
+  return `<form method="post" action="/ops/engine/functions/apply" class="fn-toggle" data-ops-form data-ops-no-retry>
     ${csrfField(csrf)}
     <input type="hidden" name="flag" value="${esc(flag)}" />
     <input type="hidden" name="enabled" value="${next}" />
@@ -67,13 +67,13 @@ function confirmBlock(csrf: string, confirm: NonNullable<FunctionsPage["confirm"
   return `<section aria-labelledby="fn-confirm" class="set-confirm"><h2 id="fn-confirm">Confirm this change</h2>
   <p>Turning ${esc(def.label)} on:</p>
   <ul><li>${esc(def.description)}</li></ul>
-  <form method="post" action="/ops/functions/apply" data-ops-form data-ops-no-retry>
+  <form method="post" action="/ops/engine/functions/apply" data-ops-form data-ops-no-retry>
     ${csrfField(csrf)}
     <input type="hidden" name="flag" value="${esc(confirm.flag)}" />
     <input type="hidden" name="enabled" value="1" />
     <input type="hidden" name="reason" value="${esc(confirm.reason)}" />
     <input type="hidden" name="confirm_token" value="${esc(confirm.token)}" />
-    <button type="submit">Yes, turn it on</button> <a href="/ops/functions">Cancel</a>
+    <button type="submit">Yes, turn it on</button> <a href="/ops/engine/functions">Cancel</a>
   </form></section>`;
 }
 

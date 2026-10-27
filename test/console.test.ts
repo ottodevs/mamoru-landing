@@ -96,7 +96,7 @@ async function opsEnv(db: D1Db | undefined, ethUsd: number | null = 2000) {
 const get = (path: string, cookie = "", fragment = false) =>
   new Request(`https://mamoru.lol${path}`, { headers: { ...(cookie ? { cookie } : {}), ...(fragment ? { "x-ops-fragment": "1" } : {}) } });
 
-const PATHS = ["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more"];
+const PATHS = ["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/money", "/ops/engine/settings", "/ops/engine/functions", "/ops/money/funding", "/ops/more"];
 const NOW = new Date("2026-10-18T10:00:00Z");
 
 describe("console gate (otto/mamoru-astro#24)", () => {
@@ -146,7 +146,7 @@ describe("console views", () => {
 
   test("Costs: RPC hours from the operator metrics, relayer from its balance, the top-up link kept", async () => {
     const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "operator"]));
-    const html = await (await worker.fetch(get("/ops/costs", cookie), env)).text();
+    const html = await (await worker.fetch(get("/ops/money", cookie), env)).text();
     expect(html).toContain("RPC compute units per hour");
     expect(html).toContain("0.0036 ETH");
     expect(html).toContain('href="/ops/infra"');
@@ -177,7 +177,7 @@ describe("console honesty (review r1, PR #13)", () => {
     expect(m.accounts[0]!.apr).toBeNull();
     expect(m.totals.apr).toBeNull();
     const { env, cookie } = await opsEnv(memoryDb(["yield", "seed"]));
-    const costs = await (await worker.fetch(get("/ops/costs", cookie), env)).text();
+    const costs = await (await worker.fetch(get("/ops/money", cookie), env)).text();
     expect(costs).toContain("Needs a fee APR");
     const y = await (await worker.fetch(get("/ops/yield", cookie), env)).text();
     expect(y).toContain("engine data not connected yet");

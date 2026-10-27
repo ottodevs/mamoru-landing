@@ -38,9 +38,10 @@ export function opsRouterLogic() {
   var SECTIONS = [
     { id: "overview", path: "/ops" },
     { id: "mails", path: "/ops/mails" },
-    { id: "infra", path: "/ops/infra" },
+    { id: "infra", path: "/ops/money/funding" },
     { id: "experiments", path: "/ops/experiments" },
-    { id: "settings", path: "/ops/settings" },
+    { id: "settings", path: "/ops/engine/settings" },
+    { id: "functions", path: "/ops/engine/functions" },
     { id: "archive", path: "/ops/archive" },
     { id: "lab", path: "/ops/lab" },
   ];

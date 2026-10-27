@@ -1,5 +1,5 @@
 /**
- * Renders /ops/settings (spec 006, otto/mamoru#147; redesign otto/mamoru-astro#22): what each environment runs, said
+ * Renders /ops/engine/settings (spec 006, otto/mamoru#147; redesign otto/mamoru-astro#22): what each environment runs, said
  * in sentences; a form that starts from what runs, one group per decision, every value in the unit a person thinks
  * in (percent, whole USDC, times its gas) on a scale that shows its bounds, the recommended value and what runs now;
  * a confirm step with Now and After for risky changes; and the append-only history as a list of what each version
@@ -84,7 +84,7 @@ function envNow(env: Env, inEffect: InEffect): string {
     ? `<p class="set-canary">Canary v${c.id} · ${esc(c.template)} on ${c.accountKeys!.length} account${c.accountKeys!.length === 1 ? "" : "s"}: ${esc(changesOf(s, c.settings).map(([k, , after]) => `${k} ${after}`).join("; ") || "same as the rest")}.</p>`
     : "";
   return `<div class="set-env">
-    <h3><a href="/ops/settings?env=${env}">${env}</a></h3>
+    <h3><a href="/ops/engine/settings?env=${env}">${env}</a></h3>
     <dl>${lines}</dl>
     ${canary}${version}
   </div>`;
@@ -182,7 +182,7 @@ type Draft = { env: Env; template: string; settings: EngineSettings; canary: str
 function presets(templates: readonly TemplateRow[], draft: Draft, running: VersionRow | null): string {
   const link = (label: string, sub: string, href: string, current: boolean) =>
     `<a class="set-pre" href="${esc(href)}"${current ? ' aria-current="true"' : ""}><b>${esc(label)}</b><span>${esc(sub)}</span></a>`;
-  const base = `/ops/settings?env=${draft.env}`;
+  const base = `/ops/engine/settings?env=${draft.env}`;
   const items = [
     link("What runs now", running ? `v${running.id}, ${running.template}` : "code defaults", base, !!running && draft.template === running.template && draft.reason === ""),
     ...templates.map((t) =>
@@ -196,7 +196,7 @@ function editForm(csrf: string, templates: readonly TemplateRow[], draft: Draft,
   const s = draft.settings;
   const running = runningRow?.settings ?? DEFAULT_SETTINGS;
   const r = RECOMMENDED_SETTINGS;
-  const envLinks = ENVS.map((e) => `<a href="/ops/settings?env=${e}"${e === draft.env ? ' aria-current="page"' : ""}>${e}</a>`).join("");
+  const envLinks = ENVS.map((e) => `<a href="/ops/engine/settings?env=${e}"${e === draft.env ? ' aria-current="page"' : ""}>${e}</a>`).join("");
 
   const cap = group(
     "cap",
@@ -283,7 +283,7 @@ function editForm(csrf: string, templates: readonly TemplateRow[], draft: Draft,
   <div class="sec-head"><h2 id="set-edit">Change ${draft.env}</h2><nav class="set-seg" aria-label="Environment">${envLinks}</nav></div>
   <p class="set-lead soft">Start from what runs, the recommended set or a template. Only what you change moves.</p>
   ${presets(templates, draft, runningRow)}
-  <form method="post" action="/ops/settings/apply" class="set-form" data-ops-form data-ops-no-retry data-env="${draft.env}">
+  <form method="post" action="/ops/engine/settings/apply" class="set-form" data-ops-form data-ops-no-retry data-env="${draft.env}">
     ${csrfField(csrf)}
     <input type="hidden" name="env" value="${draft.env}" />
     <input type="hidden" name="template" value="${esc(draft.template)}" />
@@ -368,7 +368,7 @@ function historyBlock(csrf: string, versions: readonly VersionRow[]): string {
           ${what}
           <p class="set-h-meta">${esc(v.template)}${v.rollbackOf ? `, rollback to v${v.rollbackOf}` : ""} · ${esc(maskEmail(v.author))}, ${esc(when(v.createdAt))}</p>
         </div>
-        <details class="set-rb"><summary>Roll back to v${v.id}</summary><form method="post" action="/ops/settings/rollback" data-ops-form data-ops-no-retry>${csrfField(csrf)}<input type="hidden" name="id" value="${v.id}" /><span class="set-in wide"><input name="reason" required maxlength="500" placeholder="why" aria-label="Why roll back to v${v.id}" /></span><button class="link" type="submit">Roll back</button></form></details>
+        <details class="set-rb"><summary>Roll back to v${v.id}</summary><form method="post" action="/ops/engine/settings/rollback" data-ops-form data-ops-no-retry>${csrfField(csrf)}<input type="hidden" name="id" value="${v.id}" /><span class="set-in wide"><input name="reason" required maxlength="500" placeholder="why" aria-label="Why roll back to v${v.id}" /></span><button class="link" type="submit">Roll back</button></form></details>
       </li>`;
     })
     .join("");
@@ -404,7 +404,7 @@ export function settingsSection(p: SettingsPage): SectionView {
       <p>To ${esc(c.env)}${c.canary ? " (canary)" : ""}. What it allows:</p>
       <ul class="set-risks">${p.confirm.risks.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
       ${diffTable(p.active[c.env].wide?.settings ?? DEFAULT_SETTINGS, c.settings)}
-      <form method="post" action="/ops/settings/apply" class="set-go" data-ops-form data-ops-no-retry>${csrfField(p.csrf)}${hiddenFields(c.env, c.template, c.settings, c.canary, c.reason)}<input type="hidden" name="confirm_token" value="${esc(p.confirm.token)}" />${p.confirm.rollbackOf ? `<input type="hidden" name="rollback_of" value="${p.confirm.rollbackOf}" />` : ""}<button type="submit">Yes, apply it</button> <a href="/ops/settings?env=${c.env}">Cancel</a></form></section>`;
+      <form method="post" action="/ops/engine/settings/apply" class="set-go" data-ops-form data-ops-no-retry>${csrfField(p.csrf)}${hiddenFields(c.env, c.template, c.settings, c.canary, c.reason)}<input type="hidden" name="confirm_token" value="${esc(p.confirm.token)}" />${p.confirm.rollbackOf ? `<input type="hidden" name="rollback_of" value="${p.confirm.rollbackOf}" />` : ""}<button type="submit">Yes, apply it</button> <a href="/ops/engine/settings?env=${c.env}">Cancel</a></form></section>`;
   }
   return {
     section: "settings",

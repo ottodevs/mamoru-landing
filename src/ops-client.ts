@@ -448,7 +448,7 @@ export function opsClientScript(nonce: string): string {
     function reload() {
       if (refreshed) return;
       refreshed = true;
-      Shell.refresh("/ops/infra?fresh=1");
+      Shell.refresh("/ops/money/funding?fresh=1");
     }
     var actions = {
       detect: detect,
@@ -1702,7 +1702,7 @@ export function opsClientScript(nonce: string): string {
         }
         setLine(s.text + (anySent ? " The balances above refresh in a moment." : ""), s.tone);
         paint();
-        if (anySent) timers.push(setTimeout(function () { if (alive) Shell.refresh("/ops/infra?fresh=1"); }, 3500));
+        if (anySent) timers.push(setTimeout(function () { if (alive) Shell.refresh("/ops/money/funding?fresh=1"); }, 3500));
       }
       function run() {
         var plan = planned();
@@ -1933,7 +1933,9 @@ export function opsClientScript(nonce: string): string {
   function markNav(section) {
     var links = document.querySelectorAll(".ops-nav a[data-section]");
     for (var i = 0; i < links.length; i++) {
-      if (links[i].getAttribute("data-section") === section) links[i].setAttribute("aria-current", "page");
+      var own = links[i].getAttribute("data-section");
+      var also = " " + (links[i].getAttribute("data-also") || "") + " ";
+      if (own === section || also.indexOf(" " + section + " ") !== -1) links[i].setAttribute("aria-current", "page");
       else links[i].removeAttribute("aria-current");
     }
   }

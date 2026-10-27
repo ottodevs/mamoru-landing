@@ -16,8 +16,9 @@ import {
   valuePosition,
 } from "../src/uniswap-math";
 import { CBBTC_ADDRESS as CBBTC, USDC_ADDRESS, WETH_ADDRESS } from "../src/chain-addresses";
-import { OPS_SECTIONS, renderNav, sealSession } from "../src/ops";
+import { OPS_SECTIONS, renderNav, renderSubnav, renderTabs, sealSession } from "../src/ops";
 import { noticeFor, renderInfra } from "../src/ops-infra";
+import { outsideSheet, withOutside } from "../src/ops-outside";
 import { chooseReading, type InfraReading, isComplete, loadInfraReading } from "../src/infra-cache";
 import { captureDaily, PARTIAL_MARK, rowFromSnapshot, snapshotHasChain, upsertSql } from "../src/metrics-store";
 import type { D1Db, D1PreparedStatement, AccountRow } from "../src/d1-infra";
@@ -178,25 +179,43 @@ describe("uniswap-math.ts", () => {
 });
 
 describe("ops.ts nav", () => {
-  test("OPS_SECTIONS: the five console views first (otto/mamoru-astro#24), then Grow, Control and More", () => {
-    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["overview", "yield", "accounts", "engine", "costs", "mails", "experiments", "lab", "settings", "functions", "infra", "archive", "preview"]);
-    expect(OPS_SECTIONS.filter((s) => s.tab).map((s) => s.id)).toEqual(["overview", "yield", "accounts", "engine", "costs"]);
+  test("OPS_SECTIONS: five primary entries (otto/mamoru-astro#35), then Grow and More", () => {
+    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["overview", "yield", "accounts", "engine", "money", "mails", "experiments", "lab", "archive", "preview"]);
+    expect(OPS_SECTIONS.filter((s) => s.tab).map((s) => s.id)).toEqual(["overview", "yield", "accounts", "engine", "money"]);
+    expect(OPS_SECTIONS.filter((s) => s.tab).map((s) => s.tab)).toEqual(["Pulse", "Yield", "Accounts", "Engine", "Money"]);
     expect(OPS_SECTIONS.find((s) => s.id === "overview")?.href).toBe("/ops");
     expect(OPS_SECTIONS.find((s) => s.id === "yield")?.href).toBe("/ops/yield");
     expect(OPS_SECTIONS.find((s) => s.id === "mails")?.href).toBe("/ops/mails");
-    expect(OPS_SECTIONS.find((s) => s.id === "infra")?.href).toBe("/ops/infra");
-    expect(OPS_SECTIONS.find((s) => s.id === "functions")?.href).toBe("/ops/functions");
+    expect(OPS_SECTIONS.find((s) => s.id === "engine")?.href).toBe("/ops/engine");
+    expect(OPS_SECTIONS.find((s) => s.id === "money")?.href).toBe("/ops/money");
+    expect(OPS_SECTIONS.some((s) => s.group === "Control")).toBe(false);
   });
 
   test("renderNav marks the active section, links every section, and sends Preview out", () => {
-    const nav = renderNav("infra");
-    expect(nav).toContain('<a class="minor" href="/ops/infra" data-section="infra" aria-current="page">Funding</a>');
-    expect(nav).toContain('<a href="/ops" data-section="overview">Pulse</a>');
+    const nav = renderNav("overview");
+    expect(nav).toContain('<a href="/ops" data-section="overview" aria-current="page">Pulse</a>');
     expect(nav).toContain('<a class="minor" href="/ops/mails" data-section="mails">Waitlist and mail</a>');
-    expect(nav).toContain('<span class="c-group">Control</span>');
+    expect(nav).not.toContain("Control");
     expect(nav.match(/aria-current/g)?.length).toBe(1);
     // Preview is the staged site: it leaves the console, so the router must not take it.
     expect(nav).toMatch(/<a class="minor out" href="\/ops\/preview" target="_blank" rel="noopener" data-ops-full/);
+  });
+
+  test("pages under Engine and Money light their parent entry and show the sub-navigation", () => {
+    for (const [page, parent] of [["settings", "engine"], ["functions", "engine"], ["engine", "engine"], ["infra", "money"], ["costs", "money"]] as const) {
+      const nav = renderNav(page);
+      expect(nav.match(/aria-current/g)?.length).toBe(1);
+      expect(nav).toMatch(new RegExp(`data-section="${parent}"[^>]*aria-current="page"`));
+      expect(renderTabs(page)).toMatch(new RegExp(`data-section="${parent}"[^>]*aria-current="page"`));
+      const sub = renderSubnav(page);
+      expect(sub).toContain('class="ops-subnav"');
+      expect(sub.match(/aria-current="page"/g)?.length).toBe(1);
+    }
+    expect(renderSubnav("overview")).toBe("");
+    expect(renderTabs("infra").match(/<a /g)?.length).toBe(6);
+    expect(renderSubnav("engine")).toContain('href="/ops/engine/settings"');
+    expect(renderSubnav("engine")).toContain('href="/ops/engine/functions"');
+    expect(renderSubnav("costs")).toContain('href="/ops/money/funding"');
   });
 });
 
@@ -629,9 +648,10 @@ describe("ops-infra.ts render", () => {
     expect(html).toContain("Healthy");
     expect(html).toContain("More accounts at today");
     expect(html).toContain("The reserve is not burned.");
-    expect(html).toContain('data-section="infra" aria-current="page">Funding</a>');
-    expect(html).toContain("39 users");
-    expect(html).toContain("1 more account has never been funded.");
+    expect(html).toMatch(/data-section="money"[^>]*aria-current="page"/);
+    // otto/mamoru-astro#35: the per-account value table is no longer on Funding (Pulse and Accounts hold it).
+    expect(html).not.toContain("Accounts and value");
+    expect(html).not.toContain('class="accts"');
     expect(html).not.toContain('class="notice"');
     expect(html).not.toContain("Coming next");
     expect(html).not.toContain(">The list<");
@@ -666,9 +686,17 @@ describe("ops-infra.ts render", () => {
     };
     const html = render({ snapshot: partial });
     expect(html).toContain("Some balances could not be read: 1 of 3 accounts.");
-    expect(html).toContain("not fully read");
-    expect(html).toContain("At least $50.00 held");
-    expect(html).toContain("none were counted as zero");
+  });
+
+  test("Ethereum holdings moved to Accounts (otto/mamoru-astro#35): listed apart, unread never counted as zero", () => {
+    const rows = HEALTHY.accounts!.rows.map((r, i) => (i === 0 ? { ...r, outside: undefined } : r));
+    const sheet = outsideSheet({ ...HEALTHY, accounts: { ...HEALTHY.accounts!, rows } });
+    expect(sheet).toContain("Held on Ethereum");
+    expect(sheet).toContain("not read on Ethereum. None counted as zero.");
+    expect(outsideSheet({ ...HEALTHY, accounts: null })).toBe("");
+    const view = withOutside({ section: "accounts", title: "Accounts", html: '<div class="c-view"><p>x</p><template id="c-acct-a">t</template></div>' }, HEALTHY);
+    expect(view.html.indexOf("Held on Ethereum")).toBeGreaterThan(0);
+    expect(view.html.indexOf("Held on Ethereum")).toBeLessThan(view.html.indexOf("<template"));
   });
 
   test("never read: the bare unreachable state, and the top-up widget still works", () => {
@@ -684,24 +712,21 @@ describe("ops-infra.ts render", () => {
     expect(markup).not.toContain("[object Object]");
   });
 
-  test("a long ledger stops at the largest accounts and sums the rest; unread ones are never folded away", () => {
+  test("a long Ethereum list stops at the largest holders and counts the rest", () => {
     const rows = Array.from({ length: 40 }, (_, i) => ({
       accountKey: `k${i}`,
       address: `0x${String(i).padStart(40, "0")}`,
       basescanUrl: "#",
-      ethBalance: 0.0005,
-      usdcIdle: 100 - i,
+      ethBalance: 0,
+      usdcIdle: 0,
       lpUsd: 0,
       positions: 0,
       inRange: 0,
-      ...(i === 39 ? { unread: true } : {}),
+      outside: { eth: 0, usdc: 100 - i, usd: 100 - i },
     }));
-    const html = render({ snapshot: { ...HEALTHY, accounts: { ...HEALTHY.accounts!, rows, unreadAccounts: 1 } } });
-    expect(html.match(/<td class="a-key wide-only">/g)?.length).toBe(26);
-    expect(html).toContain(">k39<");
-    expect(html).not.toContain(">k30<");
-    // k25..k38 are folded: 14 accounts holding 75 + 74 + ... + 62.
-    expect(html).toContain("14 more funded accounts hold $959.00 between them.");
+    const sheet = outsideSheet({ ...HEALTHY, accounts: { ...HEALTHY.accounts!, rows } });
+    expect(sheet.match(/<tr><td>k/g)?.length).toBe(25);
+    expect(sheet).toContain("15 more accounts hold ETH or USDC on Ethereum.");
   });
 
   test("the page never carries an RPC URL", () => {

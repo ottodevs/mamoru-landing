@@ -1,6 +1,6 @@
 # Mamoru landing and ops console
 
-Public repo `ottodevs/mamoru-landing` (GitHub is the only push remote). Cloudflare Worker `mamoru-lol`: the landing at mamoru.lol, the deck, and the Google-gated ops console at `/ops` (Overview, Mails, Infra, Experiments, Archive, Preview). Read `README.md` for channels and files.
+Public repo `ottodevs/mamoru-landing` (GitHub is the only push remote). Cloudflare Worker `mamoru-lol`: the landing at mamoru.lol, the deck, and the Google-gated ops console at `/ops` (Pulse, Yield, Accounts, Engine, Money, then Mails, Experiments, Lab, Archive, Preview). Read `README.md` for channels and files.
 
 ## Operating flow
 

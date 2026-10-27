@@ -74,7 +74,7 @@ describe("archive manifest", () => {
     expect(archiveTarget("/ops/archive/assets/mark-two-stones.png")).toEqual({ kind: "asset", asset: "/ops/archive/assets/mark-two-stones.png" });
     expect(archiveTarget("/ops/archive/assets/../worker.js")).toEqual({ kind: "missing" });
     expect(archiveTarget("/ops/archive/nope")).toEqual({ kind: "missing" });
-    expect(archiveTarget("/ops/infra")).toBeNull();
+    expect(archiveTarget("/ops/money/funding")).toBeNull();
   });
 });
 
