@@ -368,6 +368,8 @@ describe("lab-logic.ts: \"Preguntar al Lab\" (otto/mamoru-astro#30, spec 008 pha
   test("askFailedText/askSendErrorText: a queued turn that later failed reads differently from a request the server never queued", () => {
     expect(LAB.askFailedText("LAB_JOB_TIMEOUT")).toContain("se agotó el tiempo del turno");
     expect(LAB.askFailedText("LAB_RUN_MISSING")).toContain("no llegó a guardarse");
+    expect(LAB.askFailedText("LAB_AGENT_BUDGET")).toContain("límite diario de preguntas");
+    expect(LAB.askFailedText("LAB_ANSWER_UNCITED")).toContain("no se muestra");
     expect(LAB.askSendErrorText("LAB_JOB_LIMIT_DAILY")).toBe("Has llegado a 20 preguntas hoy");
     expect(LAB.askSendErrorText("LAB_ASK_INVALID")).toContain("600 caracteres");
     expect(LAB.askSendErrorText("LAB_THREAD_NOT_FOUND")).toContain("hilo");
