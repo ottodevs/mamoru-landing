@@ -12,6 +12,8 @@
  *                         written in metrics_daily (one row per UTC day) and
  *                         in exp_events (see src/exp-store.ts), both additive.
  *   BASE_RPC_URL          secret, optional. Tried before the public Base RPCs.
+ *   ETHEREUM_RPC_URLS     secret, optional, comma separated. Tried before the public Ethereum
+ *                         RPCs for the outside-Base holdings read (otto/mamoru-astro#31).
  *   EXP_VISITOR_SECRET    secret. Signs the experiment visitor-id cookie and
  *                         derives the beacon nonce (src/exp-visitor.ts,
  *                         src/exp-events.ts). Without it no visitor is ever
@@ -71,8 +73,11 @@ import {
   type SectionView,
   sessionCookie,
   type Flash,
+  withSubnav,
 } from "./ops";
 import { infraSection } from "./ops-infra";
+import { withOutside } from "./ops-outside";
+import type { InfraSnapshot } from "./infra-snapshot";
 import { loadInfraReading } from "./infra-cache";
 import { captureDaily } from "./metrics-store";
 import type { D1Db } from "./d1-infra";
@@ -81,10 +86,10 @@ import { applyExperiments } from "./exp-rewrite";
 import { handleExpEvent, recordWaitlistSubmit } from "./exp-events";
 import { loadExperimentReports } from "./exp-report";
 import { experimentsSection } from "./ops-experiments";
-import { settingsSection, type SettingsPage } from "./ops-settings";
+import { RECOMMENDED_TEMPLATE, settingsSection, type SettingsPage } from "./ops-settings";
 import { checkConfirmToken, issueConfirmToken, risksOf } from "./engine-settings-confirm";
-import { inEffect, appendVersion, maxIdOf, SettingsConflict, SettingsOutcomeUnknown, listTemplates, listVersions, versionById, type Env as SettingsEnv } from "./engine-settings-store";
-import { DEFAULT_SETTINGS, canonicalJson, settingsFromForm, validateSettings } from "./engine-settings-model";
+import { inEffect, appendVersion, maxIdOf, SettingsConflict, SettingsOutcomeUnknown, listTemplates, listVersions, versionById, type Env as SettingsEnv, type TemplateRow } from "./engine-settings-store";
+import { DEFAULT_SETTINGS, RECOMMENDED_SETTINGS, canonicalJson, settingsFromForm, validateSettings } from "./engine-settings-model";
 import { functionsSection, type FunctionsPage } from "./ops-functions";
 import { isOpsFlagName, OPS_FLAGS, OPS_FLAG_NAMES } from "./ops-flags-model";
 import { checkFlagConfirmToken, issueFlagConfirmToken } from "./ops-flags-confirm";
@@ -105,7 +110,7 @@ import { appendCapOverride, CapConflict, CapOutcomeUnknown, CapTableMissing, new
 import { checkCapConfirmToken, issueCapConfirmToken } from "./account-caps-confirm";
 import { archiveTarget } from "./archive";
 import { archiveBar, archiveSection } from "./ops-archive";
-import { handleLabCatalog, handleLabCreateJob, handleLabJobStatus, handleLabRun, handleLabRuns, labSection } from "./ops-lab";
+import { handleLabAsk, handleLabCatalog, handleLabCreateJob, handleLabJobStatus, handleLabRun, handleLabRuns, handleLabThread, handleLabThreads, labSection } from "./ops-lab";
 import { handleLabRunner } from "./lab-runner";
 import {
   isPreviewPath,
@@ -126,6 +131,7 @@ export interface Env {
   LOOPS_TRANSACTIONAL_ID?: string;
   MAMORU_DB?: D1Db;
   BASE_RPC_URL?: string;
+  ETHEREUM_RPC_URLS?: string;
   EXP_VISITOR_SECRET?: string;
   // Staging preview channel (/ops/preview). See src/staging-preview.ts.
   DEPLOY_CHANNEL?: string;
@@ -393,7 +399,36 @@ function withNotice(view: SectionView, text: string, tone: "plain" | "bad" = "pl
 }
 
 /** Sections a stranger is sent to Google from, and returned to after signing in. */
-const SECTION_PATHS = new Set(["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/functions", "/ops/archive", "/ops/lab"]);
+const SECTION_PATHS = new Set(["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/functions", "/ops/archive", "/ops/lab", "/ops/money", "/ops/money/funding", "/ops/engine/settings", "/ops/engine/functions"]);
+
+/**
+ * otto/mamoru-astro#35: Engine (Status, Settings, Functions) and Money (Costs, Funding) replaced five sections.
+ * Old GET paths, and anything under them, answer with a redirect to the new place, query kept. POST actions
+ * keep answering on their old paths too (POST_ALIASES), so a form rendered before a deploy still works.
+ */
+const LEGACY_PREFIXES: readonly (readonly [string, string])[] = [
+  ["/ops/settings", "/ops/engine/settings"],
+  ["/ops/functions", "/ops/engine/functions"],
+  ["/ops/costs", "/ops/money"],
+  ["/ops/infra", "/ops/money/funding"],
+];
+
+export function legacyTarget(pathname: string): string | null {
+  const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  for (const [from, to] of LEGACY_PREFIXES) {
+    if (path === from) return to;
+    if (path.startsWith(`${from}/`)) return to + path.slice(from.length);
+  }
+  return null;
+}
+
+/** The POST endpoints under their new paths; the handlers below match on the old ones. */
+const POST_ALIASES: Readonly<Record<string, string>> = {
+  "/ops/engine/settings/apply": "/ops/settings/apply",
+  "/ops/engine/settings/rollback": "/ops/settings/rollback",
+  "/ops/engine/functions/apply": "/ops/functions/apply",
+  "/ops/money/funding/refresh": "/ops/infra/refresh",
+};
 
 /** Anyone who is not signed in and allowlisted sees the landing. Nothing else. */
 function toRoot(request: Request, cookies: string[] = []): Response {
@@ -460,6 +495,8 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
   if (!oauth) return toRoot(request);
 
   const url = new URL(request.url);
+  // POST actions answer on their new paths and the old ones; the handlers below match the old.
+  const actionPath = request.method === "POST" ? (POST_ALIASES[url.pathname] ?? url.pathname) : url.pathname;
   const secure = secureRequest(request);
   const cookieHeader = request.headers.get("cookie");
   // Must match the URI registered on the Google client byte for byte.
@@ -564,6 +601,14 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     return notFound();
   }
 
+  // Old addresses (otto/mamoru-astro#35): behind the same gate as the new ones, never before it.
+  const moved = request.method === "GET" || request.method === "HEAD" ? legacyTarget(url.pathname) : null;
+  if (moved) {
+    const headers = opsHeaders();
+    headers.set("location", moved + url.search);
+    return new Response(null, { status: 301, headers });
+  }
+
   if (
     (url.pathname === "/ops/landing" || url.pathname === "/ops/landing/") &&
     request.method === "GET"
@@ -586,7 +631,7 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
   }
 
   const fragment = wantsFragment(request);
-  const sources = { rpcUrl: env.BASE_RPC_URL, db: env.MAMORU_DB, kv: env.WAITLIST };
+  const sources = { rpcUrl: env.BASE_RPC_URL, ethRpcUrls: env.ETHEREUM_RPC_URLS, db: env.MAMORU_DB, kv: env.WAITLIST };
   // With ctx, an aged reading is served at once and recomputed behind the response.
   const behind = ctx ? { waitUntil: (work: Promise<unknown>) => ctx.waitUntil(work) } : {};
 
@@ -595,11 +640,11 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     if (fragment) {
       const headers = fragmentHeaders();
       for (const cookie of cookies) headers.append("set-cookie", cookie);
-      return new Response(fragmentBody(view), { status: view.status ?? 200, headers });
+      return new Response(fragmentBody(withSubnav(view)), { status: view.status ?? 200, headers });
     }
     const nonce = randomToken(16);
     return opsResponse(
-      renderDocument(view, { csrf: session.csrf, who: session.email, nonce }),
+      renderDocument(withSubnav(view), { csrf: session.csrf, who: session.email, nonce }),
       cookies,
       view.status ?? 200,
       nonce,
@@ -630,7 +675,7 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
   const form = request.method === "POST" ? await request.formData().catch(() => null) : null;
   const csrfOk = form ? await sameSecret(String(form.get("csrf") ?? ""), session.csrf) : false;
   /** After an action: the updated section in place for the router, a redirect with a flash otherwise. */
-  const settle = async (to: "/ops" | "/ops/mails" | "/ops/infra", outcome: Flash, view: () => Promise<SectionView>): Promise<Response> => {
+  const settle = async (to: "/ops" | "/ops/mails" | "/ops/money/funding", outcome: Flash, view: () => Promise<SectionView>): Promise<Response> => {
     if (!fragment) {
       if (!outcome) return new Response(null, { status: 303, headers: { location: to, "cache-control": "no-store" } });
       return redirectOps(request, outcome, [], to);
@@ -641,7 +686,7 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     return respond(withNotice(fresh, FLASH_COPY[outcome], outcome === "bad" ? "bad" : "plain"));
   };
   /** A wrong CSRF token never runs the action. The router gets a 403 with the section and the reason. */
-  const refuse = async (to: "/ops" | "/ops/mails" | "/ops/infra", view: () => Promise<SectionView>): Promise<Response> => {
+  const refuse = async (to: "/ops" | "/ops/mails" | "/ops/money/funding", view: () => Promise<SectionView>): Promise<Response> => {
     if (!fragment) return redirectOps(request, "bad", [], to);
     const base = await view();
     return respond({ ...(to === "/ops/mails" ? base : withNotice(base, FLASH_COPY.bad, "bad")), status: 403 });
@@ -652,13 +697,13 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     return toRoot(request, [clearSessionCookie(secure, url.hostname)]);
   }
 
-  if (url.pathname === "/ops/infra/refresh" && request.method === "POST") {
-    if (!csrfOk) return refuse("/ops/infra", () => infraView(false));
+  if (actionPath === "/ops/infra/refresh" && request.method === "POST") {
+    if (!csrfOk) return refuse("/ops/money/funding", () => infraView(false));
     const view = await infraView(true);
-    return settle("/ops/infra", "", async () => view);
+    return settle("/ops/money/funding", "", async () => view);
   }
 
-  if (sectionPath === "/ops/infra" && request.method === "GET") {
+  if (sectionPath === "/ops/money/funding" && request.method === "GET") {
     return flashed(await infraView(url.searchParams.get("fresh") === "1"));
   }
 
@@ -697,20 +742,45 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     });
   }
 
+  // ---- "Preguntar al Lab" (otto/mamoru-astro#30, spec 008 phase 2) ----
+  if (url.pathname === "/ops/lab/api/threads" && request.method === "GET") {
+    return handleLabThreads(env.MAMORU_DB, session.email);
+  }
+  if (url.pathname.startsWith("/ops/lab/api/threads/") && request.method === "GET") {
+    return handleLabThread(env.MAMORU_DB, session.email, decodeURIComponent(url.pathname.slice("/ops/lab/api/threads/".length)));
+  }
+  if (url.pathname === "/ops/lab/api/ask" && request.method === "POST") {
+    if (!csrfOk || !form) {
+      return new Response(JSON.stringify({ error: "LAB_CSRF_INVALID" }), {
+        status: 403,
+        headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+    const threadIdField = String(form.get("threadId") ?? "");
+    const windowIdField = String(form.get("windowId") ?? "");
+    return handleLabAsk(env.MAMORU_DB, session.email, {
+      threadId: threadIdField || undefined,
+      question: String(form.get("question") ?? ""),
+      windowId: windowIdField || undefined,
+    });
+  }
+
   // ---- console views (otto/mamoru-astro#24): one model, read fresh per request, scoped by ?env= ----
   let consoleRefreshing = false;
+  let consoleSnapshot: InfraSnapshot | null = null;
   const consoleModel = async () => {
     const reading = await loadInfraReading(sources, false, undefined, behind);
     // The relayer figures come from the cached Infra reading: when it is being recomputed, the view says so.
     consoleRefreshing = Boolean(reading.refreshing);
+    consoleSnapshot = reading.snapshot;
     return loadConsole(env.MAMORU_DB, parseConsoleEnv(url.searchParams.get("env")), new Date(), reading.snapshot);
   };
   const consoleViews: Record<string, (m: Awaited<ReturnType<typeof consoleModel>>, now: Date) => SectionView> = {
     "/ops": pulseSection,
     "/ops/yield": yieldConsoleView,
-    "/ops/accounts": (m, now) => accountsView(m, now, { csrf: session.csrf }),
+    "/ops/accounts": (m, now) => withOutside(accountsView(m, now, { csrf: session.csrf }), consoleSnapshot),
     "/ops/engine": engineView,
-    "/ops/costs": costsView,
+    "/ops/money": costsView,
   };
   const consoleRoute = consoleViews[sectionPath];
   if (consoleRoute && request.method === "GET") {
@@ -816,11 +886,11 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     return { ...functionsSection({ states, history, csrf: session.csrf, ...over }), status };
   };
 
-  if (sectionPath === "/ops/functions" && request.method === "GET") {
+  if (sectionPath === "/ops/engine/functions" && request.method === "GET") {
     return flashed(await functionsView());
   }
 
-  if (url.pathname === "/ops/functions/apply" && request.method === "POST") {
+  if (actionPath === "/ops/functions/apply" && request.method === "POST") {
     if (!csrfOk || !form) return respond(await functionsView({ notice: { text: FLASH_COPY.bad, tone: "bad" } }, 403));
     const db = env.MAMORU_DB;
     if (!db) return respond(await functionsView({}, 503));
@@ -855,10 +925,16 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
   }
 
   // ---- engine settings (spec 006, otto/mamoru#147) ----
+  // The D1 templates with the code's recommended set first. The name is the code's: a D1 row carrying it is dropped.
+  const withPresets = (rows: readonly TemplateRow[]): TemplateRow[] => [
+    { name: RECOMMENDED_TEMPLATE, settings: RECOMMENDED_SETTINGS, source: "code", note: "Decision of 20 Oct (versions v1 beta, v2 prod)." },
+    ...rows.filter((t) => t.name !== RECOMMENDED_TEMPLATE),
+  ];
   const settingsView = async (over: Partial<Pick<SettingsPage, "draft" | "notice" | "confirm">> = {}, status = 200): Promise<SectionView> => {
     const db = env.MAMORU_DB;
     const versions = db ? await listVersions(db) : null;
-    const templates = db ? await listTemplates(db) : null;
+    const stored = db ? await listTemplates(db) : null;
+    const templates = stored === null ? null : withPresets(stored);
     const wantEnv: SettingsEnv = url.searchParams.get("env") === "beta" ? "beta" : "prod";
     const wantTemplate = url.searchParams.get("template");
     const fromTemplate = templates?.find((t) => t.name === wantTemplate);
@@ -866,7 +942,9 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     const active = activeAll[wantEnv].wide;
     const draft = over.draft ?? {
       env: wantEnv,
-      template: fromTemplate?.name ?? active?.template ?? templates?.[0]?.name ?? "custom",
+      // Start from what runs, so a change touches only what the person edits; with nothing written yet, from the
+      // code defaults the operator runs, said as such.
+      template: fromTemplate?.name ?? active?.template ?? "custom",
       settings: fromTemplate?.settings ?? active?.settings ?? DEFAULT_SETTINGS,
       canary: "",
       reason: "",
@@ -874,18 +952,18 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     return { ...settingsSection({ versions, templates, active: activeAll, csrf: session.csrf, draft, ...over }), status };
   };
 
-  if (sectionPath === "/ops/settings" && request.method === "GET") {
+  if (sectionPath === "/ops/engine/settings" && request.method === "GET") {
     return flashed(await settingsView());
   }
 
-  if ((url.pathname === "/ops/settings/apply" || url.pathname === "/ops/settings/rollback") && request.method === "POST") {
+  if ((actionPath === "/ops/settings/apply" || actionPath === "/ops/settings/rollback") && request.method === "POST") {
     if (!csrfOk || !form) return respond(await settingsView({ notice: { text: FLASH_COPY.bad, tone: "bad" } }, 403));
     const db = env.MAMORU_DB;
     if (!db) return respond(await settingsView({}, 503));
-    const templates = (await listTemplates(db)) ?? [];
+    const templates = withPresets((await listTemplates(db)) ?? []);
     let draft: SettingsPage["draft"];
     let rollbackOf: number | undefined;
-    if (url.pathname === "/ops/settings/rollback") {
+    if (actionPath === "/ops/settings/rollback") {
       const id = Number(form.get("id"));
       const target = Number.isSafeInteger(id) ? await versionById(db, id) : null;
       if (!target) return respond(await settingsView({ notice: { text: "That version does not exist or cannot be read.", tone: "bad" } }, 400));
@@ -1147,6 +1225,10 @@ const RETURN_TO = new Set([
   "https://mamoru.lol/ops/yield",
   "https://mamoru.lol/ops/mails",
   "https://mamoru.lol/ops/infra",
+  "https://mamoru.lol/ops/money",
+  "https://mamoru.lol/ops/money/funding",
+  "https://mamoru.lol/ops/engine/settings",
+  "https://mamoru.lol/ops/engine/functions",
   "https://mamoru.lol/ops/experiments",
   "https://mamoru.lol/ops/functions",
   "https://mamoru.lol/ops/lab",
@@ -1224,7 +1306,7 @@ export default {
 
   /** Cron: upserts today's metrics_daily row. The 00:05 UTC run also settles yesterday's DAU. */
   async scheduled(event: { cron: string }, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<void> {
-    const sources = { rpcUrl: env.BASE_RPC_URL, db: env.MAMORU_DB, kv: env.WAITLIST };
+    const sources = { rpcUrl: env.BASE_RPC_URL, ethRpcUrls: env.ETHEREUM_RPC_URLS, db: env.MAMORU_DB, kv: env.WAITLIST };
     ctx.waitUntil(
       captureDaily(sources, { settleYesterday: event.cron === "5 0 * * *" }).then((outcome) => {
         if (!outcome.ok && outcome.reason !== "no-db") console.error("metrics_capture_failed", outcome.reason);

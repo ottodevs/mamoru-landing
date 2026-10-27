@@ -2,9 +2,9 @@
 // washi paper, ink, one emerald accent, Noto Serif figures and IBM Plex Mono labels. Charts ship their data as a
 // `data-c` attribute and are drawn by the console client at the container's real width (console-client.ts);
 // without script every chart still has its figures in a <details> table.
-import { type ConsoleEnv, type ConsoleModel, type AccountYield, type AccountCap, capNow, money, pct, poolLabel } from "./console-data";
+import { type ConsoleEnv, type ConsoleModel, type AccountYield, type AccountCap, type EngineOp, capNow, money, pct, poolLabel } from "./console-data";
 import { capSourceWords, DEFAULT_CAP_USDC, usdc } from "./account-cap-model";
-import { csrfField, type SectionId, type SectionView } from "./ops";
+import { csrfField, maskEmail, type SectionId, type SectionView } from "./ops";
 import { esc } from "./text";
 
 const int = (n: number) => n.toLocaleString("en-US");
@@ -135,7 +135,7 @@ function capLines(m: ConsoleModel, c: AccountCap): string[] {
   const out: string[] = [];
   const a = c.authorization;
   const o = c.override;
-  const asked = o ? `${o.capUsdc == null ? "Back to the general cap" : `Its own cap of ${usdc(o.capUsdc)}`}, set by ${o.author} on ${timeLabel(o.createdAt)}: ${o.reason}` : null;
+  const asked = o ? `${o.capUsdc == null ? "Back to the general cap" : `Its own cap of ${usdc(o.capUsdc)}`}, set by ${maskEmail(o.author)} on ${timeLabel(o.createdAt)}: ${o.reason}` : null;
   if (asked) out.push(asked);
   if (!a) return out;
   const reportedAfter = m.operator && o ? m.operator.generatedAt >= o.createdAt : false;
@@ -200,7 +200,7 @@ function ownCapsSheet(m: ConsoleModel, drawerKeys: Set<string>): string {
     const a = c.authorization;
     const running = a?.capUsdc != null ? `${usdc(a.capUsdc)}, ${a.capSource ? capSourceWords(a.capSource) : "source not reported"}` : a ? "cap not reported" : m.caps.reported && m.caps.complete ? "no approval reported" : "not reported yet";
     const keyHtml = drawerKeys.has(c.key) ? `<button type="button" class="c-linkish" data-account="${esc(c.key)}">${esc(c.key)}</button>` : `<span class="c-mono">${esc(c.key)}</span>`;
-    return `<li>${keyHtml}<div><b>${esc(usdc(o.capUsdc!))} asked</b><span>${esc(`runs ${running}`)}${c.env !== "prod" ? ` · ${esc(c.env)}` : ""}</span><span>${esc(`${o.author}, ${timeLabel(o.createdAt)}`)}</span></div>${!a && m.caps.reported && m.caps.complete ? chip("No approval") : a?.capUsdc == null ? chip("Not reported") : a.capSource === "override" && a.capUsdc === o.capUsdc ? chip("In effect", "good") : chip("Not in effect", "warn")}</li>`;
+    return `<li>${keyHtml}<div><b>${esc(usdc(o.capUsdc!))} asked</b><span>${esc(`runs ${running}`)}${c.env !== "prod" ? ` · ${esc(c.env)}` : ""}</span><span>${esc(`${maskEmail(o.author)}, ${timeLabel(o.createdAt)}`)}</span></div>${!a && m.caps.reported && m.caps.complete ? chip("No approval") : a?.capUsdc == null ? chip("Not reported") : a.capSource === "override" && a.capUsdc === o.capUsdc ? chip("In effect", "good") : chip("Not in effect", "warn")}</li>`;
   };
   return sheet("Accounts with their own cap", `${own.length} account${own.length === 1 ? "" : "s"} above or below the general cap`, `<ul class="c-feed c-owncaps">${own.map(row).join("")}</ul>`);
 }
@@ -392,15 +392,31 @@ ${fig("In range now", `${m.totals.inRange} of ${m.totals.positions}`, "positions
     `<ul class="c-legend inline">${kinds.map((k) => `<li><i class="${k.color}"></i>${k.name}</li>`).join("")}</ul>` +
       chart({ t: "bars", points: days.map((d) => ({ l: dayLabel(d), s: byDay.get(d) ?? {} })), fmt: "int", stack: kinds }, "Confirmed operations per day", () => days.map((d) => [d, String(Object.values(byDay.get(d) ?? {}).reduce((a, b) => a + b, 0))]), 180),
   );
-  const codes = new Map<string, number>();
-  for (const f of failed) codes.set(f.code ?? "no code", (codes.get(f.code ?? "no code") ?? 0) + 1);
-  const maxCode = Math.max(1, ...codes.values());
+  // A failure counts as retried when the same account later confirmed the same kind of operation.
+  const retried = (f: EngineOp) => conf.some((o) => o.accountKey === f.accountKey && o.kind === f.kind && o.at > f.at);
+  const codeList = (list: EngineOp[]) => {
+    const codes = new Map<string, { n: number; ok: number }>();
+    for (const f of list) {
+      const c = codes.get(f.code ?? "no code") ?? { n: 0, ok: 0 };
+      codes.set(f.code ?? "no code", { n: c.n + 1, ok: c.ok + (retried(f) ? 1 : 0) });
+    }
+    const max = Math.max(1, ...[...codes.values()].map((c) => c.n));
+    return `<ul class="c-funnel codes">${[...codes.entries()]
+      .sort((a, b) => b[1].n - a[1].n)
+      .map(([c, { n, ok }]) => {
+        const note = ok === n ? "retried and confirmed" : ok ? `${ok} of ${n} retried and confirmed` : "no confirmed retry";
+        return `<li><span class="c-mono">${esc(c)}<small class="${ok === n ? "" : "bad"}">${esc(note)}</small></span><span class="c-meter bad"><i style="width:${((n / max) * 100).toFixed(1)}%"></i></span><span class="n">${n}</span></li>`;
+      })
+      .join("")}</ul>`;
+  };
+  const weekAgo = new Date(now.getTime() - 7 * 864e5).toISOString();
+  const recent = failed.filter((f) => f.at >= weekAgo);
+  const older = failed.filter((f) => f.at < weekAgo);
   const why = sheet(
     "Why operations failed",
-    "Grouped by the code the engine recorded",
-    codes.size
-      ? `<ul class="c-funnel codes">${[...codes.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => `<li><span class="c-mono">${esc(c)}</span><span class="c-meter bad"><i style="width:${((n / maxCode) * 100).toFixed(1)}%"></i></span><span class="n">${n}</span></li>`).join("")}</ul>`
-      : `<p class="c-empty">No failures in the recent operations.</p>`,
+    "Last 7 days, grouped by the code the engine recorded",
+    (recent.length ? codeList(recent) : `<p class="c-empty">No failures in the last 7 days.</p>`) +
+      (older.length ? `<details class="c-data"><summary>Older than a week, ${older.length}</summary>${codeList(older)}</details>` : ""),
   );
   const feed = sheet(
     "Latest operations",
@@ -447,8 +463,8 @@ ${fig("Fee revenue to date", money(m.totals.fees * 0.1), "10% of the yield, proj
       ? `<p class="c-prose">At the current fee APR of <b>${esc(pct((apr ?? 0) * 100))}</b> and <b>$60</b> a month of fixed costs, the fee covers costs from <b>${esc(money(need))}</b> under management. Today: <b>${esc(money(m.totals.lp))}</b>.</p><span class="c-meter"><i style="width:${Math.max(0.8, (m.totals.lp / need) * 100).toFixed(2)}%"></i></span>`
       : `<p class="c-empty">Needs a fee APR, which needs capital placed and a first entry reported by the engine.</p>`,
   );
-  const topup = `<p class="c-prose"><a href="/ops/infra">Top up the relayer, and see what one new account costs</a></p>`;
-  return view("costs", "Costs", head("Costs", "/ops/costs", m) + figs + rpcSheet + `<div class="c-grid two">${be}${sheet("Relayer", r?.address ? r.address.slice(0, 6) + "…" + r.address.slice(-4) + " on Base" : null, topup)}</div>` + drawers(m, now));
+  const topup = `<p class="c-prose"><a href="/ops/money/funding">Top up the relayer, and see what one new account costs</a></p>`;
+  return view("costs", "Money", head("Money", "/ops/money", m) + figs + rpcSheet + `<div class="c-grid two">${be}${sheet("Relayer", r?.address ? r.address.slice(0, 6) + "…" + r.address.slice(-4) + " on Base" : null, topup)}</div>` + drawers(m, now));
 }
 
 /** The phone's "More" tab: everything that is not one of the five views, grouped as on the rail. */

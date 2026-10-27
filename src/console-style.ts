@@ -146,6 +146,9 @@ html, body { overflow-x: clip; }
 .c-funnel li { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr) 2.6rem 2.6rem; gap: 0.8rem; align-items: center; font-size: 0.98rem; }
 .c-funnel.codes li { grid-template-columns: minmax(0, 13rem) minmax(0, 1fr) 2.4rem; }
 .c-funnel.codes .c-mono { overflow-wrap: anywhere; font-size: 0.78rem; }
+.c-funnel.codes small { display: block; margin-top: 0.15rem; color: var(--muted); font-size: 0.72rem; }
+.c-funnel.codes small.bad { color: var(--badc); }
+.c-data .c-funnel { margin-top: 0.6rem; }
 
 /* leaderboard */
 .c-lb { list-style: none; margin: 0; padding: 0; display: grid; }

@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import worker, { type Env } from "../src/worker";
 import { openSession, sealSession } from "../src/ops";
 import { labDb } from "./lab-fixture";
-import { activeJobBySpecKey, countJobsToday, insertDoneJobIfUnderLimit, insertJob, insertQueuedJobIfEligible, jobById } from "../src/lab-store";
+import { activeJobBySpecKey, countJobsToday, insertAgentJob, insertDoneJobIfUnderLimit, insertJob, insertQueuedJobIfEligible, insertThread, jobById, threadById } from "../src/lab-store";
 import { MAX_JOBS_PER_DAY, MAX_QUEUED_JOBS } from "../src/lab-spec";
 
 function opsEnv(db: ReturnType<typeof labDb>): Env {
@@ -429,5 +429,299 @@ describe("GET /ops/lab/api/jobs/:id and /api/run/:hash", () => {
     expect(Array.isArray(body.run.ops)).toBe(true);
     expect(Array.isArray(body.run.series)).toBe(true);
     expect(body.run.reasons).toBeTruthy();
+  });
+});
+
+// otto/mamoru-astro#30 (spec 008 phase 2): "Preguntar al Lab" — POST /api/ask, GET /api/threads(/:id).
+async function postAsk(env: Env, cookie: string, csrf: string, fields: Record<string, string>): Promise<Response> {
+  const body = new URLSearchParams({ csrf, ...fields }).toString();
+  return worker.fetch(
+    new Request("https://mamoru.lol/ops/lab/api/ask", { method: "POST", headers: { cookie, "content-type": "application/x-www-form-urlencoded" }, body }),
+    env,
+  );
+}
+
+describe("worker.ts: /ops/lab/api/ask and /api/threads(/:id) require the /ops session", () => {
+  test("GET /api/threads and /api/threads/:id both refuse an unsigned session", async () => {
+    const env = opsEnv(labDb());
+    for (const path of ["/ops/lab/api/threads", "/ops/lab/api/threads/anything"]) {
+      const res = await worker.fetch(new Request(`https://mamoru.lol${path}`), env);
+      expect(res.status).not.toBe(200);
+    }
+  });
+
+  test("POST /api/ask with no session is refused, not merely unauthenticated-but-processed", async () => {
+    const env = opsEnv(labDb());
+    const res = await worker.fetch(
+      new Request("https://mamoru.lol/ops/lab/api/ask", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "question=hola" }),
+      env,
+    );
+    expect(res.status).not.toBe(201);
+  });
+});
+
+describe("POST /ops/lab/api/ask: CSRF", () => {
+  test("a wrong csrf token is refused (403) and creates no thread or job", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const { cookie } = await sessionCookie();
+    const res = await postAsk(env, cookie, "not-the-real-token", { question: "¿Qué tal febrero?" });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("LAB_CSRF_INVALID");
+    const threads = await worker.fetch(new Request("https://mamoru.lol/ops/lab/api/threads", { headers: { cookie } }), env);
+    expect(((await threads.json()) as { threads: unknown[] }).threads).toEqual([]);
+  });
+});
+
+describe("POST /ops/lab/api/ask: contract", () => {
+  test("a fresh question with no threadId creates a thread (title = the question) and a queued agent job", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const { cookie, csrf } = await sessionCookie();
+    const res = await postAsk(env, cookie, csrf, { question: "¿Qué habría pasado con 1.000 USDC en la caída de febrero 2025?", windowId: "feb2025" });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { threadId: string; job: { id: string; status: string; question: string } };
+    expect(body.job.status).toBe("queued");
+    expect(body.job.question).toContain("1.000 USDC");
+
+    const thread = await threadById(db, body.threadId);
+    expect(thread?.owner).toBe("ottodevs@gmail.com");
+    expect(thread?.title).toBe("¿Qué habría pasado con 1.000 USDC en la caída de febrero 2025?".slice(0, 60));
+
+    const job = await jobById(db, body.job.id);
+    expect(job?.kind).toBe("agent");
+    expect(job?.threadId).toBe(body.threadId);
+    expect(job?.specKey).toBe(`agent:${body.job.id}`);
+  });
+
+  test("an empty or over-length question is refused with LAB_ASK_INVALID, no thread or job created", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const { cookie, csrf } = await sessionCookie();
+    for (const question of ["", "   ", "a".repeat(601)]) {
+      const res = await postAsk(env, cookie, csrf, { question });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toBe("LAB_ASK_INVALID");
+    }
+    const threads = await worker.fetch(new Request("https://mamoru.lol/ops/lab/api/threads", { headers: { cookie } }), env);
+    expect(((await threads.json()) as { threads: unknown[] }).threads).toEqual([]);
+  });
+
+  test("a follow-up with an existing threadId reuses that thread and bumps it to the front of the picker", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const { cookie, csrf } = await sessionCookie();
+    const first = (await (await postAsk(env, cookie, csrf, { question: "primera" })).json()) as { threadId: string };
+    const follow = await postAsk(env, cookie, csrf, { question: "segunda", threadId: first.threadId });
+    expect(follow.status).toBe(201);
+    const followBody = (await follow.json()) as { threadId: string };
+    expect(followBody.threadId).toBe(first.threadId);
+
+    const threadRes = await worker.fetch(new Request(`https://mamoru.lol/ops/lab/api/threads/${first.threadId}`, { headers: { cookie } }), env);
+    const threadBody = (await threadRes.json()) as { jobs: { question: string }[] };
+    expect(threadBody.jobs.map((j) => j.question)).toEqual(["primera", "segunda"]); // oldest first
+  });
+
+  test("a threadId owned by someone else is refused with LAB_THREAD_NOT_FOUND (never silently reparented)", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    await insertThread(db, { id: "someone-elses-thread", owner: "other@example.com", title: "t", now: new Date().toISOString() });
+    const { cookie, csrf } = await sessionCookie();
+    const res = await postAsk(env, cookie, csrf, { question: "q", threadId: "someone-elses-thread" });
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("LAB_THREAD_NOT_FOUND");
+  });
+});
+
+describe("POST /ops/lab/api/ask: daily/queued limits are shared with the bench (kind-agnostic caps)", () => {
+  test("a requester already at the daily cap from bench jobs is refused asking too", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const { cookie, csrf } = await sessionCookie();
+    const now = new Date().toISOString();
+    for (let i = 0; i < MAX_JOBS_PER_DAY; i++) {
+      await insertJob(db, {
+        id: `bench-${i}`,
+        requester: "ottodevs@gmail.com",
+        spec: { windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000 },
+        specKey: `k-${i}`,
+        status: "done",
+        resultHash: "hash-feb-live-2000-1000",
+        now,
+      });
+    }
+    const res = await postAsk(env, cookie, csrf, { question: "¿una más?" });
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("LAB_JOB_LIMIT_DAILY");
+    // A refused first question leaves no empty thread behind.
+    const threads = await worker.fetch(new Request("https://mamoru.lol/ops/lab/api/threads", { headers: { cookie } }), env);
+    expect(((await threads.json()) as { threads: unknown[] }).threads).toEqual([]);
+  });
+
+  test("a requester already at the queued-slot cap from an in-flight bench job is refused asking too", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const { cookie, csrf } = await sessionCookie();
+    const now = new Date().toISOString();
+    for (let i = 0; i < MAX_QUEUED_JOBS; i++) {
+      await insertJob(db, {
+        id: `queued-bench-${i}`,
+        requester: "ottodevs@gmail.com",
+        spec: { windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000 },
+        specKey: `qk-${i}`,
+        status: "queued",
+        resultHash: null,
+        now,
+      });
+    }
+    const res = await postAsk(env, cookie, csrf, { question: "¿una más?" });
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("LAB_JOB_LIMIT_QUEUED");
+  });
+});
+
+describe("GET /ops/lab/api/threads(/:id): ownership and run resolution", () => {
+  test("threads are mine only, newest first by activity", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const { cookie } = await sessionCookie();
+    await insertThread(db, { id: "mine-old", owner: "ottodevs@gmail.com", title: "vieja", now: "2026-01-01T00:00:00.000Z" });
+    await insertThread(db, { id: "mine-new", owner: "ottodevs@gmail.com", title: "nueva", now: "2026-02-01T00:00:00.000Z" });
+    await insertThread(db, { id: "not-mine", owner: "other@example.com", title: "ajena", now: "2026-03-01T00:00:00.000Z" });
+    const res = await worker.fetch(new Request("https://mamoru.lol/ops/lab/api/threads", { headers: { cookie } }), env);
+    const body = (await res.json()) as { threads: { id: string }[] };
+    expect(body.threads.map((t) => t.id)).toEqual(["mine-new", "mine-old"]);
+  });
+
+  test("GET /api/threads/:id for a thread owned by someone else is 404, never leaks its jobs", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    await insertThread(db, { id: "ajeno", owner: "other@example.com", title: "t", now: new Date().toISOString() });
+    const { cookie } = await sessionCookie();
+    const res = await worker.fetch(new Request("https://mamoru.lol/ops/lab/api/threads/ajeno", { headers: { cookie } }), env);
+    expect(res.status).toBe(404);
+  });
+
+  test("a done job's claim/verdict runIds resolve into the response's runs map (AL-21 render support)", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const now = new Date().toISOString();
+    await insertThread(db, { id: "t-runs", owner: "ottodevs@gmail.com", title: "t", now });
+    await insertAgentJob(db, { id: "j-runs", requester: "ottodevs@gmail.com", threadId: "t-runs", question: "q", status: "done", now });
+    const answer = {
+      blocks: [
+        { type: "verdict", runId: "hash-feb-live-2000-1000", against: "hold" },
+        { type: "claim", metric: "fees", runId: "hash-feb-live-4000-1000", value: 1.5 },
+      ],
+    };
+    await db.prepare("UPDATE lab_jobs SET answer_json = ? WHERE id = ?").bind(JSON.stringify(answer), "j-runs").run();
+    for (const h of ["hash-feb-live-2000-1000", "hash-feb-live-4000-1000"]) await db.prepare("INSERT INTO lab_job_runs (job_id, result_hash) VALUES (?, ?)").bind("j-runs", h).run();
+
+    const { cookie } = await sessionCookie();
+    const res = await worker.fetch(new Request("https://mamoru.lol/ops/lab/api/threads/t-runs", { headers: { cookie } }), env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { jobs: { id: string; answer: unknown }[]; runs: Record<string, { variantLabel: string }> };
+    expect(body.jobs).toHaveLength(1);
+    expect(body.jobs[0].answer).toEqual(answer);
+    expect(Object.keys(body.runs).sort()).toEqual(["hash-feb-live-2000-1000", "hash-feb-live-4000-1000"]);
+    expect(body.runs["hash-feb-live-2000-1000"].variantLabel).toBe("Política actual");
+  });
+
+  test("a job's cost is priced into shadowUsd when lab_prices has rows, omitted otherwise", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const now = new Date().toISOString();
+    await insertThread(db, { id: "t-cost", owner: "ottodevs@gmail.com", title: "t", now });
+    await insertAgentJob(db, { id: "j-cost", requester: "ottodevs@gmail.com", threadId: "t-cost", question: "q", status: "done", now });
+    const cost = { modelCalls: [{ model: "qwen3", promptTokens: 1000, completionTokens: 200 }], toolRounds: 1, runs: [], sweepCpuMs: 0, wallMs: 500, repairUsed: false, verifierOutcome: "ok" };
+    await db.prepare("UPDATE lab_jobs SET answer_json = ?, cost_json = ? WHERE id = ?").bind(JSON.stringify({ blocks: [] }), JSON.stringify(cost), "j-cost").run();
+
+    const { cookie } = await sessionCookie();
+    const beforePrices = await worker.fetch(new Request("https://mamoru.lol/ops/lab/api/threads/t-cost", { headers: { cookie } }), env);
+    const beforeBody = (await beforePrices.json()) as { jobs: { shadowUsd: number | null }[] };
+    expect(beforeBody.jobs[0].shadowUsd).toBeNull();
+
+    await db
+      .prepare("INSERT INTO lab_prices (resource, unit, usd, valid_from) VALUES (?, ?, ?, ?)")
+      .bind("model:qwen3", "input_per_mtok", 0.1, "2020-01-01T00:00:00.000Z")
+      .run();
+    const afterPrices = await worker.fetch(new Request("https://mamoru.lol/ops/lab/api/threads/t-cost", { headers: { cookie } }), env);
+    const afterBody = (await afterPrices.json()) as { jobs: { shadowUsd: number | null }[] };
+    expect(afterBody.jobs[0].shadowUsd).toBeCloseTo((1000 / 1_000_000) * 0.1, 10);
+  });
+  test("AL-21: a cited run that exists in lab_runs but is not in this job's lab_job_runs is dropped, never shown as verified", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const now = new Date().toISOString();
+    await insertThread(db, { id: "t-unrec", owner: "ottodevs@gmail.com", title: "t", now });
+    await insertAgentJob(db, { id: "j-unrec", requester: "ottodevs@gmail.com", threadId: "t-unrec", question: "q", status: "done", now });
+    const answer = {
+      blocks: [
+        { type: "claim", metric: "fees", runId: "hash-feb-live-2000-1000", value: 1 },
+        { type: "claim", metric: "fees", runId: "hash-feb-live-4000-1000", value: 2 },
+        { type: "text", md: "prosa" },
+      ],
+    };
+    await db.prepare("UPDATE lab_jobs SET answer_json = ? WHERE id = ?").bind(JSON.stringify(answer), "j-unrec").run();
+    await db.prepare("INSERT INTO lab_job_runs (job_id, result_hash) VALUES (?, ?)").bind("j-unrec", "hash-feb-live-2000-1000").run();
+    const { cookie } = await sessionCookie();
+    const res = await worker.fetch(new Request("https://mamoru.lol/ops/lab/api/threads/t-unrec", { headers: { cookie } }), env);
+    const body = (await res.json()) as { jobs: { answer: { blocks: { type: string }[] }; droppedBlocks: number }[]; runs: Record<string, unknown> };
+    expect(body.jobs[0].answer.blocks.map((b) => b.type)).toEqual(["claim", "text"]);
+    expect(body.jobs[0].droppedBlocks).toBe(1);
+    expect(Object.keys(body.runs)).toEqual(["hash-feb-live-2000-1000"]);
+  });
+
+  test("AL-40: shadow prices are those in force at the job's created_at, not now", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    await insertThread(db, { id: "t-asof", owner: "ottodevs@gmail.com", title: "t", now: "2026-01-01T00:00:00.000Z" });
+    await insertAgentJob(db, { id: "j-asof", requester: "ottodevs@gmail.com", threadId: "t-asof", question: "q", status: "done", now: "2026-01-15T00:00:00.000Z" });
+    const cost = { modelCalls: [{ model: "qwen3", promptTokens: 1_000_000, completionTokens: 0 }], toolRounds: 1, runs: [], sweepCpuMs: 0, wallMs: 5, repairUsed: false, verifierOutcome: "ok" };
+    await db.prepare("UPDATE lab_jobs SET answer_json = ?, cost_json = ? WHERE id = ?").bind(JSON.stringify({ blocks: [] }), JSON.stringify(cost), "j-asof").run();
+    for (const [usd, from] of [[1, "2026-01-01T00:00:00.000Z"], [100, "2026-02-01T00:00:00.000Z"]] as const) {
+      await db.prepare("INSERT INTO lab_prices (resource, unit, usd, valid_from) VALUES (?, ?, ?, ?)").bind("model:qwen3", "input_per_mtok", usd, from).run();
+    }
+    const { cookie } = await sessionCookie();
+    const res = await worker.fetch(new Request("https://mamoru.lol/ops/lab/api/threads/t-asof", { headers: { cookie } }), env);
+    const body = (await res.json()) as { jobs: { shadowUsd: number | null }[] };
+    expect(body.jobs[0].shadowUsd).toBeCloseTo(1, 10);
+  });
+  test("AL-21: verified blocks with a missing/malformed citation are dropped at thread read", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const now = new Date().toISOString();
+    await insertThread(db, { id: "t-mal", owner: "ottodevs@gmail.com", title: "t", now });
+    await insertAgentJob(db, { id: "j-mal", requester: "ottodevs@gmail.com", threadId: "t-mal", question: "q", status: "done", now });
+    const answer = { blocks: [{ type: "claim", metric: "fees", value: 9 }, { type: "chart", kind: "price" }, { type: "verdict", runId: "hash-feb-live-2000-1000", against: 3 }, { type: "text", md: "prosa" }] };
+    await db.prepare("UPDATE lab_jobs SET answer_json = ? WHERE id = ?").bind(JSON.stringify(answer), "j-mal").run();
+    await db.prepare("INSERT INTO lab_job_runs (job_id, result_hash) VALUES (?, ?)").bind("j-mal", "hash-feb-live-2000-1000").run();
+    const { cookie } = await sessionCookie();
+    const res = await worker.fetch(new Request("https://mamoru.lol/ops/lab/api/threads/t-mal", { headers: { cookie } }), env);
+    const body = (await res.json()) as { jobs: { answer: { blocks: { type: string }[] }; droppedBlocks: number }[] };
+    expect(body.jobs[0].answer.blocks.map((b) => b.type)).toEqual(["text"]);
+    expect(body.jobs[0].droppedBlocks).toBe(3);
+  });
+
+  test("a transcript is capped at the latest 50 turns, oldest first, with truncated: true", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    await insertThread(db, { id: "t-long", owner: "ottodevs@gmail.com", title: "t", now: "2026-01-01T00:00:00.000Z" });
+    for (let i = 0; i < 55; i++) {
+      const at = new Date(Date.UTC(2026, 0, 2, 0, i)).toISOString();
+      await insertAgentJob(db, { id: `j-long-${String(i).padStart(2, "0")}`, requester: "ottodevs@gmail.com", threadId: "t-long", question: `q${i}`, status: "done", now: at });
+    }
+    const { cookie } = await sessionCookie();
+    const res = await worker.fetch(new Request("https://mamoru.lol/ops/lab/api/threads/t-long", { headers: { cookie } }), env);
+    const body = (await res.json()) as { jobs: { question: string }[]; truncated: boolean };
+    expect(body.truncated).toBe(true);
+    expect(body.jobs).toHaveLength(50);
+    expect(body.jobs[0].question).toBe("q5");
+    expect(body.jobs[49].question).toBe("q54");
   });
 });

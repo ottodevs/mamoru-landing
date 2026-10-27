@@ -45,13 +45,13 @@ const OPERATOR_PAYLOAD = {
 };
 const OPERATOR_SEED = `INSERT INTO operator_metrics_latest VALUES (1, '${JSON.stringify(OPERATOR_PAYLOAD)}', '2026-10-18T09:00:00Z', '2026-10-18T09:00:05Z');`;
 
-function memoryDb(tables: string[]): D1Db {
+function memoryDb(tables: string[], operator: object = OPERATOR_PAYLOAD): D1Db {
   const db = new Database(":memory:");
   if (tables.includes("yield")) db.exec(YIELD_SCHEMA);
   if (tables.includes("flags")) db.exec(FLAGS_SCHEMA);
   if (tables.includes("seed")) db.exec(SEED_DATA);
   if (tables.includes("seed-gas")) db.exec(SEED_DATA_WITH_GAS);
-  if (tables.includes("operator")) db.exec(OPERATOR_SCHEMA + OPERATOR_SEED);
+  if (tables.includes("operator")) db.exec(operator === OPERATOR_PAYLOAD ? OPERATOR_SCHEMA + OPERATOR_SEED : OPERATOR_SCHEMA + `INSERT INTO operator_metrics_latest VALUES (1, '${JSON.stringify(operator)}', '2026-10-18T09:00:00Z', '2026-10-18T09:00:05Z');`);
   const stmt = (sql: string, values: unknown[] = []): any => ({
     bind: (...v: unknown[]) => stmt(sql, v),
     first: async () => (db.query(sql).get(...(values as never[])) as unknown) ?? null,
@@ -96,7 +96,7 @@ async function opsEnv(db: D1Db | undefined, ethUsd: number | null = 2000) {
 const get = (path: string, cookie = "", fragment = false) =>
   new Request(`https://mamoru.lol${path}`, { headers: { ...(cookie ? { cookie } : {}), ...(fragment ? { "x-ops-fragment": "1" } : {}) } });
 
-const PATHS = ["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more"];
+const PATHS = ["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/money", "/ops/engine/settings", "/ops/engine/functions", "/ops/money/funding", "/ops/more"];
 const NOW = new Date("2026-10-18T10:00:00Z");
 
 describe("console gate (otto/mamoru-astro#24)", () => {
@@ -144,12 +144,30 @@ describe("console views", () => {
     expect(html).toContain("Confirmed operations per day");
   });
 
+  test("Engine: failures of the last 7 days show with their retry, older ones fold into a details", async () => {
+    const day = (n: number) => new Date(Date.now() - n * 864e5).toISOString();
+    const payload = { ...OPERATOR_PAYLOAD, opsRecent: [
+      { accountKey: "acc1", kind: "reduce", state: "confirmed", at: day(1), code: "EXEC_OK" },
+      { accountKey: "acc1", kind: "reduce", state: "failed", at: day(2), code: "EXEC_INNER_REVERT" },
+      { accountKey: "acc1", kind: "exit", state: "failed", at: day(3), code: "OWNER_TX_REVERTS" },
+      { accountKey: "acc1", kind: "enter", state: "failed", at: day(30), code: "RECON_UNINCLUDABLE" },
+    ] };
+    const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "operator"], payload));
+    const html = await (await worker.fetch(get("/ops/engine", cookie), env)).text();
+    const [shown, folded] = html.split("Older than a week, 1");
+    expect(folded).toBeDefined();
+    expect(shown).toContain("EXEC_INNER_REVERT<small class=\"\">retried and confirmed");
+    expect(shown).toContain("OWNER_TX_REVERTS<small class=\"bad\">no confirmed retry");
+    expect(shown).not.toContain("RECON_UNINCLUDABLE");
+    expect(folded).toContain("RECON_UNINCLUDABLE");
+  });
+
   test("Costs: RPC hours from the operator metrics, relayer from its balance, the top-up link kept", async () => {
     const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "operator"]));
-    const html = await (await worker.fetch(get("/ops/costs", cookie), env)).text();
+    const html = await (await worker.fetch(get("/ops/money", cookie), env)).text();
     expect(html).toContain("RPC compute units per hour");
     expect(html).toContain("0.0036 ETH");
-    expect(html).toContain('href="/ops/infra"');
+    expect(html).toContain('href="/ops/money/funding"');
   });
 
   test("fragments carry the view body, never the frame", async () => {
@@ -177,7 +195,7 @@ describe("console honesty (review r1, PR #13)", () => {
     expect(m.accounts[0]!.apr).toBeNull();
     expect(m.totals.apr).toBeNull();
     const { env, cookie } = await opsEnv(memoryDb(["yield", "seed"]));
-    const costs = await (await worker.fetch(get("/ops/costs", cookie), env)).text();
+    const costs = await (await worker.fetch(get("/ops/money", cookie), env)).text();
     expect(costs).toContain("Needs a fee APR");
     const y = await (await worker.fetch(get("/ops/yield", cookie), env)).text();
     expect(y).toContain("engine data not connected yet");

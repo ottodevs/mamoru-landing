@@ -1,5 +1,7 @@
 /** Builds the /ops overview model from the Infra snapshot plus D1 history. The build step is pure. */
 
+import { buildFundsMap, type FundsMap, outsideRowsOf } from "./funds-map";
+import { type OutsideSummary, summarizeOutside } from "./outside-base";
 import { type AccountFilter, DEFAULT_FILTER, type GroupBy, usesLegacyHistory } from "./account-filter";
 import type { RelayerStatus } from "./cost";
 import { fetchInfraCounts, type D1Db, type InfraCounts } from "./d1-infra";
@@ -80,6 +82,10 @@ export interface Overview {
   tvl: number;
   idle: number;
   lp: number;
+  /** Holdings at the same addresses on Ethereum (otto/mamoru-astro#31). Separate from `tvl`, never added to it. */
+  outside: OutsideSummary;
+  /** Where the money is, by chain and bucket (otto/mamoru-astro#35). Same filtered rows as the figures above. */
+  funds: FundsMap;
   firstSignup: string | null;
   changes: { users: Change | null; accounts: Change | null; activated: Change | null; tvl: Change | null };
   value: ValuePoint[];
@@ -238,6 +244,8 @@ export function buildOverview(snapshot: InfraSnapshot, inputs: OverviewInputs, n
     tvl,
     idle,
     lp,
+    outside: summarizeOutside(outsideRowsOf(rows)),
+    funds: buildFundsMap(snapshot, rows),
     firstSignup: growth[0]?.day ?? null,
     changes: {
       users: change(users, pastGrowth?.users, pastGrowth?.day, target),

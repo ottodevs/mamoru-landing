@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import type { D1Db } from "../src/d1-infra";
-import { BOUNDS, DEFAULT_SETTINGS, canonicalJson, riskyChanges, settingsFromForm, validateSettings, type EngineSettings } from "../src/engine-settings-model";
+import { BOUNDS, DEFAULT_SETTINGS, canonicalJson, pctOf, riskyChanges, settingsFromForm, validateSettings, type EngineSettings } from "../src/engine-settings-model";
 import { appendVersion, listVersions, maxIdOf, SettingsConflict, type NewVersion } from "../src/engine-settings-store";
 import { sealSession } from "../src/ops";
 import worker, { type Env } from "../src/worker";
@@ -54,14 +54,14 @@ function formFor(s: EngineSettings, extra: Record<string, string>): URLSearchPar
   return new URLSearchParams({
     env: "prod",
     template: "t",
-    ...(s.depth ? { depth_on: "1", depth_impact: String(s.depth.impactBps), depth_share: String(s.depth.shareBps), depth_stables: String(s.depth.stablesImpactBps ?? "") } : {}),
+    ...(s.depth ? { depth_on: "1", depth_impact_pct: pctOf(s.depth.impactBps), depth_share_pct: pctOf(s.depth.shareBps), depth_stables_pct: s.depth.stablesImpactBps === undefined ? "" : pctOf(s.depth.stablesImpactBps) } : {}),
     cap: s.capUsdc === null ? "" : String(s.capUsdc),
     ...(s.guard.enabled ? { guard_on: "1" } : {}),
-    btc_fall: String(s.guard.btc.fallBps),
-    btc_vol: String(s.guard.btc.volBps),
-    eth_fall: String(s.guard.eth.fallBps),
-    eth_vol: String(s.guard.eth.volBps),
-    ...(s.minEntry ? { min_entry_gas: String(s.minEntry.gasMultiple) } : {}),
+    btc_fall_pct: pctOf(s.guard.btc.fallBps),
+    btc_vol_pct: pctOf(s.guard.btc.volBps),
+    eth_fall_pct: pctOf(s.guard.eth.fallBps),
+    eth_vol_pct: pctOf(s.guard.eth.volBps),
+    ...(s.minEntry ? { min_entry_on: "1", min_entry_gas: String(s.minEntry.gasMultiple) } : {}),
     reason: "test",
     ...extra,
   });
@@ -107,7 +107,7 @@ describe("engine settings model (copy of packages/policy/src/engine-settings.ts)
     const f = new FormData();
     for (const [k, v] of formFor(on, {})) f.set(k, v);
     expect(settingsFromForm(f)).toEqual(on);
-    f.delete("min_entry_gas");
+    f.delete("min_entry_on");
     expect(canonicalJson(settingsFromForm(f))).not.toContain("minEntry");
     expect(riskyChanges(on, DEPTH)).toEqual(["smaller entries go through, where gas is a larger share of what they place"]);
     expect(riskyChanges(DEPTH, on)).toEqual([]);
@@ -117,7 +117,7 @@ describe("engine settings model (copy of packages/policy/src/engine-settings.ts)
 describe("/ops/settings (spec 006)", () => {
   test("without the tables it says so and the operator runs the defaults", async () => {
     const { env, cookie } = await opsEnv(memoryDb(false));
-    const html = await (await worker.fetch(get("/ops/settings", cookie), env)).text();
+    const html = await (await worker.fetch(get("/ops/engine/settings", cookie), env)).text();
     expect(html).toContain("not set up in D1 yet");
   });
 
@@ -132,7 +132,7 @@ describe("/ops/settings (spec 006)", () => {
   test("a risky change asks again; the confirmed one is written with author and reason", async () => {
     const db = memoryDb();
     const { env, cookie } = await opsEnv(db);
-    const page = await (await worker.fetch(get("/ops/settings", cookie), env)).text();
+    const page = await (await worker.fetch(get("/ops/engine/settings", cookie), env)).text();
     const csrf = csrfOf(page);
     const first = await (await worker.fetch(post("/ops/settings/apply", formFor(DEPTH, { csrf }), cookie), env)).text();
     expect(first).toContain("Confirm this change");
@@ -149,7 +149,7 @@ describe("/ops/settings (spec 006)", () => {
   test("out-of-bounds values are refused before anything is written", async () => {
     const db = memoryDb();
     const { env, cookie } = await opsEnv(db);
-    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/engine/settings", cookie), env)).text());
     const res = await worker.fetch(post("/ops/settings/apply", formFor({ ...DEPTH, capUsdc: 2_000_000 }, { csrf, confirm: "1" }), cookie), env);
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("Not applied");
@@ -161,7 +161,7 @@ describe("/ops/settings (spec 006)", () => {
     await seed(db, { env: "prod", accountKeys: null, template: "a", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
     await seed(db, { env: "prod", accountKeys: null, template: "b", settings: { ...DEFAULT_SETTINGS, guard: { ...DEFAULT_SETTINGS.guard, enabled: true } }, author: "x", reason: "r" });
     const { env, cookie } = await opsEnv(db);
-    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/engine/settings", cookie), env)).text());
     const ask = await (await worker.fetch(post("/ops/settings/rollback", new URLSearchParams({ csrf, id: "1", reason: "back" }), cookie), env)).text();
     expect(ask).toContain("the fall guard turns off");
     const confirmBody = new URLSearchParams([...ask.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)" \/>/g)].map((m) => [m[1]!, m[2]!.replace(/&amp;/g, "&")]));
@@ -178,7 +178,7 @@ describe("/ops/settings review fixes (spec 006)", () => {
     const db = memoryDb();
     await seed(db, { env: "prod", accountKeys: null, template: "conservador + depth 30/500/5, cap 1000", settings: DEPTH, author: "x", reason: "r" });
     const { env, cookie } = await opsEnv(db);
-    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/engine/settings", cookie), env)).text());
     const loose: EngineSettings = { ...DEPTH, depth: { impactBps: 30, shareBps: 500 } };
     const ask = await (await worker.fetch(post("/ops/settings/apply", formFor(loose, { csrf, template: "conservador + depth 30/500/5, cap 1000" }), cookie), env)).text();
     expect(ask).toContain("stables entries may move the pool price more");
@@ -190,7 +190,7 @@ describe("/ops/settings review fixes (spec 006)", () => {
     const db = memoryDb();
     await seed(db, { env: "prod", accountKeys: null, template: "a", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
     const { env, cookie } = await opsEnv(db);
-    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/engine/settings", cookie), env)).text());
     await worker.fetch(post("/ops/settings/apply", formFor(DEPTH, { csrf, confirm: "1", rollback_of: "1" }), cookie), env);
     expect((await listVersions(db))![0]!.rollbackOf).toBeNull();
   });
@@ -200,7 +200,7 @@ describe("/ops/settings review fixes (spec 006)", () => {
     await seed(db, { env: "prod", accountKeys: null, template: "prod-wide", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
     for (let i = 0; i < 60; i++) await seed(db, { env: "beta", accountKeys: null, template: `b${i}`, settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
     const { env, cookie } = await opsEnv(db);
-    const html = await (await worker.fetch(get("/ops/settings", cookie), env)).text();
+    const html = await (await worker.fetch(get("/ops/engine/settings", cookie), env)).text();
     expect(html).toContain("prod-wide");
   });
 });
@@ -211,7 +211,7 @@ describe("/ops/settings review round 2 (spec 006)", () => {
   test("an edited preset keeps its lineage through the confirm screen", async () => {
     const db = memoryDb();
     const { env, cookie } = await opsEnv(db);
-    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/engine/settings", cookie), env)).text());
     const edited: EngineSettings = { ...DEPTH, capUsdc: 2000 };
     const ask = await (await worker.fetch(post("/ops/settings/apply", formFor(edited, { csrf, template: "conservador + depth 30/500/5, cap 1000" }), cookie), env)).text();
     const confirmBody = new URLSearchParams([...ask.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)" \/>/g)].map((m) => [m[1]!, m[2]!.replace(/&amp;/g, "&")]));
@@ -223,7 +223,7 @@ describe("/ops/settings review round 2 (spec 006)", () => {
     const db = memoryDb();
     await seed(db, { env: "prod", accountKeys: [KEY_A], template: "c", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
     const { env, cookie } = await opsEnv(db);
-    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text());
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/engine/settings", cookie), env)).text());
     await worker.fetch(post("/ops/settings/apply", formFor(DEFAULT_SETTINGS, { csrf, confirm: "1", rollback_of: "1" }), cookie), env);
     expect((await listVersions(db))![0]!.rollbackOf).toBeNull();
     await worker.fetch(post("/ops/settings/apply", formFor(DEFAULT_SETTINGS, { csrf, confirm: "1", rollback_of: "1", canary: KEY_A.toUpperCase() }), cookie), env);
@@ -237,7 +237,7 @@ describe("/ops/settings review round 2 (spec 006)", () => {
     await seed(db, { env: "prod", accountKeys: [KEY_A], template: "live-canary", settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
     for (let i = 0; i < 60; i++) await seed(db, { env: "beta", accountKeys: null, template: `b${i}`, settings: DEFAULT_SETTINGS, author: "x", reason: "r" });
     const { env, cookie } = await opsEnv(db);
-    const html = await (await worker.fetch(get("/ops/settings", cookie), env)).text();
+    const html = await (await worker.fetch(get("/ops/engine/settings", cookie), env)).text();
     const inEffect = html.slice(html.indexOf('id="set-active"'), html.indexOf('id="set-edit"'));
     expect(inEffect).toContain("live-canary");
     expect(inEffect).not.toContain("old-canary");
@@ -245,7 +245,7 @@ describe("/ops/settings review round 2 (spec 006)", () => {
 
   test("a POST before migration 0011 answers with a notice, not a 500", async () => {
     const { env, cookie } = await opsEnv(memoryDb(false));
-    const csrf = csrfOf(await (await worker.fetch(get("/ops/settings", cookie), env)).text().catch(() => 'name="csrf" value="x"'));
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/engine/settings", cookie), env)).text().catch(() => 'name="csrf" value="x"'));
     const res = await worker.fetch(post("/ops/settings/apply", formFor(DEPTH, { csrf, confirm: "1" }), cookie), env);
     expect(res.status).not.toBe(500);
   });
@@ -258,7 +258,7 @@ describe('/ops/settings confirm token (spec 006, Sol review)', () => {
   test('confirm=1 on the first POST never writes a risky change', async () => {
     const db = memoryDb()
     const { env, cookie } = await opsEnv(db)
-    const csrf = csrfOf(await (await worker.fetch(get('/ops/settings', cookie), env)).text())
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text())
     const html = await (await worker.fetch(post('/ops/settings/apply', formFor(DEPTH, { csrf, confirm: '1' }), cookie), env)).text()
     expect(html).toContain('Confirm this change')
     expect(await listVersions(db)).toEqual([])
@@ -267,7 +267,7 @@ describe('/ops/settings confirm token (spec 006, Sol review)', () => {
   test('a token issued for one change does not confirm another, nor survives a change in what is in effect', async () => {
     const db = memoryDb()
     const { env, cookie } = await opsEnv(db)
-    const csrf = csrfOf(await (await worker.fetch(get('/ops/settings', cookie), env)).text())
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text())
     const ask = await (await worker.fetch(post('/ops/settings/apply', formFor(DEPTH, { csrf }), cookie), env)).text()
     const body = confirmBodyOf(ask)
     const bigger = new URLSearchParams(body)
@@ -285,7 +285,7 @@ describe('/ops/settings confirm token (spec 006, Sol review)', () => {
     await seed(db, { env: 'prod', accountKeys: null, template: 'wide', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
     await seed(db, { env: 'prod', accountKeys: [KEY_A, KEY_B], template: 'old canary', settings: DEPTH, author: 'x', reason: 'r' })
     const { env, cookie } = await opsEnv(db)
-    const csrf = csrfOf(await (await worker.fetch(get('/ops/settings', cookie), env)).text())
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text())
     // New canary on A only, with today's defaults: A turns depth sizing off (it ran the old canary), and B leaves the
     // old canary for the wide version, which turns depth sizing off for B too. Both are named; nothing is written yet.
     const ask = await (await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, canary: KEY_A }), cookie), env)).text()
@@ -316,7 +316,7 @@ describe('/ops/settings writes are atomic against what was checked (spec 006, So
     const db = memoryDb()
     await seed(db, { env: 'prod', accountKeys: null, template: 'cap 1000', settings: DEPTH, author: 'x', reason: 'r' })
     const { env, cookie } = await opsEnv(db)
-    const csrf = csrfOf(await (await worker.fetch(get('/ops/settings', cookie), env)).text())
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text())
     // 1000 -> 500 needs no confirm; another writer lowers it to 50 between our check and our insert.
     const orig = db.prepare.bind(db)
     let raced = false
@@ -389,7 +389,7 @@ describe('concurrent writers: property over every interleaving (spec 006, Sol ro
     if (when === 'before') await bWrite()
     const aSettings: EngineSettings = { ...DEPTH, capUsdc: risky ? 2000 : 500 }
     const { env, cookie } = await opsEnv(db)
-    const csrf = csrfOf(await (await worker.fetch(get('/ops/settings', cookie), env)).text())
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text())
     // B lands between A's last check and A's insert: injected just before A's INSERT runs.
     if (when === 'between') {
       const orig = db.prepare.bind(db)
@@ -437,3 +437,26 @@ describe('concurrent writers: property over every interleaving (spec 006, Sol ro
     }
   })
 })
+
+describe("settings form units (otto/mamoru-astro#22)", () => {
+  const parse = (o: Record<string, string>) => {
+    const f = new FormData();
+    for (const [k, v] of Object.entries({ depth_on: "1", depth_impact_pct: "0.3", depth_share_pct: "5", depth_stables_pct: "0,05", cap: "1,000", btc_fall_pct: "7", btc_vol_pct: "80", eth_fall_pct: "9", eth_vol_pct: "100", ...o })) f.set(k, v);
+    return settingsFromForm(f);
+  };
+  test("percent and grouped USDC read back to basis points and whole USDC", () => {
+    expect(parse({})).toEqual(DEPTH);
+    expect(parse({ cap: "1 000 000" }).capUsdc).toBe(1_000_000);
+    expect(parse({ cap: "1,00,000" }).capUsdc).toBeNaN();
+    expect(parse({ depth_impact_pct: "0.333" }).depth!.impactBps).toBeNaN();
+  });
+  test("a page from before the percent fields is refused, never read as percent", () => {
+    const f = new FormData();
+    for (const [k, v] of Object.entries({ depth_on: "1", depth_impact: "30", depth_share: "500", cap: "1000", btc_fall: "700", btc_vol: "8000", eth_fall: "900", eth_vol: "10000" })) f.set(k, v);
+    expect(validateSettings(settingsFromForm(f)).length).toBeGreaterThan(0);
+  });
+  test("smallest entry needs its switch on", () => {
+    expect(parse({ min_entry_gas: "5" }).minEntry).toBeUndefined();
+    expect(parse({ min_entry_on: "1", min_entry_gas: "5" }).minEntry).toEqual({ gasMultiple: 5 });
+  });
+});

@@ -1,0 +1,238 @@
+import { describe, expect, test } from "bun:test";
+import { buildFundsMap, outsideRowsOf, renderFundsMap } from "../src/funds-map";
+import type { AccountView } from "../src/infra-snapshot";
+import { summarizeOutside } from "../src/outside-base";
+
+let seq = 0;
+/** A full, typed AccountView (the real shape the snapshot produces), so field names are compiler-checked. */
+const row = (o: Partial<AccountView> = {}): AccountView => {
+  seq += 1;
+  return {
+    accountKey: `k${seq}…`,
+    key: `k${seq}`,
+    userId: `u${seq}`,
+    address: `0x${seq.toString(16).padStart(40, "0")}`,
+    basescanUrl: "",
+    chainId: 8453,
+    env: "prod",
+    isTest: false,
+    usdcIdle: 0,
+    lpUsd: 0,
+    ethBalance: 0,
+    positions: 0,
+    inRange: 0,
+    ...o,
+  };
+};
+const snap = (o: Partial<Parameters<typeof buildFundsMap>[0]> = {}) => ({
+  ethUsd: 2000,
+  relayer: { address: "0x1", basescanUrl: "", ethBalance: 0.01, usd: 20, status: "ok" as const },
+  funding: [
+    { id: "relayer-base", balanceWei: "10000000000000000" },
+    { id: "relayer-ethereum", balanceWei: "3000000000000000" },
+    { id: "relayer-monad", balanceWei: "109800000000000000000" },
+  ],
+  ...o,
+});
+const find = (m: ReturnType<typeof buildFundsMap>, chain: string, id: string) =>
+  m.chains.find((c) => c.name === chain)?.buckets.find((b) => b.id === id);
+
+describe("buildFundsMap", () => {
+  test("outside ETH (c9d4179b-like) is not working and never joins the working total", () => {
+    const rows = [
+      row({ lpUsd: 40, usdcIdle: 2, ethBalance: 0.001, positions: 1, outside: { eth: 0, usdc: 0, usd: 0 } }),
+      row({ outside: { eth: 0.05537835, usdc: 0, usd: 127.277 } }),
+    ];
+    const m = buildFundsMap(snap(), rows);
+    expect(m.working).toBe(42);
+    expect(m.notWorking).toBeCloseTo(127.277, 3);
+    const out = find(m, "Ethereum", "outside")!;
+    expect(out.kind).toBe("outside");
+    expect(out.accounts).toBe(1);
+    expect(out.note).toContain("0.0554 ETH");
+    expect(m.total).toBeCloseTo(m.working + m.reserve + m.notWorking, 6);
+    expect(find(m, "Base", "gas")!.usd).toBeCloseTo(2, 6);
+    expect(find(m, "Base", "relayer")!.usd).toBe(20);
+    expect(find(m, "Ethereum", "relayer")!.usd).toBeCloseTo(6, 6);
+  });
+
+  test("unread outside is a floor and shows as not read, never zero", () => {
+    const m = buildFundsMap(snap(), [row({ outside: { eth: 0, usdc: 10, usd: 10 } }), row()]);
+    const out = find(m, "Ethereum", "outside")!;
+    expect(out.atLeast).toBe(true);
+    expect(out.note).toContain("1 not read");
+    expect(m.partial).toBe(true);
+    const none = buildFundsMap(snap(), [row()]);
+    const o2 = find(none, "Ethereum", "outside")!;
+    expect(o2.usd).toBeNull();
+    expect(o2.note).toBe("not read");
+  });
+
+  test("zero case: no rows, no snapshot wallets", () => {
+    const m = buildFundsMap({ ethUsd: null, relayer: null }, []);
+    expect(m.total).toBe(0);
+    expect(m.chains.map((c) => c.name)).toEqual(["Base"]);
+    expect(() => renderFundsMap(m)).not.toThrow();
+  });
+
+  test("Monad relayer is shown in native units and not priced", () => {
+    const m = buildFundsMap(snap(), [row()]);
+    const mon = find(m, "Monad", "relayer")!;
+    expect(mon.usd).toBeNull();
+    expect(mon.note).toContain("109.80 MON");
+    expect(mon.note).toContain("not priced");
+    expect(m.partial).toBe(true);
+  });
+
+  test("monad mainnet (143) rows land on Monad", () => {
+    const m = buildFundsMap(snap(), [row({ chainId: 143, usdcIdle: 5 })]);
+    expect(find(m, "Monad", "idle")!.usd).toBe(5);
+  });
+
+  test("testnets and unknown chains never enter the map, and are counted apart", () => {
+    const rows = [row({ usdcIdle: 3 }), row({ chainId: 10143, usdcIdle: 50 }), row({ chainId: 84532, lpUsd: 60 }), row({ chainId: 11155111, usdcIdle: 70 }), row({ chainId: 999, usdcIdle: 80 })];
+    const m = buildFundsMap(snap(), rows);
+    expect(m.excluded).toBe(4);
+    expect(m.working).toBe(3);
+    expect(m.chains.map((c) => c.name)).not.toContain("Chain 10143");
+    expect(find(m, "Monad", "idle")).toBeUndefined();
+    expect(renderFundsMap(m)).toContain("4 accounts on test networks, not counted.");
+    expect(renderFundsMap(buildFundsMap(snap(), [row()]))).not.toContain("test networks");
+  });
+
+  test("an Ethereum account (chainId 1) is working money on Ethereum, not outside, and counted once", () => {
+    const rows = [
+      row({ chainId: 1, usdcIdle: 500, ethBalance: 0.001, outside: { eth: 1, usdc: 999, usd: 3000 } }),
+      row({ lpUsd: 10, outside: { eth: 0, usdc: 0, usd: 0 } }),
+    ];
+    const m = buildFundsMap(snap(), rows);
+    expect(m.excluded).toBe(0);
+    expect(find(m, "Ethereum", "idle")!.usd).toBe(500);
+    expect(find(m, "Ethereum", "idle")!.kind).toBe("working");
+    expect(find(m, "Ethereum", "gas")!.usd).toBeCloseTo(2, 6);
+    expect(m.working).toBe(510);
+    expect(m.notWorking).toBe(0);
+    expect(m.total).toBeCloseTo(512, 6);
+    const out = find(m, "Ethereum", "outside");
+    expect(out?.usd ?? 0).toBe(0);
+    const html = renderFundsMap(m);
+    expect(html).not.toContain("test networks");
+  });
+
+  test("same address on Base (outside) and chain 1 (idle) is one pot of money", () => {
+    const A = "0xAbC0000000000000000000000000000000000001";
+    const m = buildFundsMap(snap(), [
+      row({ address: A, outside: { eth: 0, usdc: 500, usd: 500 } }),
+      row({ chainId: 1, address: A.toLowerCase(), usdcIdle: 500 }),
+    ]);
+    expect(m.total).toBeCloseTo(500, 6);
+    expect(m.notWorking).toBe(0);
+    expect(m.partial).toBe(false);
+  });
+
+  test("several rows at one address count their outside balance once", () => {
+    const A = "0xabc0000000000000000000000000000000000002";
+    const m = buildFundsMap(snap(), [
+      row({ address: A, outside: { eth: 0, usdc: 100, usd: 100 } }),
+      row({ address: A, outside: { eth: 0, usdc: 100, usd: 100 } }),
+    ]);
+    expect(m.notWorking).toBe(100);
+    expect(find(m, "Ethereum", "outside")!.accounts).toBe(1);
+    // an unread duplicate does not turn a read address into a floor
+    const m2 = buildFundsMap(snap(), [row({ address: A }), row({ address: A, outside: { eth: 0, usdc: 100, usd: 100 } })]);
+    expect(m2.notWorking).toBe(100);
+    expect(m2.partial).toBe(false);
+  });
+
+  test("unread outside never renders as $0 anywhere", () => {
+    const html = renderFundsMap(buildFundsMap(snap(), [row({ lpUsd: 10 })]));
+    const nw = html.split('class="fm-x"><dt>')[1].split("</div>")[0];
+    expect(nw).toContain("not read");
+    expect(nw).not.toContain("$0");
+    const eth = html.split('<h3>Ethereum')[1].split("</h3>")[0];
+    expect(eth).toContain("not read");
+    expect(eth).not.toContain("$0");
+    const some = renderFundsMap(buildFundsMap(snap(), [row({ outside: { eth: 0, usdc: 10, usd: 10 } }), row()]));
+    expect(some).toContain("≥ $10.00");
+    expect(some).toContain("1 not read");
+  });
+
+  test("unpriced Safe gas shows the ETH and not priced, never $0", () => {
+    const html = renderFundsMap(buildFundsMap(snap({ ethUsd: null }), [row({ ethBalance: 0.0025, outside: { eth: 0, usdc: 0, usd: 0 } })]));
+    const gas = html.split('class="fm-r"><dt>')[1].split("</div>")[0];
+    expect(gas).toContain("not priced");
+    expect(gas).toContain("0.0025 ETH");
+    expect(gas).not.toContain("$0");
+  });
+
+  test("a floor total prints no exact shares", () => {
+    const rows = [row({ lpUsd: 10, outside: { eth: 0, usdc: 5, usd: 5 } }), row()];
+    const m = buildFundsMap(snap(), rows);
+    expect(m.partial).toBe(true);
+    const html = renderFundsMap(m);
+    expect(html).not.toMatch(/\d+\.\d%/);
+    expect(html).toContain("≥ $15.00");
+    expect(html).toContain("Shares are not shown");
+    const exact = renderFundsMap(buildFundsMap(snap(), [row({ lpUsd: 10, outside: { eth: 0, usdc: 10, usd: 10 } })]));
+    expect(exact).toMatch(/50\.0%/);
+  });
+
+  test("render escapes, links buckets, marks not working", () => {
+    const html = renderFundsMap(buildFundsMap(snap(), [row({ outside: { eth: 1, usdc: 0, usd: 2000 } })]));
+    expect(html).toContain('id="funds-map"');
+    expect(html).toContain("Total including not working");
+    expect(html).toContain('href="/ops/accounts"');
+    expect(html).toContain("Not working</span>");
+  });
+
+  test("operator relayers never enter totals, chain totals, shares or bars", () => {
+    const rows = [row({ lpUsd: 10, usdcIdle: 5, ethBalance: 0.001 })];
+    const withRelayers = buildFundsMap(snap(), rows);
+    const without = buildFundsMap({ ethUsd: 2000, relayer: null }, rows);
+    expect(withRelayers.operator).toBeGreaterThan(0);
+    expect(withRelayers.total).toBeCloseTo(without.total, 9);
+    expect(withRelayers.total).toBeCloseTo(17, 6);
+    for (const name of ["Base", "Ethereum"]) {
+      expect(withRelayers.chains.find((c) => c.name === name)!.usd).toBeCloseTo(without.chains.find((c) => c.name === name)?.usd ?? 0, 9);
+    }
+    const html = renderFundsMap(withRelayers);
+    const team = html.split('class="fm-team"')[1].split("</tbody>")[0];
+    expect(team).not.toMatch(/\d+\.\d%/);
+    expect(html.split("fm-team")[0]).not.toContain("Operator (team gas)</td>");
+    expect(html).toContain("team gas");
+  });
+
+  test("headline outside figure uses the same dedupe as the map (no double count, testnets out)", () => {
+    const A = "0xAbC0000000000000000000000000000000000009";
+    const rows = [
+      row({ address: A, outside: { eth: 0, usdc: 500, usd: 500 } }),
+      row({ chainId: 1, address: A, usdcIdle: 500 }),
+      row({ chainId: 10143, outside: { eth: 0, usdc: 70, usd: 70 } }),
+      row({ outside: { eth: 0, usdc: 100, usd: 100 } }),
+    ];
+    const head = summarizeOutside(outsideRowsOf(rows));
+    const m = buildFundsMap(snap(), rows);
+    expect(head.usd).toBe(100);
+    expect(m.notWorking).toBe(head.usd!);
+    expect(m.total).toBeCloseTo(600, 6);
+  });
+
+  test("operator summary is a floor or not priced, never exact or $0", () => {
+    const html = renderFundsMap(buildFundsMap(snap(), [row()]));
+    const op = html.split('class="fm-o"><dt>')[1].split("</div>")[0];
+    expect(op).toContain("≥ $");
+    expect(op).toContain("109.80 MON");
+    const none = renderFundsMap(buildFundsMap({ ethUsd: null, relayer: null, funding: [{ id: "relayer-base", balanceWei: "10000000000000000" }] }, [row()]));
+    const op2 = none.split('class="fm-o"><dt>')[1].split("</div>")[0];
+    expect(op2).toContain("not priced");
+    expect(op2).not.toContain("$0");
+  });
+
+  test("Safe gas is a floor when some rows on the chain are unread", () => {
+    const m = buildFundsMap(snap(), [row({ ethBalance: 0.001 }), row({ unread: true })]);
+    const gas = find(m, "Base", "gas")!;
+    expect(gas.atLeast).toBe(true);
+    expect(m.partial).toBe(true);
+    expect(renderFundsMap(m)).toContain("≥ $2.00");
+  });
+});

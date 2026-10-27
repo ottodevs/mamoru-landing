@@ -5,13 +5,14 @@
  *
  * Section contract: `modules[id](root, quiet)` mounts a section into `root` and
  * returns a teardown function the router calls before the next swap.
- * Pure decisions live in opsRouterLogic() and topupLogic(), embedded here from
+ * Pure decisions live in opsRouterLogic(), topupLogic() and fundPlanLogic(), embedded here from
  * source so the tests exercise the code that ships.
  */
 
 import { opsRouterLogic } from "./ops-router-logic";
 import { topupLogic } from "./topup-logic";
 import { labLogic } from "./lab-logic";
+import { fundPlanLogic } from "./fund-plan-logic";
 
 /** Runs before first paint so nothing flashes in its final state and then restarts. */
 export function motionHeadScript(nonce: string): string {
@@ -25,6 +26,7 @@ export function opsClientScript(nonce: string): string {
   var R = (/*router-logic*/${opsRouterLogic.toString()}/*end-router-logic*/)();
   var L = (/*topup-logic*/${topupLogic.toString()}/*end-topup-logic*/)();
   var LAB = (/*lab-logic*/${labLogic.toString()}/*end-lab-logic*/)();
+  var P = (/*fund-plan-logic*/${fundPlanLogic.toString()}/*end-fund-plan-logic*/)();
   var root = document.documentElement;
   var main = document.getElementById("ops-main");
   var live = document.getElementById("ops-live");
@@ -446,7 +448,7 @@ export function opsClientScript(nonce: string): string {
     function reload() {
       if (refreshed) return;
       refreshed = true;
-      Shell.refresh("/ops/infra?fresh=1");
+      Shell.refresh("/ops/money/funding?fresh=1");
     }
     var actions = {
       detect: detect,
@@ -620,6 +622,7 @@ export function opsClientScript(nonce: string): string {
     var tF = new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
 
     var root = null, scope = null, csrf = "", state = null, geo = {}, playTimer = null, jobTimer = null, jobTickTimer = null, loadToken = 0, jobGen = 0, lastJobShape = null;
+    var askTimer = null, askTickTimer = null, askGen = 0, askShape = null;
 
     function esc(s) {
       return String(s).replace(/[&<>"']/g, function (c) {
@@ -664,6 +667,13 @@ export function opsClientScript(nonce: string): string {
         // completion is attributed correctly even if the viewer has since switched windows.
         job: null, jobSpec: null, jobWindowIndex: 0, jobStartMs: 0, jobSending: false, jobWasInstant: false,
         jobAlreadyExisted: false, jobVariantLabel: "", jobDismissed: false, jobApplying: false, jobDoneElapsedSec: 0,
+        // "Preguntar al Lab" (otto/mamoru-astro#30): askThreads is the picker list; askThreadId/askJobs/askRuns
+        // are the thread currently open (askJobs oldest first, as the API returns them). Each job's own
+        // createdAt (server-assigned, or synthesized at send time) drives its elapsed-seconds display, not a
+        // single shared "pending started at" field — a job already in flight when a thread loads has no
+        // client-side send moment to measure from.
+        askLoaded: false, askThreads: [], askThreadId: null, askJobs: [], askRuns: {}, askSending: false,
+        askError: "",
       };
     }
     function windowOf() { return state.windows[state.w] || null; }
@@ -1131,6 +1141,7 @@ export function opsClientScript(nonce: string): string {
       scope.querySelectorAll(".lab-rtabs button").forEach(function (b) { b.setAttribute("aria-selected", String(b.getAttribute("data-lab-r") === t)); });
       $("lab-r-probar").hidden = t !== "probar";
       $("lab-r-preguntar").hidden = t !== "preguntar";
+      if (t === "preguntar") ensureAskLoaded();
     }
 
     /* ---------- right: Probar (B-07, B-08) ---------- */
@@ -1473,6 +1484,302 @@ export function opsClientScript(nonce: string): string {
       renderTicks();
       tickAll();
     }
+    /* ---------- right: Preguntar al Lab (otto/mamoru-astro#30, spec 008 phase 2) ---------- */
+
+    function pendingAskJob() {
+      for (var i = 0; i < state.askJobs.length; i++) {
+        var j = state.askJobs[i];
+        if (j.status === "queued" || j.status === "running") return j;
+      }
+      return null;
+    }
+    function stopAskTicker() {
+      clearInterval(askTickTimer);
+      askTickTimer = null;
+    }
+    function startAskTicker() {
+      if (askTickTimer) return;
+      askTickTimer = setInterval(tickAsk, 1000);
+    }
+    /** Elapsed time since the turn was created, from the job's own createdAt -- never a client-only timestamp:
+     * a job already queued/running when its thread is first loaded (not sent by this browser tab) has no
+     * client-side "sent at" moment to measure from, only what the server recorded. */
+    function askElapsedSec(job) {
+      var created = job.createdAt ? Date.parse(job.createdAt) : NaN;
+      if (isNaN(created)) return 0;
+      return Math.max(0, Math.round((Date.now() - created) / 1000));
+    }
+    /** Updates only the pending card's seconds/headline text in place -- never rebuilds the message list, same
+     * discipline as renderJobStatus (#28 follow-up): the live region's announced text changes only on a real
+     * state change, the ticking count lives in its own aria-hidden span. */
+    function tickAsk() {
+      var job = pendingAskJob();
+      if (!job) { stopAskTicker(); return; }
+      var secs = askElapsedSec(job);
+      var headlineEl = $("lab-ask-headline-" + job.id);
+      var secsEl = $("lab-ask-secs-" + job.id);
+      if (!headlineEl || !secsEl) return;
+      headlineEl.textContent = LAB.askStatusHeadline(job.status);
+      secsEl.textContent = " · " + secs + " s";
+      var sub = $("lab-ask-sub-" + job.id);
+      if (sub) sub.textContent = LAB.askSubText(job.status, secs);
+    }
+
+    function askAnswerBodyHtml(job) {
+      if (job.status === "queued" || job.status === "running") {
+        var secs = askElapsedSec(job);
+        var sub = LAB.askSubText(job.status, secs);
+        return (
+          '<div role="status" aria-live="polite"><span class="lab-verdict" id="lab-ask-headline-' + esc(job.id) + '">' + esc(LAB.askStatusHeadline(job.status)) +
+          '</span><span class="lab-ask-pending-secs" id="lab-ask-secs-' + esc(job.id) + '" aria-hidden="true"> · ' + secs + " s</span></div>" +
+          '<div class="lab-progress"><i></i></div>' +
+          (sub ? '<p class="lab-note" id="lab-ask-sub-' + esc(job.id) + '">' + esc(sub) + "</p>" : "")
+        );
+      }
+      if (job.status === "failed") {
+        return (
+          '<p class="lab-verdict">' + esc(LAB.askFailedText(job.errorCode || "")) + "</p>" +
+          '<button type="button" class="lab-retry" data-ask-retry="' + esc(job.question) + '">Reintentar</button>'
+        );
+      }
+      var blocks = (job.answer && job.answer.blocks) || [];
+      // AL-22: "flagged LAB_ANSWER_PARTIAL" -- the cost meter's own verifierOutcome ('ok'|'repaired'|'partial'|
+      // 'error', packages/lab-agent/src/cost-meter.ts) is the one reliable signal for this, not a guess at the
+      // separately-shaped "verifier" (VerifyResult) blob's fields.
+      var partial = Boolean(job.cost && job.cost.verifierOutcome === "partial");
+      var html = LAB.answerBlocksHtml(blocks, state.askRuns, partial);
+      if (!html) html = '<p class="lab-verdict">Sin respuesta verificable.</p>';
+      var footer = LAB.answerFooterText(job.cost, typeof job.shadowUsd === "number" ? job.shadowUsd : null);
+      if (footer) html += '<div class="lab-ask-footer">' + esc(footer) + "</div>";
+      return html;
+    }
+
+    function renderAskMessages() {
+      var box = $("lab-ask-messages");
+      if (!box) return;
+      if (!state.askJobs.length) {
+        box.innerHTML = '<p class="lab-ask-empty">Pregunta algo sobre el banco: una estrategia, una ventana, una comparación entre políticas.</p>';
+        return;
+      }
+      var html = "";
+      for (var i = 0; i < state.askJobs.length; i++) {
+        var job = state.askJobs[i];
+        html +=
+          '<div class="lab-msg lab-me"><p>' + esc(job.question) + "</p></div>" +
+          '<div class="lab-ans' + (job.status === "failed" ? " lab-failed" : "") + '">' + askAnswerBodyHtml(job) + "</div>";
+      }
+      box.innerHTML = html;
+      // Open at the start of the latest turn (its question, then the verdict headline), not at the bottom of the answer.
+      var turns = box.querySelectorAll(".lab-me");
+      var last = turns.length ? turns[turns.length - 1] : null;
+      box.scrollTop = last ? last.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop : 0;
+      box.querySelectorAll("[data-ask-retry]").forEach(function (b) {
+        b.onclick = function () { sendAskQuestion(b.getAttribute("data-ask-retry")); };
+      });
+      box.querySelectorAll(".lab-ask-openbench").forEach(function (b) {
+        b.onclick = function () {
+          openRunFromAsk(b.getAttribute("data-run-id"), b.getAttribute("data-window-id"), b.getAttribute("data-compare") === "1");
+        };
+      });
+      if (pendingAskJob()) startAskTicker(); else stopAskTicker();
+    }
+
+    /** "Ver en el banco" (coordinator note): opens the window the cited run belongs to and selects it; for a
+     * comparison chart (kind=decomposition or >1 run) also switches to the Comparar tab so the highlighted row
+     * is immediately visible, not just selected off-screen. */
+    function openRunFromAsk(runId, windowId, compare) {
+      if (!runId || !windowId) return;
+      var idx = -1;
+      for (var i = 0; i < state.windows.length; i++) if (state.windows[i].windowId === windowId) idx = i;
+      if (idx === -1) return;
+      state.w = idx;
+      state.at = 0;
+      stopPlay();
+      state.selectedHash = runId;
+      renderAll();
+      if (compare) setTab("cmp");
+    }
+
+    function renderAskPicker() {
+      var sel = $("lab-ask-thread");
+      if (!sel) return;
+      var html = '<option value="">Nuevo hilo</option>';
+      for (var i = 0; i < state.askThreads.length; i++) {
+        var t = state.askThreads[i];
+        // A native <select> does not reliably text-overflow its own closed/selected value (only the open
+        // dropdown list respects CSS truncation consistently) -- the option text itself is shortened so a long
+        // thread title (up to 60 chars, threadTitleFromQuestion) cannot overflow the narrow right column.
+        var short = t.title.length > 36 ? t.title.slice(0, 35) + "…" : t.title;
+        html += '<option value="' + esc(t.id) + '" title="' + esc(t.title) + '"' + (t.id === state.askThreadId ? " selected" : "") + ">" + esc(short) + "</option>";
+      }
+      sel.innerHTML = html;
+      sel.value = state.askThreadId || "";
+    }
+
+    function renderAskSuggestions() {
+      var box = $("lab-ask-suggestions");
+      if (!box) return;
+      if (state.askJobs.length) { box.innerHTML = ""; return; } // only before the first turn of a thread
+      var w = windowOf();
+      var label = w ? LAB.windowHeadlineLabel(w.regime, w.from, w.to) : "esta ventana";
+      var qs = LAB.suggestionQuestions(label);
+      box.innerHTML = qs.map(function (q) { return '<button type="button" class="lab-ask-suggestion">' + esc(q) + "</button>"; }).join("");
+      box.querySelectorAll(".lab-ask-suggestion").forEach(function (b) {
+        b.onclick = function () { sendAskQuestion(b.textContent); };
+      });
+    }
+
+    function renderAskForm() {
+      var send = $("lab-ask-send");
+      var input = $("lab-ask-input");
+      var pending = Boolean(pendingAskJob()) || state.askSending;
+      if (send) send.disabled = pending || !input || !LAB.questionValid(input.value || "");
+      var err = $("lab-ask-err");
+      if (err) err.textContent = state.askError || "";
+    }
+
+    function renderAskPanel() {
+      renderAskPicker();
+      renderAskMessages();
+      renderAskSuggestions();
+      renderAskForm();
+    }
+
+    /** Loads one thread's full transcript, or clears to the "new thread, nothing sent yet" view when "id" is
+     * falsy. Called on thread-picker change, "Nuevo hilo", and right after a question creates a fresh thread. */
+    function loadAskThread(id) {
+      // Same generation counter the ask/poll path uses: bumping it here invalidates any in-flight thread GET or
+      // poll for the thread we are leaving (its response is dropped, its timer cleared), so a stale response
+      // can never overwrite the selected thread.
+      var myGen = ++askGen;
+      clearTimeout(askTimer);
+      state.askThreadId = id || null;
+      state.askJobs = [];
+      state.askRuns = {};
+      state.askError = "";
+      renderAskPanel();
+      if (!id) return;
+      api("/ops/lab/api/threads/" + encodeURIComponent(id))
+        .then(function (r) {
+          if (askGen !== myGen || state.askThreadId !== id) return;
+          if (!r.ok || !r.body) return;
+          state.askJobs = r.body.jobs || [];
+          state.askRuns = r.body.runs || {};
+          renderAskPanel();
+          // A turn still queued/running at load time keeps polling, so a refresh shows it finishing.
+          if (pendingAskJob()) pollAskThread(myGen);
+        })
+        .catch(function () {});
+    }
+
+    function loadAskThreads() {
+      api("/ops/lab/api/threads").then(function (r) {
+        state.askThreads = (r.ok && r.body && r.body.threads) || [];
+        renderAskPicker();
+      });
+    }
+
+    /** First switch to the tab only (B-10-equivalent lazy load): no point fetching threads for a viewer who
+     * never opens "Preguntar al Lab" in this session. */
+    function ensureAskLoaded() {
+      if (state.askLoaded) return;
+      state.askLoaded = true;
+      loadAskThreads();
+      renderAskSuggestions();
+    }
+
+    /**
+     * myGen (same pattern as runScenario's jobGen, #28 follow-up): a poll response or the initial POST response
+     * landing after the viewer has since switched threads, started a new question, or torn the panel down is
+     * dropped rather than overwriting a different thread's state.
+     */
+    function sendAskQuestion(question) {
+      var q = (question || "").trim();
+      if (!LAB.questionValid(q) || state.askSending || pendingAskJob()) return;
+      var myGen = ++askGen;
+      var w = windowOf();
+      state.askSending = true;
+      state.askError = "";
+      renderAskForm();
+      var body = new URLSearchParams({ csrf: csrf, question: q, threadId: state.askThreadId || "", windowId: (w && w.windowId) || "" }).toString();
+      api("/ops/lab/api/ask", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: body })
+        .then(function (r) {
+          // The POST has settled: the send button re-enables whether or not the viewer switched threads meanwhile.
+          state.askSending = false;
+          var ok = r.ok && r.body && r.body.job;
+          if (askGen !== myGen) {
+            // The viewer switched thread / pressed "Nuevo hilo" while this was in flight. A created thread must
+            // still show up in the picker (its pending job is reachable by selecting it); only the transcript
+            // render is skipped because that thread is no longer the selected one.
+            if (ok) loadAskThreads();
+            renderAskForm();
+            return;
+          }
+          if (!ok) {
+            state.askError = LAB.askSendErrorText((r.body && r.body.error) || "LAB_NETWORK");
+            renderAskForm();
+            return;
+          }
+          var input = $("lab-ask-input");
+          if (input) input.value = "";
+          var isNewThread = !state.askThreadId;
+          state.askThreadId = r.body.threadId;
+          // createdAt is synthesized here (the POST response carries no timestamp): close enough to the
+          // server's own value that the ticking elapsed count reads right until the first poll replaces this
+          // whole entry with the server's record.
+          state.askJobs.push({ id: r.body.job.id, question: q, status: "queued", answer: null, verifier: null, cost: null, errorCode: null, createdAt: new Date().toISOString() });
+          if (isNewThread) loadAskThreads(); // picks up the newly created thread's title
+          renderAskPanel();
+          pollAskThread(myGen);
+        })
+        .catch(function () {
+          state.askSending = false;
+          if (askGen !== myGen) { renderAskForm(); return; }
+          state.askError = LAB.askSendErrorText("LAB_NETWORK");
+          renderAskForm();
+        });
+    }
+
+    function pollAskThread(gen, attempt) {
+      clearTimeout(askTimer);
+      askTimer = setTimeout(function () {
+        if (gen !== askGen || !state.askThreadId) return;
+        api("/ops/lab/api/threads/" + encodeURIComponent(state.askThreadId))
+          .then(function (r) {
+            if (gen !== askGen) return;
+            if (!r.ok || !r.body) { pollAskThread(gen, (attempt || 0) + 1); return; }
+            state.askJobs = r.body.jobs || [];
+            state.askRuns = r.body.runs || {};
+            renderAskMessages();
+            renderAskForm();
+            if (pendingAskJob()) pollAskThread(gen, (attempt || 0) + 1);
+          })
+          .catch(function () {
+            if (gen !== askGen) return;
+            pollAskThread(gen, (attempt || 0) + 1);
+          });
+      }, LAB.pollDelayMs(attempt || 0));
+    }
+
+    function wireAsk() {
+      var sel = $("lab-ask-thread");
+      if (sel) sel.onchange = function () { loadAskThread(sel.value || null); };
+      var newBtn = $("lab-ask-new");
+      if (newBtn) newBtn.onclick = function () { loadAskThread(null); };
+      var form = $("lab-ask-form");
+      var input = $("lab-ask-input");
+      if (form) form.onsubmit = function (e) { e.preventDefault(); if (input) sendAskQuestion(input.value); };
+      if (input) {
+        input.oninput = renderAskForm;
+        input.onkeydown = function (e) {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            sendAskQuestion(input.value);
+          }
+        };
+      }
+    }
+
     function renderAll() {
       renderWindows();
       renderVariants();
@@ -1502,6 +1809,7 @@ export function opsClientScript(nonce: string): string {
       var next = $("lab-next"); if (next) next.onclick = function () { jump(1); };
       var prev = $("lab-prev"); if (prev) prev.onclick = function () { jump(-1); };
       var scrub = $("lab-scrub"); if (scrub) scrub.oninput = function (e) { stopPlay(); state.at = Number(e.target.value); tickAll(); };
+      wireAsk();
     }
 
     function init(s) {
@@ -1522,9 +1830,12 @@ export function opsClientScript(nonce: string): string {
         clearTimeout(playTimer);
         clearTimeout(jobTimer);
         clearInterval(jobTickTimer);
+        clearTimeout(askTimer);
+        clearInterval(askTickTimer);
         clearTimeout(resizeTimer);
         window.removeEventListener("resize", onResizeDebounced);
         loadToken++;
+        askGen++;
         root = null;
         scope = null;
         state = null;
@@ -1534,16 +1845,325 @@ export function opsClientScript(nonce: string): string {
     return { init: init };
   })();
 
+  /* ---------- Funding: tabs and the run that funds every short wallet (otto/mamoru-astro#32) ---------- */
+  // Sends one plain transfer per ticked wallet, chain by chain, each checked against the wallet's balance on that
+  // chain first. A decline in the wallet stops the run; any other failure marks that transfer and moves on.
+  var FundPlan = (function () {
+    var running = false, stopAsked = false, timers = [];
+    function init(scope) {
+      var box = scope.querySelector("#topup");
+      if (!box || typeof BigInt !== "function") return function () {};
+      var cfg;
+      try { cfg = JSON.parse(box.getAttribute("data-topup")); } catch (err) { return function () {}; }
+      var byId = {};
+      for (var i = 0; i < (cfg.targets || []).length; i++) byId[cfg.targets[i].id] = cfg.targets[i];
+      var $ = function (id) { return box.querySelector("#" + id); };
+      var line = $("fp-line"), sendBtn = $("fp-send"), stopBtn = $("fp-stop");
+      var eth = window.ethereum || null;
+      var alive = true;
+      // Set once a transfer went out without a receipt: nothing more is sent from this page until it is reloaded.
+      var locked = false;
+
+      function showTab(id) {
+        var tabs = box.querySelectorAll("[data-tab]");
+        for (var t = 0; t < tabs.length; t++) tabs[t].setAttribute("aria-selected", String(tabs[t].getAttribute("data-tab") === id));
+        var plan = $("fd-plan"), one = $("fd-one");
+        if (plan) plan.hidden = id !== "plan";
+        if (one) one.hidden = id !== "one";
+      }
+      function rows() { return box.querySelectorAll(".fp-row"); }
+      function rowOf(id) { return box.querySelector('.fp-row[data-id="' + id + '"]'); }
+      function amountOf(row) {
+        var p = L.parseEth(row.querySelector(".fp-in input").value);
+        return p.ok ? p.wei : null;
+      }
+      function ticked(row) { return row.querySelector('input[type="checkbox"]').checked; }
+      function setLine(text, tone) { if (line) { line.textContent = text; line.className = "fp-line" + (tone && tone !== "plain" ? " " + tone : ""); } }
+      function setPhase(row, phase, note) {
+        row.setAttribute("data-phase", phase);
+        var st = row.querySelector(".fp-state");
+        st.textContent = P.phaseWord(phase) + (note ? ": " + note : "");
+      }
+      function planned() {
+        var out = [], rs = rows();
+        for (var r = 0; r < rs.length; r++) {
+          var t = byId[rs[r].getAttribute("data-id")];
+          var amt = amountOf(rs[r]);
+          if (t && ticked(rs[r]) && amt !== null) out.push({ id: t.id, chain: String(t.chain.hex).toLowerCase(), amount: amt });
+        }
+        return P.order(out);
+      }
+      function paint() {
+        if (running) return;
+        var plan = planned();
+        var totals = {};
+        for (var p = 0; p < plan.length; p++) totals[plan[p].chain] = (totals[plan[p].chain] || BigInt(0)) + plan[p].amount;
+        var cells = box.querySelectorAll("[data-total]");
+        for (var c = 0; c < cells.length; c++) {
+          var hex = String(cells[c].getAttribute("data-total")).toLowerCase();
+          var sym = "";
+          for (var id in byId) if (String(byId[id].chain.hex).toLowerCase() === hex) sym = byId[id].chain.symbol;
+          cells[c].textContent = totals[hex] ? "Sends " + L.formatEth(totals[hex]) + " " + sym + " in total." : "Nothing ticked on this chain.";
+        }
+        var rs = rows();
+        for (var r = 0; r < rs.length; r++) {
+          var bad = rs[r].querySelector(".fp-in input").value.trim() !== "" && amountOf(rs[r]) === null;
+          rs[r].classList.toggle("bad", bad);
+          if (rs[r].getAttribute("data-phase") === "waiting") rs[r].querySelector(".fp-state").textContent = bad ? "Not a number" : "";
+        }
+        var n = plan.length;
+        sendBtn.textContent = n ? "Send " + n + " transfer" + (n === 1 ? "" : "s") : "Send";
+        sendBtn.disabled = !n || !eth || locked;
+        if (locked) return;
+        var sw = P.switches(plan, null);
+        if (!eth) setLine("Sending from this page needs a browser wallet. Each wallet's address is in the One wallet tab.", "plain");
+        else setLine(n ? n + " transfer" + (n === 1 ? "" : "s") + " on " + sw + " network" + (sw === 1 ? "" : "s") + ". The wallet asks you to confirm each one." : "Tick a wallet and give it an amount.", "plain");
+      }
+      function splitInto(input) {
+        var hex = String(input.getAttribute("data-split")).toLowerCase();
+        var total = L.parseEth(input.value);
+        if (!total.ok) return;
+        var targets = [], shorts = [];
+        var rs = rows();
+        for (var r = 0; r < rs.length; r++) {
+          var t = byId[rs[r].getAttribute("data-id")];
+          if (t && String(t.chain.hex).toLowerCase() === hex && ticked(rs[r])) { targets.push(rs[r]); shorts.push(BigInt(t.shortWei || "0")); }
+        }
+        var parts = P.split(total.wei, shorts);
+        for (var k = 0; k < targets.length; k++) targets[k].querySelector(".fp-in input").value = parts[k] > BigInt(0) ? L.formatEth(parts[k]) : "";
+      }
+
+      function req(method, params) { return eth.request({ method: method, params: params || [] }); }
+      function wait(ms) { return new Promise(function (ok) { timers.push(setTimeout(ok, ms)); }); }
+      function toChain(t) {
+        return req("eth_chainId").then(function (now) {
+          if (String(now).toLowerCase() === String(t.chain.hex).toLowerCase()) return false;
+          return req("wallet_switchEthereumChain", [{ chainId: t.chain.hex }]).catch(function (err) {
+            if (Number(err && err.code) !== 4902 || !t.chain.rpc) throw err;
+            // Adding a chain does not make it active (EIP-3085): ask for the switch again once it is known.
+            return req("wallet_addEthereumChain", [{ chainId: t.chain.hex, chainName: t.chain.name, nativeCurrency: { name: t.chain.symbol === "ETH" ? "Ether" : t.chain.name, symbol: t.chain.symbol, decimals: 18 }, rpcUrls: [t.chain.rpc], blockExplorerUrls: [t.chain.explorerUrl] }])
+              .then(function () { return req("wallet_switchEthereumChain", [{ chainId: t.chain.hex }]); });
+          }).then(function () { return true; });
+        });
+      }
+      function receipt(hash, tries) {
+        return req("eth_getTransactionReceipt", [hash]).catch(function () { return null; }).then(function (rc) {
+          if (rc && rc.status) return Number(rc.status) === 1;
+          if (tries >= 60 || !alive) return null;
+          return wait(2500).then(function () { return receipt(hash, tries + 1); });
+        });
+      }
+      function one(account, step) {
+        var t = byId[step.id], row = rowOf(step.id);
+        var ctx = { relayer: t.address, chain: t.chain, recipientName: t.recipientName, costWei: null, ethUsd: null };
+        setPhase(row, "switching");
+        return toChain(t).then(function () {
+          return Promise.all([req("eth_chainId"), req("eth_getBalance", [account, "latest"]), req("eth_gasPrice")]);
+        }).then(function (res) {
+          if (String(res[0]).toLowerCase() !== String(t.chain.hex).toLowerCase()) throw { message: "the wallet is not on " + t.chain.name };
+          var bal = L.fromHex(res[1]), fee = L.estimateFee(L.fromHex(res[2]) || BigInt(0), t.chain);
+          if (bal === null) throw { message: "the wallet did not return a balance" };
+          if (!L.afford(bal, step.amount, fee).ok) throw { message: "the wallet holds " + L.formatEth(bal) + " " + t.chain.symbol + " on " + t.chain.name + ", short of this amount plus its fee" };
+          setPhase(row, "signing");
+          return req("eth_sendTransaction", [{ from: account, to: t.address, value: L.toHex(step.amount), chainId: t.chain.hex }]);
+        }).then(function (hash) {
+          setPhase(row, "sent");
+          var st = row.querySelector(".fp-state");
+          var a = document.createElement("a");
+          a.href = t.chain.explorerTx + hash;
+          a.textContent = " " + t.chain.explorerName;
+          st.appendChild(a);
+          return receipt(String(hash), 0).then(function (ok) {
+            // No receipt is not "not sent": the transfer was broadcast and may still land, so it is never offered again.
+            if (ok === true) setPhase(row, "confirmed", L.formatEth(step.amount) + " " + t.chain.symbol);
+            else if (ok === false) setPhase(row, "failed", "included but reverted, nothing arrived");
+            else setPhase(row, "unknown", "check " + t.chain.explorerName + " before sending anything again");
+            row.querySelector(".fp-state").appendChild(a);
+            return "next";
+          });
+        }).catch(function (err) {
+          var declined = Number(err && err.code) === 4001 || /reject|denied|cancel/i.test(String((err && err.message) || ""));
+          setPhase(row, "failed", L.explain(err, ctx).replace(/\\.$/, ""));
+          return declined ? "stop" : "next";
+        });
+      }
+      function finish(plan) {
+        running = false;
+        stopBtn.hidden = true;
+        var phases = [];
+        for (var i = 0; i < plan.length; i++) phases.push(rowOf(plan[i].id).getAttribute("data-phase"));
+        var s = P.summary(phases);
+        // What went out (arrived or not yet confirmed) is unticked, so a second run never repeats it.
+        var unknown = false, anySent = false;
+        for (var j = 0; j < plan.length; j++) {
+          var row = rowOf(plan[j].id), ph = row.getAttribute("data-phase");
+          if (ph === "confirmed" || ph === "unknown") { row.querySelector('input[type="checkbox"]').checked = false; anySent = true; }
+          if (ph === "unknown") unknown = true;
+        }
+        main.removeAttribute("data-busy");
+        if (unknown) {
+          // Nothing more from this page until a fresh reading shows where the pending transfer landed.
+          locked = true;
+          setLine(s.text + " Refresh the page once the explorer shows it, before sending anything else.", s.tone);
+          sendBtn.disabled = true;
+          sendBtn.textContent = "Send";
+          return;
+        }
+        setLine(s.text + (anySent ? " The balances above refresh in a moment." : ""), s.tone);
+        paint();
+        if (anySent) timers.push(setTimeout(function () { if (alive) Shell.refresh("/ops/money/funding?fresh=1"); }, 3500));
+      }
+      function run() {
+        var plan = planned();
+        if (!plan.length || running || locked) return;
+        if (!eth) { paint(); return; }
+        running = true; stopAsked = false;
+        sendBtn.disabled = true;
+        stopBtn.hidden = false;
+        main.setAttribute("data-busy", "1");
+        var rs = rows();
+        for (var r = 0; r < rs.length; r++) setPhase(rs[r], "waiting");
+        setLine("Connect the wallet to start.", "plain");
+        req("eth_requestAccounts").then(function (accounts) {
+          if (!accounts || !accounts.length) throw { code: 4100 };
+          var account = accounts[0];
+          var i = 0;
+          var next = function () {
+            if (!alive) return;
+            if (i >= plan.length) { finish(plan); return; }
+            if (stopAsked) { for (; i < plan.length; i++) setPhase(rowOf(plan[i].id), "skipped"); finish(plan); return; }
+            setLine("Transfer " + (i + 1) + " of " + plan.length + ": " + byId[plan[i].id].label + ".", "plain");
+            one(account, plan[i]).then(function (what) {
+              i++;
+              if (what === "stop") stopAsked = true;
+              next();
+            });
+          };
+          next();
+        }).catch(function (err) {
+          running = false; stopBtn.hidden = true; main.removeAttribute("data-busy");
+          setLine(L.explain(err), "bad");
+          paint();
+        });
+      }
+
+      function onClick(ev) {
+        var node = ev.target && ev.target.closest ? ev.target.closest("button") : null;
+        if (!node || !box.contains(node)) return;
+        var tab = node.getAttribute("data-tab");
+        if (tab) { showTab(tab); return; }
+        if (node.getAttribute("data-fund")) { if (!running) showTab("one"); return; }
+        if (node.id === "fp-send") { run(); return; }
+        if (node.id === "fp-stop") { stopAsked = true; node.hidden = true; setLine("Stopping after the transfer under way.", "plain"); }
+      }
+      function onInput(ev) {
+        var el2 = ev.target;
+        if (el2 && el2.getAttribute && el2.getAttribute("data-split") !== null) splitInto(el2);
+        paint();
+      }
+      box.addEventListener("click", onClick);
+      box.addEventListener("input", onInput);
+      box.addEventListener("change", onInput);
+      // Wallets on phones can inject late.
+      timers.push(setTimeout(function () { if (!eth && window.ethereum) { eth = window.ethereum; paint(); } }, 1500));
+      paint();
+      return function () {
+        alive = false;
+        for (var t = 0; t < timers.length; t++) clearTimeout(timers[t]);
+        timers = [];
+        box.removeEventListener("click", onClick);
+        box.removeEventListener("input", onInput);
+        box.removeEventListener("change", onInput);
+        if (running) main.removeAttribute("data-busy");
+        running = false;
+      };
+    }
+    return { init: init };
+  })();
+
+  /* ---------- engine settings: mark what changed as it is typed (otto/mamoru-astro#22) ---------- */
+  // Only marks: without this the form submits the same and the server says what changed on the confirm screen.
+  var SettingsForm = (function () {
+    function num(raw, kind) {
+      var t = String(raw || "").trim();
+      if (kind === "pct") t = t.replace(/\\s*%$/, "").replace(",", ".");
+      else t = t.replace(/[\\s,.'_]/g, "");
+      if (t === "" || !/^[0-9]+(\\.[0-9]+)?$/.test(t)) return null;
+      return Number(t);
+    }
+    function pos(v, min, max) {
+      if (!(v > 0)) return 0;
+      var p = (Math.log(v) - Math.log(min)) / (Math.log(max) - Math.log(min)) * 100;
+      return Math.max(0, Math.min(100, p));
+    }
+    function init(scope) {
+      var form = scope.querySelector(".set-form");
+      if (!form) return function () {};
+      var count = scope.querySelector("#set-count");
+      var bar = scope.querySelector(".set-bar");
+      var env = form.getAttribute("data-env") || "";
+      var eg = scope.querySelector('[data-eg="cap"]');
+      function grouped(n) { return Math.round(n).toLocaleString("en-US"); }
+      function paint() {
+        var changed = 0;
+        var flds = form.querySelectorAll(".set-fld");
+        for (var i = 0; i < flds.length; i++) {
+          var f = flds[i], input = f.querySelector("input"), kind = f.getAttribute("data-kind");
+          var v = num(input.value, kind), was = num(f.getAttribute("data-now"), kind);
+          var grp = f.closest(".set-grp");
+          var tgl = grp ? grp.querySelector(".set-tgl input") : null;
+          // A field in a group switched off counts as unchanged: off is the change, said by the switch.
+          var live = !tgl || tgl.checked;
+          var differs = live && v !== was;
+          f.classList.toggle("changed", differs);
+          f.classList.toggle("bad", input.value.trim() !== "" && v === null);
+          if (differs) changed++;
+          var sc = f.querySelector(".set-scale"), dot = f.querySelector(".set-mk.val");
+          if (sc && dot) {
+            if (v === null) dot.style.display = "none";
+            else { dot.style.display = ""; dot.style.left = pos(v, Number(sc.getAttribute("data-min")), Number(sc.getAttribute("data-max"))) + "%"; }
+          }
+        }
+        var tgls = form.querySelectorAll(".set-tgl");
+        for (var t = 0; t < tgls.length; t++) {
+          var on = tgls[t].querySelector("input").checked;
+          var flip = on !== (tgls[t].getAttribute("data-now") === "1");
+          tgls[t].classList.toggle("changed", flip);
+          if (flip) changed++;
+        }
+        if (count) count.textContent = changed === 0 ? "Same as what runs on " + env + "." : changed + " change" + (changed === 1 ? "" : "s") + " from what runs on " + env + ".";
+        if (bar) bar.classList.toggle("dirty", changed > 0);
+        if (eg) {
+          var capIn = form.querySelector('input[name="cap"]');
+          var cap = num(capIn && capIn.value, "usdc");
+          if (cap === null) cap = 100;
+          var dep = cap >= 5000 ? cap * 2 : 5000;
+          eg.textContent = "An account that deposits " + grouped(dep) + " USDC puts " + grouped(Math.min(cap, dep)) + " to work" + (dep > cap ? " and keeps " + grouped(dep - cap) + " as USDC" : "") + ".";
+        }
+      }
+      form.addEventListener("input", paint);
+      form.addEventListener("change", paint);
+      paint();
+      return function () { form.removeEventListener("input", paint); form.removeEventListener("change", paint); };
+    }
+    return { init: init };
+  })();
+
   var modules = {
     overview: function (scope, quiet) { return mountMotion(scope, quiet); },
     mails: function (scope, quiet) { return mountMotion(scope, quiet); },
     experiments: function (scope, quiet) { return mountMotion(scope, quiet); },
-    settings: function (scope, quiet) { return mountMotion(scope, quiet); },
+    settings: function (scope, quiet) {
+      var offMotion = mountMotion(scope, quiet);
+      var offForm = SettingsForm.init(scope);
+      return function () { offMotion(); offForm(); };
+    },
     lab: function (scope) { return LabApp.init(scope); },
     infra: function (scope, quiet) {
       var offMotion = mountMotion(scope, quiet);
       var offTopup = Topup.init(scope);
-      return function () { offMotion(); offTopup(); };
+      var offPlan = FundPlan.init(scope);
+      return function () { offMotion(); offTopup(); offPlan(); };
     },
   };
 
@@ -1622,7 +2242,9 @@ export function opsClientScript(nonce: string): string {
   function markNav(section) {
     var links = document.querySelectorAll(".ops-nav a[data-section]");
     for (var i = 0; i < links.length; i++) {
-      if (links[i].getAttribute("data-section") === section) links[i].setAttribute("aria-current", "page");
+      var own = links[i].getAttribute("data-section");
+      var also = " " + (links[i].getAttribute("data-also") || "") + " ";
+      if (own === section || also.indexOf(" " + section + " ") !== -1) links[i].setAttribute("aria-current", "page");
       else links[i].removeAttribute("aria-current");
     }
   }

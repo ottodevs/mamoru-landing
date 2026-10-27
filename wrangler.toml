@@ -55,6 +55,11 @@ database_id = "682b2a66-d9d4-49e5-ac78-596d002d02ca"
 # (lab-sign.ts, lab-runner-auth.ts, otto/mamoru-astro#28): without it those routes
 # answer 503, never "no signature required".
 
+# ETHEREUM_RPC_URLS: optional, not set here (secrets never are) — `wrangler secret put
+# ETHEREUM_RPC_URLS` (comma separated https URLs). Tried before the public Ethereum RPCs
+# for the "Outside Base" holdings read (src/outside-base.ts, otto/mamoru-astro#31).
+# Without it the public RPCs are used.
+
 # EXP_VISITOR_SECRET: not set here (secrets never are) — set once with
 # `wrangler secret put EXP_VISITOR_SECRET` (prod only; staging never identifies
 # a visitor, see env.staging below). Signs the experiment visitor-id cookie and

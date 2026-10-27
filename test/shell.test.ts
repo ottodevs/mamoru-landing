@@ -3,7 +3,7 @@ import type { D1Db, D1PreparedStatement } from "../src/d1-infra";
 import { loadInfraReading } from "../src/infra-cache";
 import type { InfraSnapshot } from "../src/infra-snapshot";
 import { writeEntry } from "../src/list";
-import { gateView, OPS_STYLE, renderDocument, sealSession, type SectionView } from "../src/ops";
+import { gateView, navOf, OPS_SECTIONS, OPS_SUBNAV, OPS_STYLE, renderDocument, sealSession, type SectionView } from "../src/ops";
 import { opsRouterLogic, type OpsRouterLogic, type RouteClick, type RouteLink } from "../src/ops-router-logic";
 import worker, { type Env } from "../src/worker";
 
@@ -66,11 +66,12 @@ const SECTIONS = [
   { path: "/ops/yield", section: "yield", title: "Yield", marker: "Yield by account" },
   { path: "/ops/accounts", section: "accounts", title: "Accounts", marker: "Where every account stands" },
   { path: "/ops/engine", section: "engine", title: "Engine", marker: "Engine" },
-  { path: "/ops/costs", section: "costs", title: "Costs", marker: "Break-even" },
+  { path: "/ops/money", section: "costs", title: "Money", marker: "Break-even" },
   { path: "/ops/mails", section: "mails", title: "Mails", marker: "On the list" },
-  { path: "/ops/infra", section: "infra", title: "Infra and costs", marker: "Relayer balance" },
+  { path: "/ops/money/funding", section: "infra", title: "Funding", marker: "Relayer balance" },
   { path: "/ops/experiments", section: "experiments", title: "Experiments", marker: "hero_cta" },
-  { path: "/ops/functions", section: "functions", title: "Functions", marker: "Yield ledger" },
+  { path: "/ops/engine/functions", section: "functions", title: "Functions", marker: "Yield ledger" },
+  { path: "/ops/engine/settings", section: "settings", title: "Engine settings", marker: "Engine settings" },
   { path: "/ops/archive", section: "archive", title: "Archive", marker: "Tokyo landing" },
 ] as const;
 
@@ -109,12 +110,12 @@ for (const [name, R] of [["module", opsRouterLogic()], ["shipped inline script",
       expect(R.sectionOf("/ops")).toBe("overview");
       expect(R.sectionOf("/ops/")).toBe("overview");
       expect(R.sectionOf("/ops/mails")).toBe("mails");
-      expect(R.sectionOf("/ops/infra/")).toBe("infra");
+      expect(R.sectionOf("/ops/money/funding/")).toBe("infra");
       expect(R.sectionOf("/ops/preview")).toBeNull();
-      expect(R.sectionOf("/ops/infra/refresh")).toBeNull();
+      expect(R.sectionOf("/ops/money/funding/refresh")).toBeNull();
       expect(R.sectionOf("/ops/landing")).toBeNull();
       expect(R.sectionOf("/")).toBeNull();
-      expect(R.routeKey("https://mamoru.lol/ops/infra?fresh=1", ORIGIN)).toBe("/ops/infra");
+      expect(R.routeKey("https://mamoru.lol/ops/money/funding?fresh=1", ORIGIN)).toBe("/ops/money/funding");
       expect(R.routeKey("/ops/mails/", ORIGIN)).toBe("/ops/mails");
       expect(R.routeKey("https://mamoru.lol/deck", ORIGIN)).toBeNull();
       // otto/mamoru#130: every filter param is part of the key, so env=beta never paints from env=prod's
@@ -122,29 +123,29 @@ for (const [name, R] of [["module", opsRouterLogic()], ["shipped inline script",
       expect(R.routeKey("https://mamoru.lol/ops?env=beta", ORIGIN)).toBe("/ops?env=beta");
       expect(R.routeKey("https://mamoru.lol/ops?env=beta&fresh=1", ORIGIN)).toBe("/ops?env=beta");
       expect(R.routeKey("https://mamoru.lol/ops?env=beta", ORIGIN)).not.toBe(R.routeKey("https://mamoru.lol/ops", ORIGIN));
-      expect(R.wantsFresh("/ops/infra?fresh=1", ORIGIN)).toBe(true);
-      expect(R.wantsFresh("/ops/infra", ORIGIN)).toBe(false);
+      expect(R.wantsFresh("/ops/money/funding?fresh=1", ORIGIN)).toBe(true);
+      expect(R.wantsFresh("/ops/money/funding", ORIGIN)).toBe(false);
     });
 
     test("only plain clicks on same-origin section links are taken over", () => {
-      expect(R.shouldIntercept(link("https://mamoru.lol/ops/infra"), CLICK)).toBe(true);
+      expect(R.shouldIntercept(link("https://mamoru.lol/ops/money/funding"), CLICK)).toBe(true);
       expect(R.shouldIntercept(link("https://mamoru.lol/ops"), { ...CLICK })).toBe(true);
-      expect(R.shouldIntercept(link("https://mamoru.lol/ops/infra"), { ...CLICK, meta: true })).toBe(false);
-      expect(R.shouldIntercept(link("https://mamoru.lol/ops/infra"), { ...CLICK, ctrl: true })).toBe(false);
-      expect(R.shouldIntercept(link("https://mamoru.lol/ops/infra"), { ...CLICK, shift: true })).toBe(false);
-      expect(R.shouldIntercept(link("https://mamoru.lol/ops/infra"), { ...CLICK, button: 1 })).toBe(false);
-      expect(R.shouldIntercept(link("https://mamoru.lol/ops/infra"), { ...CLICK, prevented: true })).toBe(false);
-      expect(R.shouldIntercept(link("https://mamoru.lol/ops/infra", { target: "_blank" }), CLICK)).toBe(false);
-      expect(R.shouldIntercept(link("https://mamoru.lol/ops/infra", { download: true }), CLICK)).toBe(false);
-      expect(R.shouldIntercept(link("https://mamoru.lol/ops/infra", { full: true }), CLICK)).toBe(false);
+      expect(R.shouldIntercept(link("https://mamoru.lol/ops/money/funding"), { ...CLICK, meta: true })).toBe(false);
+      expect(R.shouldIntercept(link("https://mamoru.lol/ops/money/funding"), { ...CLICK, ctrl: true })).toBe(false);
+      expect(R.shouldIntercept(link("https://mamoru.lol/ops/money/funding"), { ...CLICK, shift: true })).toBe(false);
+      expect(R.shouldIntercept(link("https://mamoru.lol/ops/money/funding"), { ...CLICK, button: 1 })).toBe(false);
+      expect(R.shouldIntercept(link("https://mamoru.lol/ops/money/funding"), { ...CLICK, prevented: true })).toBe(false);
+      expect(R.shouldIntercept(link("https://mamoru.lol/ops/money/funding", { target: "_blank" }), CLICK)).toBe(false);
+      expect(R.shouldIntercept(link("https://mamoru.lol/ops/money/funding", { download: true }), CLICK)).toBe(false);
+      expect(R.shouldIntercept(link("https://mamoru.lol/ops/money/funding", { full: true }), CLICK)).toBe(false);
       // Preview, the public site, other origins and wallet explorers all leave the console.
       expect(R.shouldIntercept(link("https://mamoru.lol/ops/preview"), CLICK)).toBe(false);
       expect(R.shouldIntercept(link("https://mamoru.lol/"), CLICK)).toBe(false);
       expect(R.shouldIntercept(link("https://basescan.org/tx/0xabc"), CLICK)).toBe(false);
-      expect(R.shouldIntercept(link("https://evil.example/ops/infra"), CLICK)).toBe(false);
+      expect(R.shouldIntercept(link("https://evil.example/ops/money/funding"), CLICK)).toBe(false);
       // An in-page jump stays with the browser; the same hash on another section is a navigation.
-      expect(R.shouldIntercept(link("https://mamoru.lol/ops/infra#topup", { current: "/ops/infra" }), CLICK)).toBe(false);
-      expect(R.shouldIntercept(link("https://mamoru.lol/ops/infra#topup", { current: "/ops" }), CLICK)).toBe(true);
+      expect(R.shouldIntercept(link("https://mamoru.lol/ops/money/funding#topup", { current: "/ops/money/funding" }), CLICK)).toBe(false);
+      expect(R.shouldIntercept(link("https://mamoru.lol/ops/money/funding#topup", { current: "/ops" }), CLICK)).toBe(true);
     });
 
     test("cache policy: fresh is painted as is, stale is painted and revalidated, old is not painted", () => {
@@ -198,7 +199,7 @@ describe("one frame for every section", () => {
       expect(html.startsWith("<!DOCTYPE html>")).toBe(true);
       expect(html).toContain(`<title>${s.title} · Mamoru ops</title>`);
       expect(html).toContain(`<main id="ops-main" class="ops-page" data-section="${s.section}"`);
-      expect(html).toContain(`data-section="${s.section}" aria-current="page"`);
+      expect(html).toMatch(new RegExp(`data-section="${navOf(s.section)}"[^>]*aria-current="page"`));
       // One current link in the rail; the phone tab bar marks its own (the section, or "More").
       const rail = html.split('<aside class="c-rail"')[1]!.split("</aside>")[0]!;
       expect(rail.match(/<a [^>]*aria-current="page"/g)?.length).toBe(1);
@@ -207,7 +208,8 @@ describe("one frame for every section", () => {
       expect(html).toMatch(new RegExp(`<h1[^>]*>${s.title}</h1>`));
       expect(html).toContain(s.marker);
       expect(html).toContain('<form class="ops-who" method="post" action="/ops/logout">');
-      expect(html).toContain("ottodevs@gmail.com");
+      expect(html).toContain("ot•••@gm•••.com");
+      expect(html).not.toContain("ottodevs@gmail.com");
       expect(html.match(/<style>/g)?.length).toBe(1);
       // Theme (head, before paint), motion (head), the router, and the console client.
       expect(html.match(/<script /g)?.length).toBe(4);
@@ -301,7 +303,7 @@ describe("the gate applies to fragments", () => {
       setSystemTime(new Date("2026-10-01T00:00:00Z"));
       const old = `mamoru_list=${await sealSession("k1", "ottodevs@gmail.com")}`;
       setSystemTime(new Date("2026-10-02T00:00:00Z"));
-      const res = await worker.fetch(get("/ops/infra", { cookie: old, "x-ops-fragment": "1" }), env);
+      const res = await worker.fetch(get("/ops/money/funding", { cookie: old, "x-ops-fragment": "1" }), env);
       expect(res.status).toBe(401);
       expect(res.headers.get("x-ops-auth")).toBe("required");
     } finally {
@@ -317,7 +319,7 @@ describe("the gate applies to fragments", () => {
       expect(res.status).toBe(404);
       expect(await res.text()).toBe("Not found.");
     }
-    for (const path of ["/ops/remove", "/ops/send", "/ops/infra/refresh", "/ops/metrics/snapshot", "/ops/logout", "/ops/functions/apply"]) {
+    for (const path of ["/ops/remove", "/ops/send", "/ops/infra/refresh", "/ops/metrics/snapshot", "/ops/logout", "/ops/functions/apply", "/ops/engine/functions/apply", "/ops/engine/settings/apply", "/ops/money/funding/refresh"]) {
       const res = await worker.fetch(post(path, "csrf=x", { "x-ops-fragment": "1" }), env);
       expect(res.status).toBe(404);
       // The router turns anything that is not a JSON view into a full navigation.
@@ -328,7 +330,7 @@ describe("the gate applies to fragments", () => {
   test("sign-in returns to the section that was asked for", async () => {
     const { env } = await consoleEnv();
     // The OAuth state cookie is sealed; what can be seen from outside is that each section starts its own flow.
-    const infra = await worker.fetch(get("/ops/infra"), env);
+    const infra = await worker.fetch(get("/ops/money/funding"), env);
     const mails = await worker.fetch(get("/ops/mails/"), env);
     expect(infra.status).toBe(302);
     expect(mails.status).toBe(302);
@@ -378,7 +380,7 @@ describe("forms posted by fetch", () => {
 
   test("refresh and snapshot: wrong token is refused on both paths, and the flash shows on the section it lands on", async () => {
     const { env, cookie } = await consoleEnv();
-    for (const [path, section, back] of [["/ops/infra/refresh", "infra", "/ops/infra"], ["/ops/metrics/snapshot", "overview", "/ops"]] as const) {
+    for (const [path, section, back] of [["/ops/infra/refresh", "infra", "/ops/money/funding"], ["/ops/money/funding/refresh", "infra", "/ops/money/funding"], ["/ops/metrics/snapshot", "overview", "/ops"]] as const) {
       const fragment = await worker.fetch(post(path, "csrf=wrong", { cookie, "x-ops-fragment": "1" }), env);
       expect(fragment.status).toBe(403);
       const view = (await fragment.json()) as { section: string; html: string };
@@ -477,7 +479,7 @@ describe("render from cache first", () => {
     store.set("ops:infra:v2", JSON.stringify({ snapshot: SNAPSHOT, storedAt: Date.now() - 10 * 60_000 }));
     const work: Promise<unknown>[] = [];
     const ctx = { waitUntil: (p: Promise<unknown>) => void work.push(p) };
-    const res = await worker.fetch(get("/ops/infra", { cookie, "x-ops-fragment": "1" }), env, ctx);
+    const res = await worker.fetch(get("/ops/money/funding", { cookie, "x-ops-fragment": "1" }), env, ctx);
     const view = (await res.json()) as { refreshing?: boolean; html: string };
     expect(view.refreshing).toBe(true);
     expect(view.html).toContain(">0.0251<");
@@ -514,5 +516,109 @@ describe("states outside the console", () => {
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("https://mamoru.lol/");
     expect(res.headers.get("set-cookie") ?? "").toContain("mamoru_list=;");
+  });
+});
+
+describe("Engine and Money sections (otto/mamoru-astro#35)", () => {
+  const MOVED: [string, string][] = [
+    ["/ops/settings", "/ops/engine/settings"],
+    ["/ops/functions", "/ops/engine/functions"],
+    ["/ops/costs", "/ops/money"],
+    ["/ops/infra", "/ops/money/funding"],
+    ["/ops/settings/", "/ops/engine/settings"],
+  ];
+
+  test("the old addresses redirect to the new ones, query kept, behind the gate", async () => {
+    const { env, cookie } = await consoleEnv();
+    for (const [from, to] of MOVED) {
+      const res = await worker.fetch(get(`${from}?env=beta&fresh=1`, { cookie }), env);
+      expect(res.status).toBe(301);
+      expect(res.headers.get("location")).toBe(`${to.replace(/\/$/, "")}?env=beta&fresh=1`);
+      expect(res.headers.get("cache-control") ?? "").toContain("no-store");
+      expect(await res.text()).toBe("");
+    }
+    // Sub-paths follow their parent.
+    const sub = await worker.fetch(get("/ops/infra/anything", { cookie }), env);
+    expect(sub.status).toBe(301);
+    expect(sub.headers.get("location")).toBe("/ops/money/funding/anything");
+    // A fragment request to an old address is told to navigate for real (the router treats a redirect as "full").
+    const frag = await worker.fetch(new Request("https://mamoru.lol/ops/settings", { headers: { cookie, "x-ops-fragment": "1" }, redirect: "manual" }), env);
+    expect(frag.status).toBe(301);
+  });
+
+  test("the old addresses give nothing to strangers: no session starts Google, an off-list session gets the bare 404", async () => {
+    const { env } = await consoleEnv();
+    const stranger = `mamoru_list=${await sealSession("k1", "someone@example.com")}`;
+    for (const [from, to] of MOVED) {
+      const anon = await worker.fetch(get(from), env);
+      expect(anon.status).toBe(302);
+      expect(anon.headers.get("location") ?? "").toContain("https://accounts.google.com/");
+      const off = await worker.fetch(get(from, { cookie: stranger }), env);
+      expect(off.status).toBe(404);
+      const offNew = await worker.fetch(get(to, { cookie: stranger, "x-ops-fragment": "1" }), env);
+      expect(offNew.status).toBe(404);
+      const anonNew = await worker.fetch(get(to, { "x-ops-fragment": "1" }), env);
+      expect(anonNew.status).toBe(401);
+      expect(await anonNew.text()).toBe('{"v":1,"login":true}');
+    }
+  });
+
+  test("Engine and Money pages carry their sub-navigation in the document and in the fragment", async () => {
+    const { env, cookie } = await consoleEnv();
+    const want: [string, string, string[]][] = [
+      ["/ops/engine", "engine", ["/ops/engine", "/ops/engine/settings", "/ops/engine/functions"]],
+      ["/ops/engine/settings", "settings", ["/ops/engine", "/ops/engine/settings", "/ops/engine/functions"]],
+      ["/ops/engine/functions", "functions", ["/ops/engine", "/ops/engine/settings", "/ops/engine/functions"]],
+      ["/ops/money", "costs", ["/ops/money", "/ops/money/funding"]],
+      ["/ops/money/funding", "infra", ["/ops/money", "/ops/money/funding"]],
+    ];
+    for (const [path, section, hrefs] of want) {
+      const html = await (await worker.fetch(get(path, { cookie }), env)).text();
+      const frag = (await (await worker.fetch(get(path, { cookie, "x-ops-fragment": "1" }), env)).json()) as { section: string; html: string };
+      expect(frag.section).toBe(section);
+      for (const body of [html, frag.html]) {
+        const sub = body.match(/<nav class="ops-subnav"[^>]*>(.*?)<\/nav>/s)?.[1] ?? "";
+        expect([...sub.matchAll(/href="([^"]+)"/g)].map((m) => m[1])).toEqual(hrefs);
+        expect(sub.match(/aria-current="page"/g)?.length).toBe(1);
+      }
+    }
+    // Other sections have none.
+    const pulse = await (await worker.fetch(get("/ops", { cookie }), env)).text();
+    expect(pulse).not.toContain('class="ops-subnav"');
+  });
+
+  test("the phone tab bar has Pulse, Yield, Accounts, Engine, Money and More", async () => {
+    const { env, cookie } = await consoleEnv();
+    const html = await (await worker.fetch(get("/ops", { cookie }), env)).text();
+    const tabs = html.split('<nav class="ops-nav c-tabs"')[1]!.split("</nav>")[0]!;
+    expect([...tabs.matchAll(/>([^<]+)<\/a>/g)].map((m) => m[1])).toEqual(["Pulse", "Yield", "Accounts", "Engine", "Money", "More"]);
+  });
+
+  test("Funding no longer repeats the accounts table; Accounts shows what was unique to it", async () => {
+    const { env, cookie } = await consoleEnv();
+    const funding = await (await worker.fetch(get("/ops/money/funding", { cookie }), env)).text();
+    expect(funding).not.toContain("Accounts and value");
+    expect(funding).toContain("What one new account costs");
+  });
+
+  test("form actions answer on the new and the old paths alike, and a wrong token is refused on both", async () => {
+    const { env, cookie } = await consoleEnv();
+    for (const [path, section] of [["/ops/engine/settings/apply", "settings"], ["/ops/settings/apply", "settings"], ["/ops/engine/functions/apply", "functions"], ["/ops/functions/apply", "functions"]] as const) {
+      const res = await worker.fetch(post(path, "csrf=wrong", { cookie, "x-ops-fragment": "1" }), env);
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { section: string }).section).toBe(section);
+    }
+    const page = await (await worker.fetch(get("/ops/engine/settings", { cookie }), env)).text();
+    expect(page).toContain('action="/ops/engine/settings/apply"');
+    expect(page).not.toContain('action="/ops/settings/apply"');
+  });
+
+  test("every primary and sub-tab href resolves in the router registry, to the section its page renders as", () => {
+    const R = opsRouterLogic();
+    for (const s of OPS_SECTIONS.filter((x) => x.tab)) expect(R.sectionOf(s.href)).not.toBeNull();
+    for (const group of Object.values(OPS_SUBNAV)) for (const item of group.items) expect(R.sectionOf(item.href)).toBe(item.id);
+    expect(R.sectionOf("/ops/money")).toBe("costs");
+    expect(R.sectionOf("/ops/engine")).toBe("engine");
+    expect(R.shouldIntercept(link("https://mamoru.lol/ops/money"), CLICK)).toBe(true);
   });
 });

@@ -61,11 +61,11 @@ bun run build && bunx wrangler dev
 | `src/components/EmailBar.astro` | Email bar and the on-the-list follow-up |
 | `src/styles/global.css` | Rice paper field, ink, Noto Serif |
 | `src/worker.ts` | Assets, `POST /api/notify`, and the private panel at `/ops` |
-| `src/ops-infra.ts`, `src/infra-snapshot.ts` | `/ops/infra`: relayer status, cost per new account, accounts + TVL on Base (same Google allowlist as `/ops`) |
+| `src/ops-infra.ts`, `src/infra-snapshot.ts` | `/ops/money/funding` (was `/ops/infra`): relayer status, Funding per chain, cost per new account; the Ethereum holdings per account are in `src/ops-outside.ts`, shown on `/ops/accounts` (same Google allowlist as `/ops`). Nav (otto/mamoru-astro#35): Pulse, Yield, Accounts, Engine (`/ops/engine`, `/settings`, `/functions`), Money (`/ops/money`, `/funding`); the old `/ops/settings`, `/functions`, `/costs`, `/infra` redirect (301) |
 | `src/worker.ts` | Assets, `POST /api/notify`, and the private list at `/ops` |
 | `src/staging-preview.ts` | `/ops/preview` proxy + the staging Worker's own self-gate |
 
-`POST /api/notify` writes the address into KV `WAITLIST` or it does not say it saved. The list is not a marketing tool. `/ops` is the private panel (secret `LIST_GATE`, not in git). The welcome note sends only when the `EMAIL` binding can send from `notify@mamoru.lol`, and only once. `/ops/infra` reads Base over public RPCs (optional secret `BASE_RPC_URL` tried first) and the read-only D1 binding `MAMORU_DB` (owned by `ottodevs/mamoru`). Nothing secret lives in this repo.
+`POST /api/notify` writes the address into KV `WAITLIST` or it does not say it saved. The list is not a marketing tool. `/ops` is the private panel (secret `LIST_GATE`, not in git). The welcome note sends only when the `EMAIL` binding can send from `notify@mamoru.lol`, and only once. `/ops/infra` reads Base over public RPCs (optional secret `BASE_RPC_URL` tried first), and the same account addresses on Ethereum Mainnet through Multicall3 (optional secret `ETHEREUM_RPC_URLS`, comma separated, tried before the public RPCs) for the separate "Outside Base" figure and the read-only D1 binding `MAMORU_DB` (owned by `ottodevs/mamoru`). Nothing secret lives in this repo.
 
 ## Archive
 

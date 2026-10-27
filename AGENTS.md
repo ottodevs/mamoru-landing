@@ -1,6 +1,6 @@
 # Mamoru landing and ops console
 
-Public repo `ottodevs/mamoru-landing` (GitHub is the only push remote). Cloudflare Worker `mamoru-lol`: the landing at mamoru.lol, the deck, and the Google-gated ops console at `/ops` (Overview, Mails, Infra, Experiments, Archive, Preview). Read `README.md` for channels and files.
+Public repo `ottodevs/mamoru-landing` (GitHub is the only push remote). Cloudflare Worker `mamoru-lol`: the landing at mamoru.lol, the deck, and the Google-gated ops console at `/ops` (Pulse, Yield, Accounts, Engine, Money, then Mails, Experiments, Lab, Archive, Preview). Read `README.md` for channels and files.
 
 ## Operating flow
 
@@ -15,7 +15,8 @@ Several agents and sessions work here at once. Same rules as `ottodevs/mamoru`.
 
 1. **Ticket first** in Forgejo `otto/mamoru-astro` (`tk add`, then `tk status <id> doing` to claim it).
 2. **Check for overlap**: `gh pr list -R ottodevs/mamoru-landing` and the files of each open pull request. Hot files: `src/worker.ts`, `src/ops.ts`, `src/ops-client.ts`, `wrangler.toml`. If yours touches the same ones, stack on that branch or wait.
-3. **Own worktree, own branch**: `git worktree add ../mamoru-astro-<slug> -b <type>/<ticket>-<slug> origin/main`. The checkout at `~/box/src/mamoru.workspace/mamoru-astro` stays on a clean `main`.
+3. **Own worktree, own branch, locked**: `git worktree add --lock --reason "<session> <ticket>" ../mamoru-astro-<slug> -b <type>/<ticket>-<slug> origin/main`. The checkout at `~/box/src/mamoru.workspace/mamoru-astro` stays on a clean `main`. Sandboxed sessions use the worktree location their sandbox rules give, never a path inside this repo (`bun test` would scan it).
+   **Cleanup after merge** removes only your own worktree, by path: `git worktree unlock <path> && git worktree remove <path>`, then `git branch -D <branch>`. Never `git worktree prune`: from a sandbox or another host the other sessions' worktrees look missing and prune erases their registry (otto/mamoru-astro#33).
 4. `bun test`, `bun run build`, `bunx wrangler deploy --env="" --dry-run` and `--env staging --dry-run` pass.
 5. **Pull request** against `main` with: ticket, paths touched, what was and was not tested, risk, deploy notes (secret, D1 table, order). Screenshots for anything visual, desktop and 390 px.
 6. **Independent review** by a model other than the author's, verdict `APTO` or `NO-GO` as a pull request comment. Anything touching the session gate, CSRF, CSP, cookies or the wallet flow gets a security-focused review.

@@ -6,6 +6,8 @@ import { consoleClientScript, themeHeadScript } from "./console-client";
 import { CONSOLE_STYLE } from "./console-style";
 import { motionHeadScript, opsClientScript } from "./ops-client";
 import { LAB_STYLE } from "./lab-style";
+import { SETTINGS_STYLE } from "./settings-style";
+import { FUNDING_STYLE } from "./funding-style";
 import { esc, sameSecret } from "./text";
 
 const COOKIE = "mamoru_list";
@@ -189,7 +191,7 @@ export const FLASH_COPY: Record<Exclude<Flash, "">, string> = {
   bad: "That did not go through. Try again.",
 };
 
-export type SectionId = "overview" | "yield" | "accounts" | "engine" | "costs" | "more" | "mails" | "infra" | "experiments" | "settings" | "functions" | "archive" | "lab" | "gate";
+export type SectionId = "overview" | "yield" | "accounts" | "engine" | "money" | "costs" | "more" | "mails" | "infra" | "experiments" | "settings" | "functions" | "archive" | "lab" | "gate";
 
 export type OpsSection = {
   id: string;
@@ -201,7 +203,57 @@ export type OpsSection = {
   group?: "Grow" | "Control" | "More";
   /** Short label for the phone tab bar; only the primary views carry one. */
   tab?: string;
+  /** otto/mamoru-astro#35: other section ids that live under this entry (its in-page sub-navigation). */
+  also?: readonly string[];
 };
+
+/** otto/mamoru-astro#35: one entry of an in-page sub-navigation. `id` is the SectionId the page renders as. */
+export type SubnavItem = { id: string; label: string; href: string };
+
+/** Engine and Money are one nav entry each; their pages are told apart by a hairline tab row at the top. */
+export const OPS_SUBNAV: Readonly<Record<string, { label: string; items: readonly SubnavItem[] }>> = {
+  engine: {
+    label: "Engine",
+    items: [
+      { id: "engine", label: "Status", href: "/ops/engine" },
+      { id: "settings", label: "Settings", href: "/ops/engine/settings" },
+      { id: "functions", label: "Functions", href: "/ops/engine/functions" },
+    ],
+  },
+  money: {
+    label: "Money",
+    items: [
+      { id: "costs", label: "Costs", href: "/ops/money" },
+      { id: "infra", label: "Funding", href: "/ops/money/funding" },
+    ],
+  },
+};
+
+/** The nav entry a page belongs to: "settings" sits under Engine, "infra" (Funding) under Money. */
+export function navOf(section: string): string {
+  for (const [nav, group] of Object.entries(OPS_SUBNAV)) if (group.items.some((i) => i.id === section)) return nav;
+  return section;
+}
+
+/** The hairline tab row of Engine and Money, as plain links: no script needed. "" for every other section. */
+export function renderSubnav(section: string): string {
+  const nav = navOf(section);
+  const group = OPS_SUBNAV[nav];
+  if (!group) return "";
+  const links = group.items.map((i) => `<a href="${esc(i.href)}"${i.id === section ? ' aria-current="page"' : ""}>${esc(i.label)}</a>`).join("");
+  return `<nav class="ops-subnav" aria-label="${esc(group.label)} pages">${links}</nav>`;
+}
+
+/** Puts the sub-navigation right under the page heading, like a notice. Views outside Engine and Money pass through. */
+export function withSubnav(view: SectionView): SectionView {
+  const nav = renderSubnav(view.section);
+  if (!nav) return view;
+  const mark = "</header>";
+  const at = view.html.indexOf(mark);
+  if (at < 0) return { ...view, html: nav + view.html };
+  const cut = at + mark.length;
+  return { ...view, html: view.html.slice(0, cut) + nav + view.html.slice(cut) };
+}
 
 /** Extensible on purpose: new /ops sections are one more entry, not a rewrite. */
 export const OPS_SECTIONS: readonly OpsSection[] = [
@@ -209,16 +261,14 @@ export const OPS_SECTIONS: readonly OpsSection[] = [
   { id: "overview", label: "Pulse", href: "/ops", tab: "Pulse" },
   { id: "yield", label: "Yield", href: "/ops/yield", tab: "Yield" },
   { id: "accounts", label: "Accounts", href: "/ops/accounts", tab: "Accounts" },
-  { id: "engine", label: "Engine", href: "/ops/engine", tab: "Engine" },
-  { id: "costs", label: "Costs", href: "/ops/costs", tab: "Costs" },
+  // otto/mamoru-astro#35: Engine = Status, Settings, Functions; Money = Costs, Funding. See OPS_SUBNAV.
+  { id: "engine", label: "Engine", href: "/ops/engine", tab: "Engine", also: ["settings", "functions"] },
+  { id: "money", label: "Money", href: "/ops/money", tab: "Money", also: ["costs", "infra"] },
   { id: "mails", label: "Waitlist and mail", href: "/ops/mails", group: "Grow" },
   { id: "experiments", label: "Experiments", href: "/ops/experiments", group: "Grow" },
   // otto/mamoru-astro#28 (spec 008 phase 1): the strategy bench. Grouped with Experiments, not a primary tab —
   // keeps the phone tab bar at five entries (otto/mamoru-astro#24).
   { id: "lab", label: "Lab", href: "/ops/lab", group: "Grow" },
-  { id: "settings", label: "Engine settings", href: "/ops/settings", group: "Control" },
-  { id: "functions", label: "Functions", href: "/ops/functions", group: "Control" },
-  { id: "infra", label: "Funding", href: "/ops/infra", group: "Control" },
   { id: "archive", label: "Archive", href: "/ops/archive", group: "More" },
   // The staged site is its own document with its own base URL and CSP, so it opens beside the console.
   { id: "preview", label: "Preview", href: "/ops/preview", out: true, group: "More" },
@@ -532,6 +582,7 @@ table.accts { margin-top: 1.1rem; font-variant-numeric: tabular-nums; }
 table.accts th, table.accts td { border-color: var(--rule); padding: 0.5rem 0 0.5rem 1.2rem; text-align: right; white-space: nowrap; }
 table.accts .a-key { padding-left: 0; text-align: left; }
 table.accts .a-addr { text-align: left; }
+table.accts .a-out { white-space: normal; min-width: 7rem; }
 table.accts thead th { color: var(--muted); font-size: 0.85rem; }
 table.accts td.unread { color: var(--warn); }
 
@@ -610,6 +661,16 @@ td.mail:hover .full, td.mail:focus-within .full, .reveal-box:checked ~ table td.
   .yld-row .yld-wide { display: none; }
 }
 
+/* ---- engine and money sub-navigation (otto/mamoru-astro#35): hairline tabs, plain links ---- */
+.ops-subnav { display: flex; gap: 1.6rem; margin: 0 0 1.4rem; border-bottom: 1px solid var(--hair, var(--rule)); overflow-x: auto; scrollbar-width: none; }
+.ops-subnav::-webkit-scrollbar { display: none; }
+.ops-subnav a { flex: none; padding: 0.7rem 0 0.6rem; margin-bottom: -1px; color: var(--muted); text-decoration: none; border-bottom: 1px solid transparent; font-size: 0.95rem; }
+.ops-subnav a:hover { color: var(--ink); }
+.ops-subnav a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--ink); }
+.ops-subnav a:focus-visible { outline: 2px solid var(--emerald); outline-offset: 3px; }
+table.ops-outside td:nth-child(2), table.ops-outside th:nth-child(2) { text-align: left; }
+table.ops-outside td:last-child { white-space: normal; }
+
 /* ---- narrow frame ---- */
 .ops-page.still .sec :is(.layer, .dot, .stem, .bar, .step-bar, .tick, .line) { animation: none !important; }
 @media (max-width: 640px) {
@@ -632,8 +693,9 @@ export function renderNav(active: string): string {
     if (section.out) {
       return `${heading}<a class="minor out" href="${esc(section.href)}" target="_blank" rel="noopener" data-ops-full title="Opens the staged site in a new tab">${esc(section.label)}</a>`;
     }
-    const current = section.id === active ? ' aria-current="page"' : "";
-    return `${heading}<a${minor} href="${esc(section.href)}" data-section="${esc(section.id)}"${current}>${esc(section.label)}</a>`;
+    const current = section.id === navOf(active) ? ' aria-current="page"' : "";
+    const also = section.also?.length ? ` data-also="${esc(section.also.join(" "))}"` : "";
+    return `${heading}<a${minor} href="${esc(section.href)}" data-section="${esc(section.id)}"${also}${current}>${esc(section.label)}</a>`;
   }).join("");
   return `<nav class="ops-nav" aria-label="Sections">${links}</nav>`;
 }
@@ -641,9 +703,10 @@ export function renderNav(active: string): string {
 /** otto/mamoru-astro#24: the phone tab bar, the five primary views plus a way into the rest. */
 export function renderTabs(active: string): string {
   const primary = OPS_SECTIONS.filter((s) => s.tab);
-  const isPrimary = primary.some((s) => s.id === active);
+  const here = navOf(active);
+  const isPrimary = primary.some((s) => s.id === here);
   const links = primary
-    .map((s) => `<a href="${esc(s.href)}" data-section="${esc(s.id)}"${s.id === active ? ' aria-current="page"' : ""}>${esc(s.tab ?? s.label)}</a>`)
+    .map((s) => `<a href="${esc(s.href)}" data-section="${esc(s.id)}"${s.also?.length ? ` data-also="${esc(s.also.join(" "))}"` : ""}${s.id === here ? ' aria-current="page"' : ""}>${esc(s.tab ?? s.label)}</a>`)
     .join("");
   return `<nav class="ops-nav c-tabs" aria-label="Sections">${links}<a href="/ops/more" data-section="more"${!isPrimary && active !== "gate" ? ' aria-current="page"' : ""}>More</a></nav>`;
 }
@@ -727,7 +790,7 @@ export function renderDocument(
 ): string {
   const chrome = opts.chrome !== false && Boolean(opts.csrf);
   const who = chrome
-    ? `<form class="ops-who" method="post" action="/ops/logout">${csrfField(opts.csrf ?? "")}${opts.who ? `<span>${esc(opts.who)}</span>` : ""}<button class="link" type="submit">Sign out</button></form>`
+    ? `<form class="ops-who" method="post" action="/ops/logout">${csrfField(opts.csrf ?? "")}${opts.who ? `<span>${esc(maskEmail(opts.who))}</span>` : ""}<button class="link" type="submit">Sign out</button></form>`
     : "";
   const brand = chrome
     ? `<a class="ops-brand" href="/ops" data-section-home aria-label="Mamoru ops, overview"><img src="/mark-two-stones.png" width="28" height="28" alt="" /><span>Mamoru</span></a>`
@@ -742,7 +805,7 @@ export function renderDocument(
   <link rel="icon" href="/mark-two-stones.png" type="image/png" />
   <title>${esc(view.title)}${TITLE_SUFFIX}</title>
   ${themeHeadScript(opts.nonce)}
-  <style>${OPS_STYLE}${CONSOLE_STYLE}${LAB_STYLE}</style>
+  <style>${OPS_STYLE}${CONSOLE_STYLE}${LAB_STYLE}${SETTINGS_STYLE}${FUNDING_STYLE}</style>
   ${motionHeadScript(opts.nonce)}
 </head>
 <body>
