@@ -1645,20 +1645,29 @@ export function opsClientScript(nonce: string): string {
     /** Loads one thread's full transcript, or clears to the "new thread, nothing sent yet" view when "id" is
      * falsy. Called on thread-picker change, "Nuevo hilo", and right after a question creates a fresh thread. */
     function loadAskThread(id) {
+      // Same generation counter the ask/poll path uses: bumping it here invalidates any in-flight thread GET or
+      // poll for the thread we are leaving (its response is dropped, its timer cleared), so a stale response
+      // can never overwrite the selected thread.
+      var myGen = ++askGen;
+      clearTimeout(askTimer);
+      state.askSending = false;
       state.askThreadId = id || null;
-      if (!id) {
-        state.askJobs = [];
-        state.askRuns = {};
-        renderAskPanel();
-        return;
-      }
+      state.askJobs = [];
+      state.askRuns = {};
+      state.askError = "";
+      renderAskPanel();
+      if (!id) return;
       api("/ops/lab/api/threads/" + encodeURIComponent(id))
         .then(function (r) {
+          if (askGen !== myGen || state.askThreadId !== id) return;
           if (!r.ok || !r.body) return;
           state.askJobs = r.body.jobs || [];
           state.askRuns = r.body.runs || {};
           renderAskPanel();
-        });
+          // A turn still queued/running at load time keeps polling, so a refresh shows it finishing.
+          if (pendingAskJob()) pollAskThread(myGen);
+        })
+        .catch(function () {});
     }
 
     function loadAskThreads() {

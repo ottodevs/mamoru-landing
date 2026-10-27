@@ -602,45 +602,27 @@ export async function touchThread(db: D1Db, id: string, now: string): Promise<vo
  * sharing). No spec_key dedupe (unlike the bench path): `spec_key` here is `agent:<jobId>`, unique by
  * construction, so two different questions never collide and must not be deduped against each other.
  */
-export async function insertQueuedAgentJobIfEligible(
+function agentJobInsertStatement(
   db: D1Db,
-  opts: {
-    id: string;
-    requester: string;
-    threadId: string;
-    question: string;
-    windowId: string | null;
-    now: string;
-    sinceIso: string;
-    maxPerDay: number;
-    maxActive: number;
-  },
-): Promise<boolean> {
+  opts: { id: string; requester: string; threadId: string; question: string; windowId: string | null; now: string; sinceIso: string; maxPerDay: number; maxActive: number },
+): D1PreparedStatement {
   const specJson = JSON.stringify(opts.windowId ? { windowId: opts.windowId } : {});
   const specKeyVal = `agent:${opts.id}`;
-  const stmt = db
+  return db
     .prepare(
       `INSERT INTO lab_jobs (id, kind, origin, requester, spec_json, spec_key, status, lease_id, lease_until, attempts, result_hash, error_code, created_at, updated_at, thread_id, question)
        SELECT ?, 'agent', 'ops', ?, ?, ?, 'queued', NULL, NULL, 0, NULL, NULL, ?, ?, ?, ?
        WHERE (SELECT COUNT(*) FROM lab_jobs WHERE requester = ? AND created_at >= ?) < ?
          AND (SELECT COUNT(*) FROM lab_jobs WHERE requester = ? AND status IN ('queued', 'running')) < ?`,
     )
-    .bind(
-      opts.id,
-      opts.requester,
-      specJson,
-      specKeyVal,
-      opts.now,
-      opts.now,
-      opts.threadId,
-      opts.question,
-      opts.requester,
-      opts.sinceIso,
-      opts.maxPerDay,
-      opts.requester,
-      opts.maxActive,
-    ) as WriteStatement;
-  const res = await stmt.run();
+    .bind(opts.id, opts.requester, specJson, specKeyVal, opts.now, opts.now, opts.threadId, opts.question, opts.requester, opts.sinceIso, opts.maxPerDay, opts.requester, opts.maxActive);
+}
+
+export async function insertQueuedAgentJobIfEligible(
+  db: D1Db,
+  opts: { id: string; requester: string; threadId: string; question: string; windowId: string | null; now: string; sinceIso: string; maxPerDay: number; maxActive: number },
+): Promise<boolean> {
+  const res = await (agentJobInsertStatement(db, opts) as WriteStatement).run();
   return (res.meta?.changes ?? res.changes ?? 0) === 1;
 }
 
@@ -727,6 +709,60 @@ export async function runSummaryByHash(db: D1Db, hash: string): Promise<LabRunSu
   } catch {
     return null;
   }
+}
+
+/** Every run hash one answer block cites (claim/verdict `runId`, a verdict's `against` when it is another run,
+ * chart `runIds`). Text/caveat blocks cite nothing. */
+export function citedRunIdsOfBlock(raw: unknown): string[] {
+  const b = (raw ?? {}) as Record<string, unknown>;
+  const out: string[] = [];
+  if (b.type === "claim" && typeof b.runId === "string") out.push(b.runId);
+  else if (b.type === "verdict") {
+    if (typeof b.runId === "string") out.push(b.runId);
+    if (typeof b.against === "string" && b.against !== "hold" && b.against !== "usdc") out.push(b.against);
+  } else if (b.type === "chart" && Array.isArray(b.runIds)) {
+    for (const r of b.runIds) if (typeof r === "string") out.push(r);
+  }
+  return out;
+}
+
+export function citedRunIdsOfAnswer(answer: unknown): string[] {
+  const blocks = (answer as { blocks?: unknown } | null)?.blocks;
+  if (!Array.isArray(blocks)) return [];
+  return blocks.flatMap(citedRunIdsOfBlock);
+}
+
+/** AL-21: the runs a job's answer may cite are exactly its `lab_job_runs` rows, never "any run that exists". */
+export async function recordedRunHashesForJob(db: D1Db, jobId: string): Promise<Set<string>> {
+  const { results } = await db.prepare("SELECT result_hash FROM lab_job_runs WHERE job_id = ?").bind(jobId).all<{ result_hash: string }>();
+  return new Set(results.map((r) => r.result_hash));
+}
+
+/**
+ * AL-01/AL-04 for a brand-new thread: the agent job (under the same caps) and its thread land in ONE D1 batch;
+ * the thread row is inserted only if the job row exists, so a refused job (cap hit) leaves no orphan thread.
+ */
+export async function insertThreadWithQueuedAgentJobIfEligible(
+  db: D1Db,
+  opts: {
+    threadId: string;
+    title: string;
+    id: string;
+    requester: string;
+    question: string;
+    windowId: string | null;
+    now: string;
+    sinceIso: string;
+    maxPerDay: number;
+    maxActive: number;
+  },
+): Promise<boolean> {
+  const jobStmt = agentJobInsertStatement(db, opts);
+  const threadStmt = db
+    .prepare("INSERT INTO lab_threads (id, owner, title, created_at, updated_at) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM lab_jobs WHERE id = ?)")
+    .bind(opts.threadId, opts.requester, opts.title, opts.now, opts.now, opts.id);
+  const results = await (db as BatchableDb).batch([jobStmt, threadStmt]);
+  return (results[0]?.meta?.changes ?? results[0]?.changes ?? 0) === 1;
 }
 
 /**

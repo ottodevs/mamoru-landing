@@ -26,7 +26,9 @@ import {
   insertDoneJobIfUnderLimit,
   insertQueuedAgentJobIfEligible,
   insertQueuedJobIfEligible,
-  insertThread,
+  insertThreadWithQueuedAgentJobIfEligible,
+  citedRunIdsOfBlock,
+  recordedRunHashesForJob,
   jobById,
   loadShadowPriceTable,
   readCatalog,
@@ -253,43 +255,46 @@ export async function handleLabThreads(db: D1Db | undefined, owner: string): Pro
   return json({ threads: await threadsByOwner(db, owner) });
 }
 
-/** Every `runId` a thread's answers cite (claim/verdict runs, verdict `against` when it is another run, chart
- * runIds), resolved once here so the client never has to chase a second round trip per block to render a claim
- * chip's label or a verdict's sentence. */
-function collectCitedRunIds(jobs: AgentJobRow[]): Set<string> {
-  const ids = new Set<string>();
-  for (const job of jobs) {
-    const answer = job.answer as { blocks?: unknown[] } | null;
-    if (!answer || !Array.isArray(answer.blocks)) continue;
-    for (const raw of answer.blocks) {
-      const b = raw as Record<string, unknown>;
-      if (b.type === "claim" && typeof b.runId === "string") ids.add(b.runId);
-      else if (b.type === "verdict") {
-        if (typeof b.runId === "string") ids.add(b.runId);
-        if (typeof b.against === "string" && b.against !== "hold" && b.against !== "usdc") ids.add(b.against);
-      } else if (b.type === "chart" && Array.isArray(b.runIds)) {
-        for (const r of b.runIds) if (typeof r === "string") ids.add(r);
-      }
-    }
-  }
-  return ids;
-}
-
 export async function handleLabThread(db: D1Db | undefined, owner: string, id: string): Promise<Response> {
   if (!db) return json({ error: "LAB_THREAD_NOT_FOUND" }, 404);
   const thread = await threadById(db, id);
   if (!thread || thread.owner !== owner) return json({ error: "LAB_THREAD_NOT_FOUND" }, 404);
-  const jobs = await agentJobsByThread(db, id);
-  const runIds = collectCitedRunIds(jobs);
+  const rawJobs = await agentJobsByThread(db, id);
+  // AL-21: a job's answer may only show runs recorded for THAT job in `lab_job_runs`. A block citing any other
+  // hash (even one that exists in `lab_runs`) is dropped, never rendered as a verified figure; `droppedBlocks`
+  // tells the client the answer is partial.
   const runs: Record<string, Awaited<ReturnType<typeof runSummaryByHash>>> = {};
-  for (const hash of runIds) {
-    const summary = await runSummaryByHash(db, hash);
-    if (summary) runs[hash] = summary;
+  const jobs: (AgentJobRow & { droppedBlocks: number })[] = [];
+  for (const job of rawJobs) {
+    let droppedBlocks = 0;
+    let answer = job.answer;
+    const blocks = (job.answer as { blocks?: unknown } | null)?.blocks;
+    if (Array.isArray(blocks)) {
+      const allowed = await recordedRunHashesForJob(db, job.id);
+      const kept = blocks.filter((blk) => citedRunIdsOfBlock(blk).every((h) => allowed.has(h)));
+      droppedBlocks = blocks.length - kept.length;
+      if (droppedBlocks) answer = { ...(job.answer as object), blocks: kept };
+      for (const blk of kept) {
+        for (const hash of citedRunIdsOfBlock(blk)) {
+          if (hash in runs) continue;
+          const summary = await runSummaryByHash(db, hash);
+          if (summary) runs[hash] = summary;
+        }
+      }
+    }
+    jobs.push({ ...job, answer, droppedBlocks });
   }
-  // AL-41 footer, "shadow cost if present": priced only when lab_prices has rows and the job's own cost meter
-  // parsed cleanly; a job from before pricing was configured (or any shape surprise) just omits the figure.
-  const prices = await loadShadowPriceTable(db, new Date().toISOString());
-  const jobsOut = jobs.map((job) => {
+  // AL-41 footer, "shadow cost if present": priced with the shadow prices in force when the job was created
+  // (AL-40: latest `valid_from <= created_at`), only when lab_prices has rows and the job's own cost meter
+  // parsed cleanly; otherwise the figure is simply omitted.
+  const priceCache = new Map<string, Awaited<ReturnType<typeof loadShadowPriceTable>>>();
+  const jobsOut = [];
+  for (const job of jobs) {
+    let prices = priceCache.get(job.createdAt);
+    if (prices === undefined) {
+      prices = await loadShadowPriceTable(db, job.createdAt);
+      priceCache.set(job.createdAt, prices);
+    }
     let shadowUsd: number | null = null;
     if (prices && job.cost && typeof job.cost === "object") {
       const c = job.cost as { modelCalls?: unknown; runs?: unknown; sweepCpuMs?: unknown };
@@ -301,8 +306,8 @@ export async function handleLabThread(db: D1Db | undefined, owner: string, id: s
         }
       }
     }
-    return { ...job, shadowUsd };
-  });
+    jobsOut.push({ ...job, shadowUsd });
+  }
   return json({ thread, jobs: jobsOut, runs });
 }
 
@@ -322,33 +327,37 @@ export async function handleLabAsk(db: D1Db | undefined, requester: string, inpu
   const windowId = typeof b.windowId === "string" && b.windowId ? b.windowId : null;
   const nowIso = new Date().toISOString();
 
+  const id = crypto.randomUUID();
+  const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   let threadId: string;
+  let inserted: boolean;
   if (typeof b.threadId === "string" && b.threadId) {
     const thread = await threadById(db, b.threadId);
     if (!thread || thread.owner !== requester) return json({ error: "LAB_THREAD_NOT_FOUND" }, 404);
     threadId = thread.id;
-    await touchThread(db, threadId, nowIso);
+    inserted = await insertQueuedAgentJobIfEligible(db, { id, requester, threadId, question: check.question, windowId, now: nowIso, sinceIso, maxPerDay: MAX_JOBS_PER_DAY, maxActive: MAX_QUEUED_JOBS });
+    // Only a job that was accepted bumps the thread's activity.
+    if (inserted) await touchThread(db, threadId, nowIso);
   } else {
+    // A new thread is created in the same D1 batch as its first job and only if the job passes the caps, so a
+    // refused question leaves no empty thread behind.
     threadId = crypto.randomUUID();
-    await insertThread(db, { id: threadId, owner: requester, title: threadTitleFromQuestion(check.question), now: nowIso });
+    inserted = await insertThreadWithQueuedAgentJobIfEligible(db, {
+      threadId,
+      title: threadTitleFromQuestion(check.question),
+      id,
+      requester,
+      question: check.question,
+      windowId,
+      now: nowIso,
+      sinceIso,
+      maxPerDay: MAX_JOBS_PER_DAY,
+      maxActive: MAX_QUEUED_JOBS,
+    });
   }
-
-  const id = crypto.randomUUID();
-  const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const inserted = await insertQueuedAgentJobIfEligible(db, {
-    id,
-    requester,
-    threadId,
-    question: check.question,
-    windowId,
-    now: nowIso,
-    sinceIso,
-    maxPerDay: MAX_JOBS_PER_DAY,
-    maxActive: MAX_QUEUED_JOBS,
-  });
   if (!inserted) {
     // No dedupe path here (spec_key is unique per job by construction, see insertQueuedAgentJobIfEligible), so
-    // a refusal only ever means one of the two caps — same "response-shaping read" as handleLabCreateJob above.
+    // a refusal only ever means one of the two caps -- same "response-shaping read" as handleLabCreateJob above.
     if ((await countJobsToday(db, requester, sinceIso)) >= MAX_JOBS_PER_DAY) {
       return json({ error: "LAB_JOB_LIMIT_DAILY" }, 429);
     }

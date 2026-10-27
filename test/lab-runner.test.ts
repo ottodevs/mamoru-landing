@@ -482,4 +482,31 @@ describe("lab-runner.ts: agent jobs (claim history, result storing the verified 
     const body = (await staleRes.json()) as { error: string };
     expect(body.error).toBe("LAB_JOB_LEASE_LOST");
   });
+  test("AL-21: an answer citing a run missing from this result's runHashes is refused whole with LAB_ANSWER_UNCITED, nothing written", async () => {
+    const db = labDb({ seed: false });
+    const env = opsEnv(db);
+    const now = new Date().toISOString();
+    await insertThread(db, { id: "thread-6", owner: "r", title: "t", now });
+    await insertAgentJob(db, { id: "job-ask-6", requester: "r", threadId: "thread-6", question: "q", status: "queued", now });
+    const claim = (await (await signedFetch(env, "/ops/lab/runner/claim", {})).json()) as { job: { leaseId: string } };
+    const run = makeRun({ windowId: "feb2025", base: "live", widthTicks: 2000, deposit: 1000, variantLabel: "Política actual", resultHash: "exists-1", vsHodl: -5 });
+    await db
+      .prepare("INSERT INTO lab_runs (result_hash, spec_key, window_id, summary_json, run_json, sim_version, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .bind(run.resultHash, run.specKey, run.window.id, JSON.stringify(run), JSON.stringify(run), run.simVersion, now)
+      .run();
+    const res = await signedFetch(env, "/ops/lab/runner/result", {
+      jobId: "job-ask-6",
+      leaseId: claim.job.leaseId,
+      kind: "agent",
+      answer: { blocks: [{ type: "claim", metric: "end", runId: "exists-1", value: 1 }] },
+      verifier: { ok: true, errors: [] },
+      cost: { modelCalls: [], toolRounds: 0, runs: [], sweepCpuMs: 0, wallMs: 100, repairUsed: false, verifierOutcome: "ok" },
+      runHashes: [],
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe("LAB_ANSWER_UNCITED");
+    const job = await jobById(db, "job-ask-6");
+    expect(job?.status).toBe("running");
+    expect(job?.answerJson).toBeNull();
+  });
 });
