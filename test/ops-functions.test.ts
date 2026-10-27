@@ -47,7 +47,7 @@ function confirmBodyOf(html: string): URLSearchParams {
 describe("/ops/functions", () => {
   test("without the table it says so and offers no form", async () => {
     const { env, cookie } = await opsEnv(memoryDb(false));
-    const html = await (await worker.fetch(get("/ops/functions", cookie), env)).text();
+    const html = await (await worker.fetch(get("/ops/engine/functions", cookie), env)).text();
     expect(html).toContain("Migration 0012 is not applied yet");
     expect(html).not.toContain("/ops/functions/apply");
   });
@@ -55,7 +55,7 @@ describe("/ops/functions", () => {
   test("with the table and no row, the flag reads off", async () => {
     const db = memoryDb();
     const { env, cookie } = await opsEnv(db);
-    const html = await (await worker.fetch(get("/ops/functions", cookie), env)).text();
+    const html = await (await worker.fetch(get("/ops/engine/functions", cookie), env)).text();
     expect(html).toContain("Yield ledger");
     expect(html).toContain('class="pill pill-off">Off</span>');
     expect(html).toContain("No change recorded");
@@ -73,7 +73,7 @@ describe("/ops/functions", () => {
   test("an unknown flag name is refused before anything is written", async () => {
     const db = memoryDb();
     const { env, cookie } = await opsEnv(db);
-    const csrf = csrfOf(await (await worker.fetch(get("/ops/functions", cookie), env)).text());
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/engine/functions", cookie), env)).text());
     const res = await worker.fetch(post("/ops/functions/apply", new URLSearchParams({ csrf, flag: "not_a_flag", enabled: "1", reason: "test" }), cookie), env);
     expect(res.status).toBe(400);
     expect(await maxIdOf(db, "not_a_flag")).toBe(0);
@@ -82,7 +82,7 @@ describe("/ops/functions", () => {
   test("a reason is required", async () => {
     const db = memoryDb();
     const { env, cookie } = await opsEnv(db);
-    const csrf = csrfOf(await (await worker.fetch(get("/ops/functions", cookie), env)).text());
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/engine/functions", cookie), env)).text());
     const res = await worker.fetch(post("/ops/functions/apply", new URLSearchParams({ csrf, flag: "yield_ledger", enabled: "1", reason: "" }), cookie), env);
     expect(res.status).toBe(400);
     expect(await listFlagChanges(db, "yield_ledger")).toEqual([]);
@@ -91,7 +91,7 @@ describe("/ops/functions", () => {
   test("turning on asks for a second confirm naming the RPC cost; the confirmed write records author and reason", async () => {
     const db = memoryDb();
     const { env, cookie } = await opsEnv(db);
-    const page = await (await worker.fetch(get("/ops/functions", cookie), env)).text();
+    const page = await (await worker.fetch(get("/ops/engine/functions", cookie), env)).text();
     const csrf = csrfOf(page);
     const ask = await (await worker.fetch(post("/ops/functions/apply", new URLSearchParams({ csrf, flag: "yield_ledger", enabled: "1", reason: "go live" }), cookie), env)).text();
     expect(ask).toContain("Confirm this change");
@@ -110,7 +110,7 @@ describe("/ops/functions", () => {
     const db = memoryDb();
     await appendFlagChange(db, { flag: "yield_ledger", enabled: true, author: "x", reason: "on", expectedMaxId: await maxIdOf(db, "yield_ledger") });
     const { env, cookie } = await opsEnv(db);
-    const csrf = csrfOf(await (await worker.fetch(get("/ops/functions", cookie), env)).text());
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/engine/functions", cookie), env)).text());
     const res = await worker.fetch(post("/ops/functions/apply", new URLSearchParams({ csrf, flag: "yield_ledger", enabled: "0", reason: "pause" }), cookie), env);
     expect(res.status).toBe(200);
     const [row] = (await listFlagChanges(db, "yield_ledger"))!;
@@ -121,7 +121,7 @@ describe("/ops/functions", () => {
   test("a stale confirm token (the flag moved meanwhile) asks again instead of writing", async () => {
     const db = memoryDb();
     const { env, cookie } = await opsEnv(db);
-    const csrf = csrfOf(await (await worker.fetch(get("/ops/functions", cookie), env)).text());
+    const csrf = csrfOf(await (await worker.fetch(get("/ops/engine/functions", cookie), env)).text());
     const ask = await (await worker.fetch(post("/ops/functions/apply", new URLSearchParams({ csrf, flag: "yield_ledger", enabled: "1", reason: "go live" }), cookie), env)).text();
     // Someone else's change lands between the ask and the confirm.
     await appendFlagChange(db, { flag: "yield_ledger", enabled: false, author: "someone-else@example.com", reason: "unrelated", expectedMaxId: 0 });
@@ -138,7 +138,7 @@ describe("/ops/functions", () => {
       await appendFlagChange(db, { flag: "yield_ledger", enabled: i % 2 === 0, author: "x", reason: `r${i}`, expectedMaxId: await maxIdOf(db, "yield_ledger") });
     }
     const { env, cookie } = await opsEnv(db);
-    const html = await (await worker.fetch(get("/ops/functions", cookie), env)).text();
+    const html = await (await worker.fetch(get("/ops/engine/functions", cookie), env)).text();
     expect(html).toContain("r24");
     expect(html).not.toContain(">r0<");
     expect((await listFlagChanges(db, "yield_ledger", 20))!.length).toBe(20);

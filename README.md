@@ -61,7 +61,7 @@ bun run build && bunx wrangler dev
 | `src/components/EmailBar.astro` | Email bar and the on-the-list follow-up |
 | `src/styles/global.css` | Rice paper field, ink, Noto Serif |
 | `src/worker.ts` | Assets, `POST /api/notify`, and the private panel at `/ops` |
-| `src/ops-infra.ts`, `src/infra-snapshot.ts` | `/ops/infra`: relayer status, cost per new account, accounts + TVL on Base (same Google allowlist as `/ops`) |
+| `src/ops-infra.ts`, `src/infra-snapshot.ts` | `/ops/money/funding` (was `/ops/infra`): relayer status, Funding per chain, cost per new account; the Ethereum holdings per account are in `src/ops-outside.ts`, shown on `/ops/accounts` (same Google allowlist as `/ops`). Nav (otto/mamoru-astro#35): Pulse, Yield, Accounts, Engine (`/ops/engine`, `/settings`, `/functions`), Money (`/ops/money`, `/funding`); the old `/ops/settings`, `/functions`, `/costs`, `/infra` redirect (301) |
 | `src/worker.ts` | Assets, `POST /api/notify`, and the private list at `/ops` |
 | `src/staging-preview.ts` | `/ops/preview` proxy + the staging Worker's own self-gate |
 

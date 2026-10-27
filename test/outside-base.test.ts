@@ -5,6 +5,7 @@ import { buildOverview } from "../src/metrics-overview";
 import { DEFAULT_FILTER } from "../src/account-filter";
 import { fmtUsd } from "../src/metrics-math";
 import { renderOverview } from "../src/ops-metrics";
+import { outsideSheet } from "../src/ops-outside";
 import { renderInfra } from "../src/ops-infra";
 import {
   ETHEREUM_MULTICALL3,
@@ -186,14 +187,15 @@ describe("pages", () => {
     expect(html).not.toContain("Including outside Base");
   });
 
-  test("Infra lists the Ethereum holdings per account, even for an account with no Base value", () => {
+  test("Accounts lists the Ethereum holdings per account (moved from Funding, otto/mamoru-astro#35), even with no Base value", () => {
     const rows = [acct(1, { outside: { eth: 0.05537835, usdc: 0, usd: 127.4 } }), acct(2, { usdcIdle: 0, lpUsd: 0, positions: 0, inRange: 0, outside: { eth: 0.02, usdc: 0, usd: 46 } }), acct(3)];
-    const html = renderInfra({ reading: { snapshot: snap(rows) }, csrf: "c", nonce: "n" });
+    const html = outsideSheet(snap(rows));
     expect(html).toContain("<th>On Ethereum</th>");
     expect(html).toContain("0.0554 ETH · $127.40");
     expect(html).toContain("0.0200 ETH · $46.00");
-    expect(html).toContain("not read");
-    expect(html).toContain("Outside Base (not working, not in the figure above)");
+    expect(html).toContain("1 account was not read on Ethereum");
+    expect(html).toContain("Not working, and not in any Base figure");
+    // Funding no longer carries the per-account table.
+    expect(renderInfra({ reading: { snapshot: snap(rows) }, csrf: "c", nonce: "n" })).not.toContain("On Ethereum");
   });
 });
-
