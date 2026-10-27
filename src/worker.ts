@@ -81,10 +81,10 @@ import { applyExperiments } from "./exp-rewrite";
 import { handleExpEvent, recordWaitlistSubmit } from "./exp-events";
 import { loadExperimentReports } from "./exp-report";
 import { experimentsSection } from "./ops-experiments";
-import { settingsSection, type SettingsPage } from "./ops-settings";
+import { RECOMMENDED_TEMPLATE, settingsSection, type SettingsPage } from "./ops-settings";
 import { checkConfirmToken, issueConfirmToken, risksOf } from "./engine-settings-confirm";
-import { inEffect, appendVersion, maxIdOf, SettingsConflict, SettingsOutcomeUnknown, listTemplates, listVersions, versionById, type Env as SettingsEnv } from "./engine-settings-store";
-import { DEFAULT_SETTINGS, canonicalJson, settingsFromForm, validateSettings } from "./engine-settings-model";
+import { inEffect, appendVersion, maxIdOf, SettingsConflict, SettingsOutcomeUnknown, listTemplates, listVersions, versionById, type Env as SettingsEnv, type TemplateRow } from "./engine-settings-store";
+import { DEFAULT_SETTINGS, RECOMMENDED_SETTINGS, canonicalJson, settingsFromForm, validateSettings } from "./engine-settings-model";
 import { functionsSection, type FunctionsPage } from "./ops-functions";
 import { isOpsFlagName, OPS_FLAGS, OPS_FLAG_NAMES } from "./ops-flags-model";
 import { checkFlagConfirmToken, issueFlagConfirmToken } from "./ops-flags-confirm";
@@ -855,10 +855,16 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
   }
 
   // ---- engine settings (spec 006, otto/mamoru#147) ----
+  // The D1 templates with the code's recommended set first. The name is the code's: a D1 row carrying it is dropped.
+  const withPresets = (rows: readonly TemplateRow[]): TemplateRow[] => [
+    { name: RECOMMENDED_TEMPLATE, settings: RECOMMENDED_SETTINGS, source: "code", note: "Decision of 20 Oct (versions v1 beta, v2 prod)." },
+    ...rows.filter((t) => t.name !== RECOMMENDED_TEMPLATE),
+  ];
   const settingsView = async (over: Partial<Pick<SettingsPage, "draft" | "notice" | "confirm">> = {}, status = 200): Promise<SectionView> => {
     const db = env.MAMORU_DB;
     const versions = db ? await listVersions(db) : null;
-    const templates = db ? await listTemplates(db) : null;
+    const stored = db ? await listTemplates(db) : null;
+    const templates = stored === null ? null : withPresets(stored);
     const wantEnv: SettingsEnv = url.searchParams.get("env") === "beta" ? "beta" : "prod";
     const wantTemplate = url.searchParams.get("template");
     const fromTemplate = templates?.find((t) => t.name === wantTemplate);
@@ -866,7 +872,9 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     const active = activeAll[wantEnv].wide;
     const draft = over.draft ?? {
       env: wantEnv,
-      template: fromTemplate?.name ?? active?.template ?? templates?.[0]?.name ?? "custom",
+      // Start from what runs, so a change touches only what the person edits; with nothing written yet, from the
+      // code defaults the operator runs, said as such.
+      template: fromTemplate?.name ?? active?.template ?? "custom",
       settings: fromTemplate?.settings ?? active?.settings ?? DEFAULT_SETTINGS,
       canary: "",
       reason: "",
@@ -882,7 +890,7 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     if (!csrfOk || !form) return respond(await settingsView({ notice: { text: FLASH_COPY.bad, tone: "bad" } }, 403));
     const db = env.MAMORU_DB;
     if (!db) return respond(await settingsView({}, 503));
-    const templates = (await listTemplates(db)) ?? [];
+    const templates = withPresets((await listTemplates(db)) ?? []);
     let draft: SettingsPage["draft"];
     let rollbackOf: number | undefined;
     if (url.pathname === "/ops/settings/rollback") {
