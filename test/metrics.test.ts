@@ -682,7 +682,7 @@ describe("ops-metrics.ts render", () => {
     expect(html).toContain("Activity is not being recorded yet.");
     expect(html).toContain('action="/ops/metrics/snapshot"');
     expect(html).toContain('value="tok&lt;en"');
-    expect(html).toContain('href="/ops/infra"');
+    expect(html).toContain('href="/ops/money/funding"');
     expect(html.match(/<script nonce="abc123">/g)?.length).toBe(4);
     expect(html.match(/<script/g)?.length).toBe(4);
     expect(html).toContain("prefers-reduced-motion");
