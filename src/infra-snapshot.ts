@@ -47,7 +47,7 @@ import {
 import { type PoolState, priceOfBaseInQuote, sameAddress, valuePosition } from "./uniswap-math";
 import { type AccountRow, type D1Db, fetchChainAccounts, fetchInfraCounts } from "./d1-infra";
 import type { AccountFilter } from "./account-filter";
-import { OUTSIDE_DEADLINE_MS, type OutsideHolding, readOutsideBase } from "./outside-base";
+import { type OutsideHolding, readOutsideBase } from "./outside-base";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
@@ -489,19 +489,10 @@ async function attachOutsideBase(
 ): Promise<void> {
   if (!accounts || accounts.rows.length === 0) return;
   try {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const deadline = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), OUTSIDE_DEADLINE_MS);
-    });
-    const held = await Promise.race([
-      readOutsideBase(
-        accounts.rows.map((r) => r.address),
-        { rpcUrls: env.ETHEREUM_RPC_URLS, baseEthUsd, fetchFn },
-      ),
-      deadline,
-    ]);
-    clearTimeout(timer);
-    if (!held) return;
+    const held = await readOutsideBase(
+      accounts.rows.map((r) => r.address),
+      { rpcUrls: env.ETHEREUM_RPC_URLS, baseEthUsd, fetchFn },
+    );
     for (const row of accounts.rows) {
       const o = held.get(row.address.toLowerCase());
       if (o) row.outside = o;

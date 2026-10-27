@@ -98,6 +98,18 @@ describe("readOutsideBase", () => {
     expect(m.has(EMPTY)).toBe(false);
   });
 
+  test("at the deadline, chunks already read are kept and the slow one is not read", async () => {
+    const addrs = Array.from({ length: 101 }, (_, i) => `0x${(i + 1).toString(16).padStart(40, "0")}`);
+    const fast = ethFetch(Object.fromEntries(addrs.map((a) => [a, [1n, 1n] as [bigint, bigint]])));
+    let n = 0;
+    const m = await readOutsideBase(addrs, {
+      baseEthUsd: 1, deadlineMs: 50,
+      fetchFn: (u, i) => (++n === 2 ? new Promise<Response>(() => {}) : fast(u, i)),
+    });
+    expect(m.size).toBe(100);
+    expect(m.has(addrs[100])).toBe(false);
+  });
+
   test("a throwing fetch never throws out", async () => {
     const m = await readOutsideBase([USER], { baseEthUsd: 1, fetchFn: async () => { throw new Error("net"); } });
     expect(m.size).toBe(0);
