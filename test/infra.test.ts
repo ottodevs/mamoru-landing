@@ -692,7 +692,9 @@ describe("ops-infra.ts render", () => {
     const rows = HEALTHY.accounts!.rows.map((r, i) => (i === 0 ? { ...r, outside: undefined } : r));
     const sheet = outsideSheet({ ...HEALTHY, accounts: { ...HEALTHY.accounts!, rows } });
     expect(sheet).toContain("Held on Ethereum");
-    expect(sheet).toContain("not read on Ethereum. None counted as zero.");
+    expect(sheet).toContain("<td>k1</td>");
+    expect(sheet).toContain('<td class="unread">not read</td>');
+    expect(sheet).toContain("None counted as zero.");
     expect(outsideSheet({ ...HEALTHY, accounts: null })).toBe("");
     const view = withOutside({ section: "accounts", title: "Accounts", html: '<div class="c-view"><p>x</p><template id="c-acct-a">t</template></div>' }, HEALTHY);
     expect(view.html.indexOf("Held on Ethereum")).toBeGreaterThan(0);
