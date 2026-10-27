@@ -15,7 +15,9 @@ export const ETHEREUM_PUBLIC_RPCS = ["https://ethereum-rpc.publicnode.com", "htt
 export const ETH_SPOT_URL = "https://api.coinbase.com/v2/prices/ETH-USD/spot";
 /** Accounts per aggregate3 call (two sub-calls each): keeps one eth_call small and the subrequest count low. */
 const CHUNK = 100;
-const TIMEOUT_MS = 8_000;
+const TIMEOUT_MS = 5_000;
+/** The whole Ethereum read gives up after this, so it can never hold the Base snapshot back (waitUntil is capped at 30 s). */
+export const OUTSIDE_DEADLINE_MS = 6_000;
 
 const abi = parseAbi([
   "struct Call3 { address target; bool allowFailure; bytes callData; }",
@@ -142,17 +144,20 @@ export async function readOutsideBase(
   if (unique.length === 0) return out;
   const urls = ethereumRpcList(opts.rpcUrls);
   const raws = new Map<string, OutsideRaw>();
-  try {
-    for (let i = 0; i < unique.length; i += CHUNK) {
-      const chunk = unique.slice(i, i + CHUNK);
-      const read = await readChunk(chunk, urls, fetchFn);
-      read?.forEach((r, k) => {
-        if (r) raws.set(chunk[k], r);
-      });
-    }
-  } catch {
-    // Keep whatever was read; the rest stays "not read".
-  }
+  const chunks: string[][] = [];
+  for (let i = 0; i < unique.length; i += CHUNK) chunks.push(unique.slice(i, i + CHUNK));
+  // Chunks run in parallel; a chunk that fails stays "not read" and does not affect the others.
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      try {
+        (await readChunk(chunk, urls, fetchFn))?.forEach((r, k) => {
+          if (r) raws.set(chunk[k], r);
+        });
+      } catch {
+        // Not read.
+      }
+    }),
+  );
   let ethUsd = opts.baseEthUsd;
   if (ethUsd === null && [...raws.values()].some((r) => r.ethWei > 0n)) ethUsd = await readEthSpot(fetchFn);
   for (const [address, raw] of raws) out.set(address, toHolding(raw, ethUsd));

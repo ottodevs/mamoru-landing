@@ -1,3 +1,4 @@
+import { OUTSIDE_DEADLINE_MS } from "../src/outside-base";
 import { describe, expect, test } from "bun:test";
 import {
   ACTIVATION_GAS,
@@ -436,6 +437,16 @@ describe("partial reads", () => {
     expect(snapshot.accounts?.idleUsdcUsd).toBeCloseTo(48, 9);
     expect(snapshot.accounts?.rows.every((r) => r.outside === undefined)).toBe(true);
   });
+
+  test("a hanging Ethereum RPC cannot hold the Base snapshot back past the outside deadline", async () => {
+    const { client, db } = partialFixture({});
+    const hang = (_u: string, init?: RequestInit) =>
+      String(init?.body).includes('"eth_call"') ? new Promise<Response>(() => {}) : Promise.resolve(new Response("no", { status: 503 }));
+    const t0 = Date.now();
+    const snapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client, hang);
+    expect(Date.now() - t0).toBeLessThan(OUTSIDE_DEADLINE_MS + 2_000);
+    expect(snapshot.accounts?.idleUsdcUsd).toBeCloseTo(48, 9);
+  }, 15_000);
 
   test("calls that fail once are retried and the snapshot comes back complete", async () => {
     const { client, db } = partialFixture({ failOnce: ["balanceOf", "getEthBalance", "positions", "slot0", "getPool"] });
