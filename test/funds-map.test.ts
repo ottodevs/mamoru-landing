@@ -86,6 +86,25 @@ describe("buildFundsMap", () => {
     expect(renderFundsMap(buildFundsMap(snap(), [row()]))).not.toContain("test networks");
   });
 
+  test("an Ethereum account (chainId 1) is working money on Ethereum, not outside, and counted once", () => {
+    const rows = [
+      row({ chainId: 1, usdcIdle: 500, ethBalance: 0.001, outside: { eth: 1, usdc: 999, usd: 3000 } }),
+      row({ lpUsd: 10, outside: { eth: 0, usdc: 0, usd: 0 } }),
+    ];
+    const m = buildFundsMap(snap(), rows);
+    expect(m.excluded).toBe(0);
+    expect(find(m, "Ethereum", "idle")!.usd).toBe(500);
+    expect(find(m, "Ethereum", "idle")!.kind).toBe("working");
+    expect(find(m, "Ethereum", "gas")!.usd).toBeCloseTo(2, 6);
+    expect(m.working).toBe(510);
+    expect(m.notWorking).toBe(0);
+    expect(m.total).toBeCloseTo(512, 6);
+    const out = find(m, "Ethereum", "outside");
+    expect(out?.usd ?? 0).toBe(0);
+    const html = renderFundsMap(m);
+    expect(html).not.toContain("test networks");
+  });
+
   test("unread outside never renders as $0 anywhere", () => {
     const html = renderFundsMap(buildFundsMap(snap(), [row({ lpUsd: 10 })]));
     const nw = html.split('class="fm-x"><dt>')[1].split("</div>")[0];

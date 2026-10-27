@@ -58,7 +58,7 @@ export const BASE_ID = 8453;
 export const ETHEREUM_ID = 1;
 export const MONAD_ID = 143;
 /** Only these chains enter the map. Testnets (10143, 84532, 11155111) and unknown ids are counted apart, never mapped. */
-const MAPPED = new Set([BASE_ID, MONAD_ID]);
+const MAPPED = new Set([BASE_ID, ETHEREUM_ID, MONAD_ID]);
 
 type Row = Pick<AccountView, "chainId" | "usdcIdle" | "lpUsd" | "ethBalance" | "positions" | "outside"> & { unread?: boolean };
 
@@ -96,6 +96,7 @@ export function buildFundsMap(
   };
 
   // Working and reserve: per the chain the account lives on.
+  // Mapped chains only: Base, Ethereum, Monad.
   const rowChains = [...new Set(rows.map((r) => canonical(r.chainId)))];
   if (!rowChains.includes(BASE_ID)) rowChains.push(BASE_ID);
   for (const cid of rowChains) {
@@ -133,7 +134,8 @@ export function buildFundsMap(
   }
 
   // Outside: Ethereum balances at the account addresses.
-  const out = summarizeOutside(rows);
+  // Accounts that live on Ethereum are working money there; their own address is not "outside" (no double count).
+  const out = summarizeOutside(rows.filter((r) => r.chainId !== ETHEREUM_ID));
   put(ETHEREUM_ID, {
     id: "outside",
     label: "Outside Base, not working",
