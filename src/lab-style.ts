@@ -230,6 +230,9 @@ export const LAB_STYLE = `
 .lab-ask-input:focus { outline: 2px solid var(--mamoru); outline-offset: 1px; }
 .lab-ask-send { border: 1px solid var(--ink); background: var(--ink); color: var(--paper); border-radius: var(--r); padding: 8px 14px; font-size: .86rem; cursor: pointer; }
 .lab-ask-send:disabled { opacity: .45; cursor: not-allowed; }
+/* Disabled stays readable in light and dark: the doubled class outranks the console's generic button:disabled (same as .lab-run). */
+.lab-ask-send.lab-ask-send:disabled { background: var(--ink); color: var(--paper); border-color: var(--ink); opacity: .5; }
+.lab-ask-new.lab-ask-new:disabled { background: none; color: var(--stone); border-color: var(--wash); opacity: .7; cursor: default; }
 
 @media (max-width: 1180px) { .lab-shell { grid-template-columns: 220px minmax(0, 1fr); } .lab-shell aside.lab-right { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--wash); } }
 @media (max-width: 820px) {
@@ -247,7 +250,7 @@ export const LAB_STYLE = `
   .lab-ev .lab-p { display: none; }
   /* otto/mamoru-astro#30: the chat panel already stacks under the bench (aside.lab-right order: 2, above) --
      cap the message list shorter here so "Enviar" is always one scroll away, never pushed fully off-screen. */
-  .lab-ask-messages { max-height: 38vh; }
+  .lab-ask-messages { max-height: none; overflow-y: visible; }
 }
 @media (prefers-reduced-motion: reduce) { .lab-root * { transition: none !important; animation: none !important; } }
 /* GPT-6 Sol review (otto/mamoru-astro#28 follow-up): the rule above already stops the spin (animation: none

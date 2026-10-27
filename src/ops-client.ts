@@ -1569,7 +1569,10 @@ export function opsClientScript(nonce: string): string {
           '<div class="lab-ans' + (job.status === "failed" ? " lab-failed" : "") + '">' + askAnswerBodyHtml(job) + "</div>";
       }
       box.innerHTML = html;
-      box.scrollTop = box.scrollHeight;
+      // Open at the start of the latest turn (its question, then the verdict headline), not at the bottom of the answer.
+      var turns = box.querySelectorAll(".lab-me");
+      var last = turns.length ? turns[turns.length - 1] : null;
+      box.scrollTop = last ? last.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop : 0;
       box.querySelectorAll("[data-ask-retry]").forEach(function (b) {
         b.onclick = function () { sendAskQuestion(b.getAttribute("data-ask-retry")); };
       });

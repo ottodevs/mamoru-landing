@@ -133,7 +133,7 @@ function labShell(csrf: string): string {
         <div class="lab-ask-suggestions" id="lab-ask-suggestions"></div>
         <p class="lab-ask-err" id="lab-ask-err" role="alert"></p>
         <form class="lab-ask-form" id="lab-ask-form">
-          <textarea id="lab-ask-input" class="lab-ask-input" maxlength="600" rows="1" placeholder="Pregunta algo sobre el banco…" aria-label="Pregunta para el Lab"></textarea>
+          <textarea id="lab-ask-input" class="lab-ask-input" maxlength="600" rows="1" placeholder="Pregunta al Lab…" aria-label="Pregunta para el Lab"></textarea>
           <button type="submit" id="lab-ask-send" class="lab-ask-send">Enviar</button>
         </form>
       </section>

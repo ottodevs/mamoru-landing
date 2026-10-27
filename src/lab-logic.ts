@@ -242,6 +242,8 @@ export function labLogic() {
     LAB_MODEL_UNAVAILABLE: "el modelo no está disponible ahora mismo",
     LAB_JOB_LEASE_LOST: "el runner perdió el turno; vuelve a intentarlo",
     LAB_HOLDOUT_DENIED: "esa ventana es parte de la reserva de prueba y el agente no puede usarla",
+    LAB_AGENT_BUDGET: "se alcanzó el límite diario de preguntas al Lab",
+    LAB_ANSWER_UNCITED: "la respuesta citaba corridas que no produjo; no se muestra",
     LAB_RUN_MISSING: "el agente citó un resultado que no llegó a guardarse",
     LAB_SERVICE_UNAVAILABLE: "el banco no está disponible ahora mismo",
     LAB_NETWORK: "sin conexión con el servidor",
