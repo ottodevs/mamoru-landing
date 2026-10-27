@@ -107,7 +107,9 @@ async function handleAgentResult(db: D1Db, b: { id: string; leaseId: string; ans
   // AL-21: every run the answer's claim/verdict/chart blocks cite must be among this result's own `runHashes`
   // (which `finishAgentJobDone` then records in `lab_job_runs`). Refused whole, nothing written.
   const declared = new Set(b.runHashes as string[]);
-  if (citedRunIdsOfAnswer(b.answer).some((h) => !declared.has(h))) return json({ error: "LAB_ANSWER_UNCITED" }, 409);
+  // A verified block with a missing/malformed citation is refused the same way (`null`).
+  const cited = citedRunIdsOfAnswer(b.answer);
+  if (cited === null || cited.some((h) => !declared.has(h))) return json({ error: "LAB_ANSWER_UNCITED" }, 409);
   const result = await finishAgentJobDone(db, {
     id: b.id,
     leaseId: b.leaseId,

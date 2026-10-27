@@ -509,4 +509,33 @@ describe("lab-runner.ts: agent jobs (claim history, result storing the verified 
     expect(job?.status).toBe("running");
     expect(job?.answerJson).toBeNull();
   });
+  test("AL-21: a verified block with a missing or non-string citation is refused whole with LAB_ANSWER_UNCITED, nothing written", async () => {
+    const bad: unknown[] = [
+      { type: "claim", metric: "end", value: 1 },
+      { type: "claim", metric: "end", runId: 7, value: 1 },
+      { type: "verdict", runId: "r", against: 5 },
+      { type: "chart", kind: "price" },
+      { type: "chart", kind: "price", runIds: [] },
+    ];
+    for (let i = 0; i < bad.length; i++) {
+      const db = labDb({ seed: false });
+      const env = opsEnv(db);
+      const now = new Date().toISOString();
+      await insertThread(db, { id: `th-bad-${i}`, owner: "r", title: "t", now });
+      await insertAgentJob(db, { id: `job-bad-${i}`, requester: "r", threadId: `th-bad-${i}`, question: "q", status: "queued", now });
+      const claim = (await (await signedFetch(env, "/ops/lab/runner/claim", {})).json()) as { job: { leaseId: string } };
+      const res = await signedFetch(env, "/ops/lab/runner/result", {
+        jobId: `job-bad-${i}`,
+        leaseId: claim.job.leaseId,
+        kind: "agent",
+        answer: { blocks: [bad[i]] },
+        verifier: { ok: true, errors: [] },
+        cost: { modelCalls: [], toolRounds: 0, runs: [], sweepCpuMs: 0, wallMs: 1, repairUsed: false, verifierOutcome: "ok" },
+        runHashes: ["r"],
+      });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toBe("LAB_ANSWER_UNCITED");
+      expect((await jobById(db, `job-bad-${i}`))?.status).toBe("running");
+    }
+  });
 });

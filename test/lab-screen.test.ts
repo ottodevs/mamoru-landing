@@ -692,4 +692,36 @@ describe("GET /ops/lab/api/threads(/:id): ownership and run resolution", () => {
     const body = (await res.json()) as { jobs: { shadowUsd: number | null }[] };
     expect(body.jobs[0].shadowUsd).toBeCloseTo(1, 10);
   });
+  test("AL-21: verified blocks with a missing/malformed citation are dropped at thread read", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    const now = new Date().toISOString();
+    await insertThread(db, { id: "t-mal", owner: "ottodevs@gmail.com", title: "t", now });
+    await insertAgentJob(db, { id: "j-mal", requester: "ottodevs@gmail.com", threadId: "t-mal", question: "q", status: "done", now });
+    const answer = { blocks: [{ type: "claim", metric: "fees", value: 9 }, { type: "chart", kind: "price" }, { type: "verdict", runId: "hash-feb-live-2000-1000", against: 3 }, { type: "text", md: "prosa" }] };
+    await db.prepare("UPDATE lab_jobs SET answer_json = ? WHERE id = ?").bind(JSON.stringify(answer), "j-mal").run();
+    await db.prepare("INSERT INTO lab_job_runs (job_id, result_hash) VALUES (?, ?)").bind("j-mal", "hash-feb-live-2000-1000").run();
+    const { cookie } = await sessionCookie();
+    const res = await worker.fetch(new Request("https://mamoru.lol/ops/lab/api/threads/t-mal", { headers: { cookie } }), env);
+    const body = (await res.json()) as { jobs: { answer: { blocks: { type: string }[] }; droppedBlocks: number }[] };
+    expect(body.jobs[0].answer.blocks.map((b) => b.type)).toEqual(["text"]);
+    expect(body.jobs[0].droppedBlocks).toBe(3);
+  });
+
+  test("a transcript is capped at the latest 50 turns, oldest first, with truncated: true", async () => {
+    const db = labDb();
+    const env = opsEnv(db);
+    await insertThread(db, { id: "t-long", owner: "ottodevs@gmail.com", title: "t", now: "2026-01-01T00:00:00.000Z" });
+    for (let i = 0; i < 55; i++) {
+      const at = new Date(Date.UTC(2026, 0, 2, 0, i)).toISOString();
+      await insertAgentJob(db, { id: `j-long-${String(i).padStart(2, "0")}`, requester: "ottodevs@gmail.com", threadId: "t-long", question: `q${i}`, status: "done", now: at });
+    }
+    const { cookie } = await sessionCookie();
+    const res = await worker.fetch(new Request("https://mamoru.lol/ops/lab/api/threads/t-long", { headers: { cookie } }), env);
+    const body = (await res.json()) as { jobs: { question: string }[]; truncated: boolean };
+    expect(body.truncated).toBe(true);
+    expect(body.jobs).toHaveLength(50);
+    expect(body.jobs[0].question).toBe("q5");
+    expect(body.jobs[49].question).toBe("q54");
+  });
 });
