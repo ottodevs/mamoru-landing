@@ -158,6 +158,12 @@ export function keptFrom(now: InEffect | undefined, accountKeys: string[] | null
   const keys = accountKeys?.map((k) => k.toLowerCase()) ?? [];
   const inCanary = new Set((now?.canary?.accountKeys ?? []).map((k) => k.toLowerCase()));
   if (keys.length && now?.canary && keys.every((k) => inCanary.has(k))) return now.canary.settings;
+  // Some accounts in the canary in effect and some not: if those two run different hidden settings, no single version
+  // keeps both, and picking one would change the others without a field saying so (review r3). Refused instead.
+  if (keys.some((k) => inCanary.has(k)) && now?.canary) {
+    const hidden = (s: EngineSettings) => JSON.stringify(KEPT_KEYS.map((k) => (s as Record<string, unknown>)[k] ?? null));
+    if (hidden(now.canary.settings) !== hidden(now.wide?.settings ?? ({} as EngineSettings))) throw new Error("these accounts run different re-range or bridge-out settings today; write the canary for the accounts of the current canary and the others separately");
+  }
   return now?.wide?.settings ?? null;
 }
 
