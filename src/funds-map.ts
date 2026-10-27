@@ -60,7 +60,7 @@ export const MONAD_ID = 143;
 /** Only these chains enter the map. Testnets (10143, 84532, 11155111) and unknown ids are counted apart, never mapped. */
 const MAPPED = new Set([BASE_ID, ETHEREUM_ID, MONAD_ID]);
 
-type Row = Pick<AccountView, "chainId" | "usdcIdle" | "lpUsd" | "ethBalance" | "positions" | "outside"> & { unread?: boolean };
+type Row = Pick<AccountView, "chainId" | "usdcIdle" | "lpUsd" | "ethBalance" | "positions" | "outside"> & { unread?: boolean; address?: string };
 
 const chainName = (id: number): string => (id === BASE_ID ? "Base" : id === ETHEREUM_ID ? "Ethereum" : id === MONAD_ID ? "Monad" : `Chain ${id}`);
 const canonical = (id: number): number => id;
@@ -135,7 +135,26 @@ export function buildFundsMap(
 
   // Outside: Ethereum balances at the account addresses.
   // Accounts that live on Ethereum are working money there; their own address is not "outside" (no double count).
-  const out = summarizeOutside(rows.filter((r) => r.chainId !== ETHEREUM_ID));
+  // Safes share one address across chains, so an L1 balance read for a Base row is the same money as a chain-1 row
+  // at that address (already counted as working), and several rows at one address are one L1 balance, counted once.
+  const l1Addresses = new Set(rows.filter((r) => r.chainId === ETHEREUM_ID && r.address).map((r) => r.address!.toLowerCase()));
+  const outsideRows: Row[] = [];
+  const seen = new Map<string, number>();
+  for (const r of rows) {
+    if (r.chainId === ETHEREUM_ID) continue;
+    const a = r.address?.toLowerCase();
+    if (!a) {
+      outsideRows.push(r);
+      continue;
+    }
+    if (l1Addresses.has(a)) continue;
+    const at = seen.get(a);
+    if (at === undefined) {
+      seen.set(a, outsideRows.length);
+      outsideRows.push(r);
+    } else if (!outsideRows[at].outside && r.outside) outsideRows[at] = r;
+  }
+  const out = summarizeOutside(outsideRows);
   put(ETHEREUM_ID, {
     id: "outside",
     label: "Outside Base, not working",
@@ -144,7 +163,7 @@ export function buildFundsMap(
     accounts: out.holders,
     note:
       out.read === 0
-        ? rows.length === 0 ? "" : "not read"
+        ? outsideRows.length === 0 ? "" : "not read"
         : [
             out.eth > 0 ? fmtNative(out.eth, "ETH") : "",
             out.usdc > 0 ? `${out.usdc.toFixed(2)} USDC` : "",
