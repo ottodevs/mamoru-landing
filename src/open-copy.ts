@@ -86,11 +86,16 @@ export const OPEN_COPY = {
     heading: "DeFi yield for the real world",
     body: "Yield comes back as stablecoins and is reinvested. Transfer it to your account whenever you want.",
   },
-  // The landing's how-it-works: the launch film's scene, no words inside the animation. One caption per phase.
+  // The landing's how-it-works v4 (Brais, 27 Oct): one deposit of USDC on Base rises into the column, which parts into
+  // three positions; their yield is captured in Stables. The messages are HTML over the loop, on its clock (seconds).
   flow: {
     eyebrow: "How it works",
-    lines: ["Mamoru puts it all to work.", "Reinvested. Always working."],
-    aria: "USDC flows into three positions: Growth, Balance and Stables. The yield of Growth and Balance flows back into Stables, which grows.",
+    messages: [
+      { at: 0.4, out: 4.9, lines: ["You bring", "the capital."] },
+      { at: 5.2, out: 8.4, lines: ["Mamoru puts it", "all to work."] },
+      { at: 8.8, out: 11.7, lines: ["Yield, captured", "in stablecoins."] },
+    ],
+    aria: "One deposit of USDC on Base enters Mamoru and rises into one column, which parts into three positions: 15% Growth, 35% Balance and 50% Stables. The yield of Growth and Balance is captured in Stables.",
   },
   // Slide 3 v3 (Penpot "Mamoru — Slide 3 -v3 pools"): top to bottom, as the column reads.
   allocation: {

@@ -66,7 +66,17 @@ describe("open instant", () => {
     expect(OPEN_COPY.allocation.mix.map((m) => `${m.pct}% ${m.name}`)).toEqual(["15% Growth", "35% Balance", "50% Stables"]);
     expect(OPEN_COPY.allocation.body).toBe("Capital works. The yield is captured in stablecoins.");
     expect(OPEN_COPY.allocation.note).toBe("Half in stablecoins by rule");
-    expect(OPEN_COPY.flow.lines).toEqual(["Mamoru puts it all to work.", "Reinvested. Always working."]);
+    expect(OPEN_COPY.flow.messages.map((m) => m.lines.join(" "))).toEqual([
+      "You bring the capital.",
+      "Mamoru puts it all to work.",
+      "Yield, captured in stablecoins.",
+    ]);
+    // the messages follow the 12 s loop in order and never overlap
+    OPEN_COPY.flow.messages.forEach((m, i, all) => {
+      expect(m.at).toBeLessThan(m.out);
+      expect(m.out).toBeLessThanOrEqual(12);
+      if (i > 0) expect(m.at).toBeGreaterThanOrEqual(all[i - 1].out);
+    });
   });
 });
 

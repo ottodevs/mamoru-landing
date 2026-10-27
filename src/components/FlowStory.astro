@@ -1,102 +1,185 @@
 ---
 import { OPEN_COPY } from "../open-copy";
 
-// The launch film's allocation scene (mamoru-video films/v12-launch, v19), on Kami A: USDC streams into the column,
-// which fills tramo by tramo; then the yield of Growth and Balance flows into Stables, which grows. No words inside
-// the film. It is a recorded loop, not a live canvas: the canvas version did not paint in Brave (2026-10-27), and a
-// video plays the same everywhere, like slide 3 of the deck. One loop is 12 s; the caption follows its clock.
-// Sources: frames of the canvas version, rendered frame by frame (wide 1920x800, tall 704x646, the column on its side).
-const { eyebrow, lines, aria } = OPEN_COPY.flow;
+// How it works v4 + the allocation, one pinned scene (Brais, 2026-10-27). While the section scrolls, the stage stays
+// fixed: first the loop plays (mamoru-video films/flow-v2/page/flow4.js: one deposit of USDC on Base rises into the
+// column, which parts into Growth / Balance / Stables; their yield is captured in Stables), with its messages in HTML
+// on the loop's clock. Scrolling on, the loop rests on its last frame (the column and its labels, a still) and the
+// allocation copy takes the messages' place. One column on the page, never two.
+// Board sizes: wide 1920x800, tall 1408x1292 (the phone stage at 2x). Every position below is in board pixels
+// turned into container units, so the HTML type sits where the film's type sat.
+const { eyebrow, messages, aria } = OPEN_COPY.flow;
+const alloc = OPEN_COPY.allocation;
+const mix = alloc.mix.map((seg) => `${seg.pct}% ${seg.name}`).join(", ");
 const films = [
   { id: "wide", w: 1920, h: 800 },
   { id: "tall", w: 704, h: 646 },
 ];
 ---
-<section class="flow-story" id="works" aria-labelledby="works-title">
-  <h2 class="eyebrow" id="works-title">{eyebrow}</h2>
-  {films.map((f) => (
-    <video
-      class={`stage stage-${f.id}`}
-      width={f.w}
-      height={f.h}
-      muted
-      autoplay
-      loop
-      playsinline
-      preload="metadata"
-      poster={`/flow-media/flow-${f.id}.webp`}
-      aria-label={aria}
-    >
-      <source src={`/flow-media/flow-${f.id}.webm`} type="video/webm" />
-      <source src={`/flow-media/flow-${f.id}.mp4`} type="video/mp4" />
-    </video>
-  ))}
-  <p class="caption">
-    {lines.map((line, index) => <span data-line={index}>{line}</span>)}
-  </p>
+<section class="flow-pin" id="works" aria-labelledby="works-title" data-phase="flow">
+  <div class="pin">
+    <h2 class="eyebrow" id="works-title">
+      <span class="e-flow">{eyebrow}</span>
+      <span class="e-alloc" aria-hidden="true">{alloc.eyebrow}</span>
+    </h2>
+    <div class="stage">
+      {films.map((f) => (
+        <div class={`media media-${f.id}`}>
+          <video
+            width={f.w}
+            height={f.h}
+            muted
+            autoplay
+            loop
+            playsinline
+            preload="metadata"
+            poster={`/flow-media/flow4-${f.id}.webp`}
+            aria-label={aria}
+          >
+            <source src={`/flow-media/flow4-${f.id}.webm`} type="video/webm" />
+            <source src={`/flow-media/flow4-${f.id}.mp4`} type="video/mp4" />
+          </video>
+          <img class="rest" src={`/flow-media/flow4-${f.id}-rest.webp`} width={f.w} height={f.h} alt={mix} loading="lazy" />
+        </div>
+      ))}
+      <p class="msgs" aria-hidden="true">
+        {messages.map((m, index) => (
+          <span class="msg" data-msg={index}>{m.lines.map((line) => <span>{line}</span>)}</span>
+        ))}
+      </p>
+      <div class="alloc">
+        <h3 class="alloc-head">{alloc.heading.map((line) => <span>{line}</span>)}</h3>
+        <div class="alloc-more">
+          <p class="lead">{alloc.body}</p>
+          <p class="note">{alloc.note}</p>
+        </div>
+      </div>
+    </div>
+  </div>
 </section>
 
 <script>
-  // The yield phase of the loop starts at 5.4 s: the second line goes with it.
-  const YIELD_AT = 5.4;
-  const root = document.querySelector<HTMLElement>(".flow-story");
-  const films = [...(root?.querySelectorAll<HTMLVideoElement>(".stage") ?? [])];
+  import { OPEN_COPY } from "../open-copy";
 
-  // The loop is how the product works, slow and without flashes: it plays even with reduced motion, like the
-  // deck's slide 3. It starts as soon as the page loads (muted autoplay is allowed everywhere) and pauses only
-  // while it is off screen. If a browser still refuses, the first tap, click or key on the page starts it.
-  if (root && films.length) {
-    const live = () => films.find((v) => getComputedStyle(v).display !== "none");
-    let offscreen = false;
+  const MESSAGES = OPEN_COPY.flow.messages;
+  const root = document.querySelector<HTMLElement>(".flow-pin");
+  const pin = root?.querySelector<HTMLElement>(".pin");
+  const films = [...(root?.querySelectorAll<HTMLVideoElement>("video") ?? [])];
+  const msgs = [...(root?.querySelectorAll<HTMLElement>(".msg") ?? [])];
+
+  // The staging preview loads assets from the staging Worker, which serves no video without its secret; the
+  // preview proxy on this origin does. Only under /ops/preview, so the public page is untouched.
+  if (location.pathname.startsWith("/ops/preview")) {
+    films.forEach((v) => {
+      v.querySelectorAll("source").forEach((s) => {
+        s.src = `${location.origin}/ops/preview${new URL(s.src).pathname}`;
+      });
+      v.load();
+    });
+  }
+
+  const clamp = (x: number) => Math.min(1, Math.max(0, x));
+  const easeOut = (k: number) => 1 - Math.pow(1 - clamp(k), 3);
+  const smooth = (k: number) => ((k = clamp(k)), k * k * k * (k * (k * 6 - 15) + 10));
+
+  if (root && pin && films.length) {
+    const live = () => films.find((v) => v.offsetParent !== null) ?? films[0];
+    let phase: "flow" | "alloc" = "flow";
+    let onscreen = false;
     let refused = false;
+    let raf = 0;
+
+    const play = (v: HTMLVideoElement) => {
+      v.muted = true;
+      v.play().then(
+        () => (refused = false),
+        () => (refused = true),
+      );
+    };
     const sync = () => {
       const v = live();
       films.forEach((f) => f !== v && !f.paused && f.pause());
-      if (!v) return;
-      if (offscreen) {
-        if (!v.paused) v.pause();
-        return;
-      }
-      if (v.paused) {
-        v.muted = true;
-        v.play().then(
-          () => (refused = false),
-          () => (refused = true),
-        );
-      }
+      if (!onscreen || phase === "alloc") return void (!v.paused && v.pause());
+      if (v.paused) play(v);
     };
+
+    // The messages follow the loop's own clock: same fade and rise as the film's type (flow4.js messages()).
+    const draw = () => {
+      raf = 0;
+      if (!onscreen) return;
+      const t = live().currentTime;
+      msgs.forEach((el, i) => {
+        const m = MESSAGES[i];
+        const inK = easeOut((t - m.at) / 0.9);
+        const outK = smooth((t - (m.out - 0.45)) / 0.45);
+        el.style.opacity = String(inK * (1 - outK));
+        el.style.transform = `translateY(${((1 - inK) * 12 - outK * 8) / 19.2}cqw)`;
+      });
+      raf = requestAnimationFrame(draw);
+    };
+
+    // Where the reader is in the pinned run: the first half plays the loop, the second rests on the allocation.
+    const place = () => {
+      const r = root.getBoundingClientRect();
+      const run = r.height - pin.offsetHeight;
+      const top = parseFloat(getComputedStyle(pin).top) || 0;
+      const k = run > 0 ? clamp((top - r.top) / run) : 0;
+      const next = phase === "flow" ? (k > 0.52 ? "alloc" : "flow") : k < 0.48 ? "flow" : "alloc";
+      if (next === phase) return;
+      phase = next;
+      root.dataset.phase = phase;
+      if (phase === "flow") live().currentTime = 0; // back to the start: the deposit arrives again
+      sync();
+    };
+
     films.forEach((v) => {
       v.muted = true;
-      v.addEventListener("timeupdate", () => {
-        if (v === live()) root.dataset.line = v.currentTime < YIELD_AT ? "0" : "1";
-      });
-      // A paused frame never stays: whatever paused it, the loop resumes while on screen.
-      v.addEventListener("pause", () => !offscreen && v === live() && !v.ended && setTimeout(sync, 300));
+      v.addEventListener("pause", () => onscreen && phase === "flow" && v === live() && setTimeout(sync, 300));
     });
     const nudge = () => refused && sync();
     for (const type of ["pointerdown", "touchstart", "keydown"]) window.addEventListener(type, nudge, { passive: true });
+    window.addEventListener("scroll", () => requestAnimationFrame(place), { passive: true });
+    window.addEventListener("resize", () => requestAnimationFrame(place));
+    window.matchMedia("(max-width: 760px)").addEventListener("change", sync);
     new IntersectionObserver(
       (entries) => {
-        offscreen = !entries.some((e) => e.isIntersecting);
+        const was = onscreen;
+        onscreen = entries.some((e) => e.isIntersecting);
+        if (onscreen && !was) {
+          if (phase === "flow") live().currentTime = 0; // each visit starts at the deposit
+          if (!raf) raf = requestAnimationFrame(draw);
+        }
         sync();
       },
       { threshold: 0 },
-    ).observe(root);
-    window.matchMedia("(max-width: 760px)").addEventListener("change", sync);
+    ).observe(pin);
+    place();
     sync();
   }
 </script>
 
 <style>
-  .flow-story {
+  .flow-pin {
+    /* the pinned run: the stage holds while the page scrolls this far */
+    height: 250svh;
+    width: 100%;
+    scroll-margin-top: var(--nav-h, 4.5rem);
+  }
+  .pin {
+    position: sticky;
+    top: var(--nav-h, 4.5rem);
+    height: calc(100svh - var(--nav-h, 4.5rem));
     display: flex;
     flex-direction: column;
     align-items: center;
-    width: 100%;
-    min-width: 0;
-    text-align: center;
+    justify-content: center;
+    gap: clamp(1rem, 3vw, 2.25rem);
+    padding-inline: clamp(1.15rem, 5vw, 4.5rem);
+    box-sizing: border-box;
   }
+  /* Two eyebrows share one cell; the one in play shows. */
   .eyebrow {
+    display: grid;
     margin: 0;
     font-family: var(--font-mono);
     font-size: 0.8rem;
@@ -104,55 +187,175 @@ const films = [
     letter-spacing: 0.24em;
     text-transform: uppercase;
     color: var(--emerald);
+    text-align: center;
   }
+  .eyebrow span {
+    grid-area: 1 / 1;
+    transition: opacity 0.6s ease;
+  }
+  .e-alloc,
+  [data-phase="alloc"] .e-flow {
+    opacity: 0;
+  }
+  [data-phase="alloc"] .e-alloc {
+    opacity: 1;
+  }
+
   .stage {
-    display: block;
-    width: 100%;
-    max-width: 60rem;
-    aspect-ratio: 960 / 400;
-    height: auto;
-    margin: clamp(1.75rem, 4vw, 3rem) auto clamp(1.5rem, 3vw, 2.25rem);
-    background: transparent;
-    /* Drawn on Kami A too: no frame, its edges fade into the page's paper, as on slide 3 of the deck. */
+    position: relative;
+    width: min(100%, 72rem, calc((100svh - var(--nav-h, 4.5rem) - 7rem) * 2.4));
+    aspect-ratio: 1920 / 800;
+    container-type: inline-size;
+  }
+  .media {
+    position: absolute;
+    inset: 0;
+    /* Drawn on Kami A: no frame, its edges fade into the page's paper. */
     -webkit-mask-image: radial-gradient(ellipse 72% 68% at 50% 50%, #000 70%, transparent 100%);
     mask-image: radial-gradient(ellipse 72% 68% at 50% 50%, #000 70%, transparent 100%);
   }
-  .stage-tall {
+  .media-tall {
     display: none;
-    max-width: 22.5rem;
-    aspect-ratio: 704 / 646;
   }
-  /* Both lines share one cell; the one in play fades in. */
-  .caption {
-    display: grid;
-    margin: 0;
-    font-size: clamp(1.4rem, 2.6vw, 2.1rem);
-    line-height: 1.25;
+  .media video,
+  .media .rest {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    transition: opacity 0.7s ease;
   }
-  /* The line in play leaves first; the next one comes in after it. */
-  .caption span {
-    grid-area: 1 / 1;
+  .media .rest {
     opacity: 0;
-    transition: opacity 0.45s ease;
   }
-  .flow-story:not([data-line]) .caption span[data-line="0"],
-  .flow-story[data-line="0"] .caption span[data-line="0"],
-  .flow-story[data-line="1"] .caption span[data-line="1"] {
+  [data-phase="alloc"] .media video {
+    opacity: 0;
+  }
+  [data-phase="alloc"] .media .rest {
     opacity: 1;
-    transition: opacity 0.7s ease 0.45s;
   }
 
+  /* The film's messages, set where the film set them: x 190, first line centred at y 342, 56 / 72 on 1920. */
+  .msgs {
+    position: absolute;
+    left: calc(190 / 19.2 * 1cqw);
+    top: calc(306 / 19.2 * 1cqw);
+    display: grid;
+    margin: 0;
+    font-size: calc(56 / 19.2 * 1cqw);
+    line-height: calc(72 / 56);
+    transition: opacity 0.4s ease;
+    pointer-events: none;
+  }
+  .msg {
+    grid-area: 1 / 1;
+    opacity: 0;
+    will-change: opacity, transform;
+  }
+  .msg span,
+  .alloc-head span {
+    display: block;
+  }
+  [data-phase="alloc"] .msgs {
+    opacity: 0;
+  }
+
+  /* The allocation copy, in the messages' column, level with the column's top. */
+  .alloc {
+    position: absolute;
+    left: calc(190 / 19.2 * 1cqw);
+    top: calc(150 / 19.2 * 1cqw);
+    width: calc(630 / 19.2 * 1cqw);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .alloc > * {
+    opacity: 0;
+    transform: translateY(0.6cqw);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  [data-phase="alloc"] .alloc {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  [data-phase="alloc"] .alloc > * {
+    opacity: 1;
+    transform: none;
+  }
+  [data-phase="alloc"] .alloc > :nth-child(1) {
+    transition-delay: 0.35s;
+  }
+  [data-phase="alloc"] .alloc > :nth-child(2) {
+    transition-delay: 0.6s;
+  }
+  .alloc-head {
+    margin: 0;
+    max-width: 7em;
+    font-size: calc(64 / 19.2 * 1cqw);
+    font-weight: 400;
+    letter-spacing: 0.005em;
+    line-height: 1.1;
+  }
+  .lead {
+    margin: calc(36 / 19.2 * 1cqw) 0 0;
+    max-width: 22rem;
+    font-size: max(1.05rem, calc(28 / 19.2 * 1cqw));
+    line-height: 1.5;
+    color: color-mix(in srgb, var(--ink) 62%, var(--paper));
+  }
+  .note {
+    margin: calc(28 / 19.2 * 1cqw) 0 0;
+    padding-top: 0.8rem;
+    max-width: 22rem;
+    border-top: 1px solid var(--wash);
+    font-size: 0.75rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--emerald);
+  }
+
+  /* The phone: the tall film (1408x1292 board), the messages over the column, the lead and note under the stage. */
   @media (max-width: 760px) {
-    .stage-wide {
+    .flow-pin {
+      height: 220svh;
+    }
+    .stage {
+      width: min(100%, 30rem, calc((100svh - var(--nav-h, 4.5rem) - 14rem) * 1.09));
+      aspect-ratio: 1408 / 1292;
+    }
+    .media-wide {
       display: none;
     }
-    .stage-tall {
+    .media-tall {
       display: block;
     }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .caption span {
-      transition: none;
+    .msgs,
+    .alloc {
+      left: calc(120 / 14.08 * 1cqw);
+      top: calc(128 / 14.08 * 1cqw);
+      font-size: calc(66 / 14.08 * 1cqw);
+      line-height: calc(84 / 66);
+    }
+    .alloc {
+      width: auto;
+      right: 0;
+    }
+    .alloc-head {
+      max-width: none;
+      font-size: 1em;
+      line-height: inherit;
+    }
+    .alloc-more {
+      position: absolute;
+      top: calc(100cqw * 1292 / 1408 - 128 / 14.08 * 1cqw + 1rem);
+      left: 0;
+      right: 0;
+      font-size: 1rem;
+    }
+    .lead {
+      margin-top: 0;
+      font-size: 1rem;
     }
   }
 </style>

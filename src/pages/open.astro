@@ -1,5 +1,4 @@
 ---
-import Allocation from "../components/Allocation.astro";
 import Base from "../layouts/Base.astro";
 import FlowStory from "../components/FlowStory.astro";
 import { APP_HREF, OPEN_COPY as copy } from "../open-copy";
@@ -34,11 +33,7 @@ const emailHref = `mailto:${copy.footer.email}`;
       <a class="cta js-launch" href={APP_HREF} data-exp="hero_cta" data-exp-goal="open_app_click">{copy.cta}</a>
     </section>
 
-    <section class="band flow" aria-label="How it works">
-      <FlowStory />
-    </section>
-
-    <Allocation />
+    <FlowStory />
 
     <section class="band" id="spend" aria-labelledby="spend-title">
       <div class="wrap spend-row">
@@ -387,9 +382,6 @@ const emailHref = `mailto:${copy.footer.email}`;
   .wrap {
     max-width: 68rem;
     margin-inline: auto;
-  }
-  .flow {
-    padding-bottom: clamp(2rem, 4vw, 3rem);
   }
   h2 {
     margin: 0;
