@@ -105,6 +105,31 @@ describe("buildFundsMap", () => {
     expect(html).not.toContain("test networks");
   });
 
+  test("same address on Base (outside) and chain 1 (idle) is one pot of money", () => {
+    const A = "0xAbC0000000000000000000000000000000000001";
+    const m = buildFundsMap(snap(), [
+      row({ address: A, outside: { eth: 0, usdc: 500, usd: 500 } }),
+      row({ chainId: 1, address: A.toLowerCase(), usdcIdle: 500 }),
+    ]);
+    expect(m.total).toBeCloseTo(500, 6);
+    expect(m.notWorking).toBe(0);
+    expect(m.partial).toBe(false);
+  });
+
+  test("several rows at one address count their outside balance once", () => {
+    const A = "0xabc0000000000000000000000000000000000002";
+    const m = buildFundsMap(snap(), [
+      row({ address: A, outside: { eth: 0, usdc: 100, usd: 100 } }),
+      row({ address: A, outside: { eth: 0, usdc: 100, usd: 100 } }),
+    ]);
+    expect(m.notWorking).toBe(100);
+    expect(find(m, "Ethereum", "outside")!.accounts).toBe(1);
+    // an unread duplicate does not turn a read address into a floor
+    const m2 = buildFundsMap(snap(), [row({ address: A }), row({ address: A, outside: { eth: 0, usdc: 100, usd: 100 } })]);
+    expect(m2.notWorking).toBe(100);
+    expect(m2.partial).toBe(false);
+  });
+
   test("unread outside never renders as $0 anywhere", () => {
     const html = renderFundsMap(buildFundsMap(snap(), [row({ lpUsd: 10 })]));
     const nw = html.split('class="fm-x"><dt>')[1].split("</div>")[0];
