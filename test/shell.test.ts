@@ -3,7 +3,7 @@ import type { D1Db, D1PreparedStatement } from "../src/d1-infra";
 import { loadInfraReading } from "../src/infra-cache";
 import type { InfraSnapshot } from "../src/infra-snapshot";
 import { writeEntry } from "../src/list";
-import { gateView, navOf, OPS_STYLE, renderDocument, sealSession, type SectionView } from "../src/ops";
+import { gateView, navOf, OPS_SECTIONS, OPS_SUBNAV, OPS_STYLE, renderDocument, sealSession, type SectionView } from "../src/ops";
 import { opsRouterLogic, type OpsRouterLogic, type RouteClick, type RouteLink } from "../src/ops-router-logic";
 import worker, { type Env } from "../src/worker";
 
@@ -66,7 +66,7 @@ const SECTIONS = [
   { path: "/ops/yield", section: "yield", title: "Yield", marker: "Yield by account" },
   { path: "/ops/accounts", section: "accounts", title: "Accounts", marker: "Where every account stands" },
   { path: "/ops/engine", section: "engine", title: "Engine", marker: "Engine" },
-  { path: "/ops/money", section: "costs", title: "Costs", marker: "Break-even" },
+  { path: "/ops/money", section: "costs", title: "Money", marker: "Break-even" },
   { path: "/ops/mails", section: "mails", title: "Mails", marker: "On the list" },
   { path: "/ops/money/funding", section: "infra", title: "Funding", marker: "Relayer balance" },
   { path: "/ops/experiments", section: "experiments", title: "Experiments", marker: "hero_cta" },
@@ -611,5 +611,14 @@ describe("Engine and Money sections (otto/mamoru-astro#35)", () => {
     const page = await (await worker.fetch(get("/ops/engine/settings", { cookie }), env)).text();
     expect(page).toContain('action="/ops/engine/settings/apply"');
     expect(page).not.toContain('action="/ops/settings/apply"');
+  });
+
+  test("every primary and sub-tab href resolves in the router registry, to the section its page renders as", () => {
+    const R = opsRouterLogic();
+    for (const s of OPS_SECTIONS.filter((x) => x.tab)) expect(R.sectionOf(s.href)).not.toBeNull();
+    for (const group of Object.values(OPS_SUBNAV)) for (const item of group.items) expect(R.sectionOf(item.href)).toBe(item.id);
+    expect(R.sectionOf("/ops/money")).toBe("costs");
+    expect(R.sectionOf("/ops/engine")).toBe("engine");
+    expect(R.shouldIntercept(link("https://mamoru.lol/ops/money"), CLICK)).toBe(true);
   });
 });

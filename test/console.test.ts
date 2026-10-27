@@ -149,7 +149,7 @@ describe("console views", () => {
     const html = await (await worker.fetch(get("/ops/money", cookie), env)).text();
     expect(html).toContain("RPC compute units per hour");
     expect(html).toContain("0.0036 ETH");
-    expect(html).toContain('href="/ops/infra"');
+    expect(html).toContain('href="/ops/money/funding"');
   });
 
   test("fragments carry the view body, never the frame", async () => {

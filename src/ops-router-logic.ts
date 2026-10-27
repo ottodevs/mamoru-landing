@@ -37,6 +37,10 @@ export interface CacheEntry {
 export function opsRouterLogic() {
   var SECTIONS = [
     { id: "overview", path: "/ops" },
+    { id: "yield", path: "/ops/yield" },
+    { id: "accounts", path: "/ops/accounts" },
+    { id: "engine", path: "/ops/engine" },
+    { id: "costs", path: "/ops/money" },
     { id: "mails", path: "/ops/mails" },
     { id: "infra", path: "/ops/money/funding" },
     { id: "experiments", path: "/ops/experiments" },

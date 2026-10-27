@@ -447,8 +447,8 @@ ${fig("Fee revenue to date", money(m.totals.fees * 0.1), "10% of the yield, proj
       ? `<p class="c-prose">At the current fee APR of <b>${esc(pct((apr ?? 0) * 100))}</b> and <b>$60</b> a month of fixed costs, the fee covers costs from <b>${esc(money(need))}</b> under management. Today: <b>${esc(money(m.totals.lp))}</b>.</p><span class="c-meter"><i style="width:${Math.max(0.8, (m.totals.lp / need) * 100).toFixed(2)}%"></i></span>`
       : `<p class="c-empty">Needs a fee APR, which needs capital placed and a first entry reported by the engine.</p>`,
   );
-  const topup = `<p class="c-prose"><a href="/ops/infra">Top up the relayer, and see what one new account costs</a></p>`;
-  return view("costs", "Costs", head("Costs", "/ops/costs", m) + figs + rpcSheet + `<div class="c-grid two">${be}${sheet("Relayer", r?.address ? r.address.slice(0, 6) + "…" + r.address.slice(-4) + " on Base" : null, topup)}</div>` + drawers(m, now));
+  const topup = `<p class="c-prose"><a href="/ops/money/funding">Top up the relayer, and see what one new account costs</a></p>`;
+  return view("costs", "Money", head("Money", "/ops/money", m) + figs + rpcSheet + `<div class="c-grid two">${be}${sheet("Relayer", r?.address ? r.address.slice(0, 6) + "…" + r.address.slice(-4) + " on Base" : null, topup)}</div>` + drawers(m, now));
 }
 
 /** The phone's "More" tab: everything that is not one of the five views, grouped as on the rail. */

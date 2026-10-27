@@ -35,17 +35,17 @@ export function outsideSheet(snapshot: InfraSnapshot | null | undefined): string
   const a = snapshot?.accounts;
   if (!a || a.error || !a.rows.length) return "";
   const held = a.rows.filter((r) => r.outside && (r.outside.eth > 0 || r.outside.usdc > 0)).sort((x, y) => (y.outside?.usd ?? 0) - (x.outside?.usd ?? 0));
-  const unread = a.rows.filter((r) => !r.outside).length;
+  const unreadRows = a.rows.filter((r) => !r.outside);
   const shown = held.slice(0, ROWS);
   const folded = held.length - shown.length;
-  const table = shown.length
-    ? `<table class="ledger ops-outside"><thead><tr><th>Account</th><th>Address</th><th>On Ethereum</th></tr></thead><tbody>${shown
-        .map((r) => `<tr><td>${esc(r.accountKey)}</td><td><a href="${esc(r.basescanUrl)}">${esc(shortAddr(r.address))}</a></td><td>${esc(holding(r))}</td></tr>`)
-        .join("")}</tbody></table>`
+  // Every account that could not be read is listed by name: never folded, never counted as zero.
+  const rowsOf = (r: AccountView) => `<tr><td>${esc(r.accountKey)}</td><td><a href="${esc(r.basescanUrl)}">${esc(shortAddr(r.address))}</a></td><td${r.outside ? "" : ' class="unread"'}>${esc(holding(r))}</td></tr>`;
+  const table = shown.length || unreadRows.length
+    ? `<table class="ledger ops-outside"><thead><tr><th>Account</th><th>Address</th><th>On Ethereum</th></tr></thead><tbody>${[...shown, ...unreadRows].map(rowsOf).join("")}</tbody></table>`
     : `<p class="c-empty">No account holds anything on Ethereum.</p>`;
   const notes = [
     folded ? `<p class="c-foot">${fmtInt(folded)} more ${folded === 1 ? "account holds" : "accounts hold"} ETH or USDC on Ethereum.</p>` : "",
-    unread ? `<p class="c-foot">${fmtInt(unread)} ${unread === 1 ? "account was" : "accounts were"} not read on Ethereum. None counted as zero.</p>` : "",
+    unreadRows.length ? `<p class="c-foot">Accounts marked "not read" could not be read on Ethereum. None counted as zero.</p>` : "",
   ].join("");
   return `<section class="c-sheet"><header class="c-sheet-h"><h2>Held on Ethereum</h2><p>${esc(outsideLine(summarizeOutside(a.rows), fmtUsd))}. Not working, and not in any Base figure.</p></header>${table}${notes}</section>`;
 }
