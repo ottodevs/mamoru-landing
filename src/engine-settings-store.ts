@@ -145,9 +145,21 @@ export async function maxIdOf(db: D1Db, env: Env): Promise<number> {
 /**
  * otto/mamoru#218: settings the operator understands but /ops has no field for (lazy re-range, bridge-out). Written
  * from the form, a version would leave them out and silently switch them off for every account. Kept from `base`
- * (the env-wide version in effect) when the draft does not carry them.
+ * (what the targeted accounts run now, see `keptFrom`) when the draft does not carry them. A form cannot express
+ * removing them; removal is a rollback to a version without them, which is written as is.
  */
 export const KEPT_KEYS = ["rerange", "bridgeOut"] as const;
+
+/**
+ * What the accounts a write targets run now: for a canary whose accounts all sit in the canary in effect, that canary;
+ * otherwise (env-wide, or accounts outside it) the env-wide version.
+ */
+export function keptFrom(now: InEffect | undefined, accountKeys: string[] | null): EngineSettings | null {
+  const keys = accountKeys?.map((k) => k.toLowerCase()) ?? [];
+  const inCanary = new Set((now?.canary?.accountKeys ?? []).map((k) => k.toLowerCase()));
+  if (keys.length && now?.canary && keys.every((k) => inCanary.has(k))) return now.canary.settings;
+  return now?.wide?.settings ?? null;
+}
 
 export function keepUnedited(draft: EngineSettings, base: EngineSettings | null): EngineSettings {
   if (!base) return draft;
@@ -175,7 +187,7 @@ export type NewVersion = { env: Env; accountKeys: string[] | null; template: str
  */
 export async function appendVersion(db: D1Db, v: NewVersion & { expectedMaxId: number }, now: Date = new Date()): Promise<number> {
   // otto/mamoru#218: the form has no field for these, so a form write keeps what the env runs. A rollback writes its target as is.
-  if (!v.rollbackOf) v = { ...v, settings: keepUnedited(v.settings, (await inEffect(db))[v.env]?.wide?.settings ?? null) };
+  if (!v.rollbackOf) v = { ...v, settings: keepUnedited(v.settings, keptFrom((await inEffect(db))[v.env], v.accountKeys)) };
   const errors = validateSettings(v.settings);
   if (errors.length) throw new Error(errors.join("; "));
   if (!v.reason.trim()) throw new Error("a reason is required");
