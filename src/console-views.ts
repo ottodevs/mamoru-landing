@@ -2,7 +2,7 @@
 // washi paper, ink, one emerald accent, Noto Serif figures and IBM Plex Mono labels. Charts ship their data as a
 // `data-c` attribute and are drawn by the console client at the container's real width (console-client.ts);
 // without script every chart still has its figures in a <details> table.
-import { type ConsoleEnv, type ConsoleModel, type AccountYield, type AccountCap, capNow, money, pct, poolLabel } from "./console-data";
+import { type ConsoleEnv, type ConsoleModel, type AccountYield, type AccountCap, type EngineOp, capNow, money, pct, poolLabel } from "./console-data";
 import { capSourceWords, DEFAULT_CAP_USDC, usdc } from "./account-cap-model";
 import { csrfField, maskEmail, type SectionId, type SectionView } from "./ops";
 import { esc } from "./text";
@@ -392,15 +392,31 @@ ${fig("In range now", `${m.totals.inRange} of ${m.totals.positions}`, "positions
     `<ul class="c-legend inline">${kinds.map((k) => `<li><i class="${k.color}"></i>${k.name}</li>`).join("")}</ul>` +
       chart({ t: "bars", points: days.map((d) => ({ l: dayLabel(d), s: byDay.get(d) ?? {} })), fmt: "int", stack: kinds }, "Confirmed operations per day", () => days.map((d) => [d, String(Object.values(byDay.get(d) ?? {}).reduce((a, b) => a + b, 0))]), 180),
   );
-  const codes = new Map<string, number>();
-  for (const f of failed) codes.set(f.code ?? "no code", (codes.get(f.code ?? "no code") ?? 0) + 1);
-  const maxCode = Math.max(1, ...codes.values());
+  // A failure counts as retried when the same account later confirmed the same kind of operation.
+  const retried = (f: EngineOp) => conf.some((o) => o.accountKey === f.accountKey && o.kind === f.kind && o.at > f.at);
+  const codeList = (list: EngineOp[]) => {
+    const codes = new Map<string, { n: number; ok: number }>();
+    for (const f of list) {
+      const c = codes.get(f.code ?? "no code") ?? { n: 0, ok: 0 };
+      codes.set(f.code ?? "no code", { n: c.n + 1, ok: c.ok + (retried(f) ? 1 : 0) });
+    }
+    const max = Math.max(1, ...[...codes.values()].map((c) => c.n));
+    return `<ul class="c-funnel codes">${[...codes.entries()]
+      .sort((a, b) => b[1].n - a[1].n)
+      .map(([c, { n, ok }]) => {
+        const note = ok === n ? "retried and confirmed" : ok ? `${ok} of ${n} retried and confirmed` : "no confirmed retry";
+        return `<li><span class="c-mono">${esc(c)}<small class="${ok === n ? "" : "bad"}">${esc(note)}</small></span><span class="c-meter bad"><i style="width:${((n / max) * 100).toFixed(1)}%"></i></span><span class="n">${n}</span></li>`;
+      })
+      .join("")}</ul>`;
+  };
+  const weekAgo = new Date(now.getTime() - 7 * 864e5).toISOString();
+  const recent = failed.filter((f) => f.at >= weekAgo);
+  const older = failed.filter((f) => f.at < weekAgo);
   const why = sheet(
     "Why operations failed",
-    "Grouped by the code the engine recorded",
-    codes.size
-      ? `<ul class="c-funnel codes">${[...codes.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => `<li><span class="c-mono">${esc(c)}</span><span class="c-meter bad"><i style="width:${((n / maxCode) * 100).toFixed(1)}%"></i></span><span class="n">${n}</span></li>`).join("")}</ul>`
-      : `<p class="c-empty">No failures in the recent operations.</p>`,
+    "Last 7 days, grouped by the code the engine recorded",
+    (recent.length ? codeList(recent) : `<p class="c-empty">No failures in the last 7 days.</p>`) +
+      (older.length ? `<details class="c-data"><summary>Older than a week, ${older.length}</summary>${codeList(older)}</details>` : ""),
   );
   const feed = sheet(
     "Latest operations",
