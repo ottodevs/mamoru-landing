@@ -64,6 +64,9 @@ describe("fundPlanLogic", () => {
     expect(P.summary(["failed", "skipped"]).text).toBe("Nothing was sent.");
     expect(P.summary(["confirmed", "failed", "skipped"]).tone).toBe("warn");
     expect(P.summary(["confirmed", "signing"]).done).toBe(false);
+    // Sent without a receipt is never "nothing was sent".
+    expect(P.summary(["unknown"]).text).toBe("1 sent but not confirmed yet.");
+    expect(P.summary(["unknown", "failed"]).text).not.toContain("Nothing");
   });
 });
 
@@ -84,6 +87,16 @@ describe("Funding section", () => {
     expect(html).toContain('value="0.0005"');
     expect(html).toContain("16 more activations");
     expect(html).toContain('id="fd-one" role="tabpanel" aria-labelledby="fd-tab-one" hidden');
+  });
+
+  test("one unread wallet never makes the lead an all-clear", () => {
+    const html = fundingSection(snap([
+      { id: "relayer-base", balanceWei: (2n * 10n ** 16n).toString() },
+      { id: "relayer-monad", balanceWei: (109n * E18).toString() },
+      { id: "relayer-ethereum", balanceWei: (6n * 10n ** 15n).toString() },
+    ]));
+    expect(html).not.toContain("Every wallet holds what it should.");
+    expect(html).toContain("1 could not be read just now");
   });
 
   test("an unread wallet is never shown as zero or planned", () => {

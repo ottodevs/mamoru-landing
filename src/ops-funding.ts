@@ -68,11 +68,15 @@ function overview(rows: FundingRow[], s: InfraSnapshot): string {
   const unread = rows.filter((r) => r.balanceWei === null).length;
   const usd = short.reduce((sum, r) => sum + (r.target.priceAsEth && s.ethUsd !== null ? (Number(shortfallWei(r.balanceWei, r.target)! / 10n ** 9n) / 1e9) * s.ethUsd : 0), 0);
   const mon = short.filter((r) => !r.target.priceAsEth).map((r) => fmtNative(shortfallWei(r.balanceWei, r.target)!, r.target.chain.symbol));
+  // An unread wallet is never counted as healthy: the line says it could not be read.
+  const missing = unread ? ` ${unread} could not be read just now, so ${unread === 1 ? "its" : "their"} state is unknown.` : "";
   const lead = short.length
-    ? `${short.length} of ${rows.length} wallets are below where they should be: ${[usd > 0 ? `about ${fmtUsd(usd)} in ETH` : "", ...mon].filter(Boolean).join(" and ")} brings them all back.`
+    ? `${short.length} of ${rows.length} wallets are below where they should be: ${[usd > 0 ? `about ${fmtUsd(usd)} in ETH` : "", ...mon].filter(Boolean).join(" and ")} brings them back.${missing}`
     : unread === rows.length
       ? "No wallet could be read just now."
-      : "Every wallet holds what it should.";
+      : unread
+        ? `The wallets that could be read hold what they should.${missing}`
+        : "Every wallet holds what it should.";
   const chains = DEPLOYMENTS.map((d) => {
     const mine = rows.filter((r) => r.target.chain.chainId === d.chainId);
     const explorer = mine[0]?.target.chain.explorerAddress ?? "";
@@ -93,7 +97,7 @@ function overview(rows: FundingRow[], s: InfraSnapshot): string {
   }).join("");
   return `<section class="sec full fd-over" style="--s:0ms" aria-labelledby="fd-over">
     <div class="sec-head"><h2 id="fd-over">Funding</h2></div>
-    <p class="fd-lead${short.length ? " short" : ""}">${esc(lead)}</p>
+    <p class="fd-lead${short.length || unread ? " short" : ""}">${esc(lead)}</p>
     <div class="fd-chains">${chains}</div>
   </section>`;
 }

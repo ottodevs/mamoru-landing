@@ -64,6 +64,7 @@ table.fund tr.f-info td.f-who b { color: var(--muted); }
 .fp-state { display: block; min-height: 1.3em; margin-top: 0.3rem; font-size: 0.8rem; color: var(--muted); overflow-wrap: anywhere; }
 .fp-row.bad .fp-state, .fp-row[data-phase="failed"] .fp-state { color: var(--bad); }
 .fp-row[data-phase="confirmed"] .fp-state { color: var(--emerald); }
+.fp-row[data-phase="unknown"] .fp-state { color: var(--warn); }
 .fp-row[data-phase="switching"] .fp-state, .fp-row[data-phase="signing"] .fp-state, .fp-row[data-phase="sent"] .fp-state { color: var(--ink); }
 .fp-split { margin: 0.8rem 0 0; font-size: 0.85rem; }
 .fp-split label { color: var(--muted); }

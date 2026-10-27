@@ -13,7 +13,7 @@ export interface PlanRow {
   amount: bigint;
 }
 
-export type RowPhase = "waiting" | "switching" | "signing" | "sent" | "confirmed" | "failed" | "skipped";
+export type RowPhase = "waiting" | "switching" | "signing" | "sent" | "confirmed" | "unknown" | "failed" | "skipped";
 
 export function fundPlanLogic() {
   var ZERO = BigInt(0);
@@ -71,27 +71,36 @@ export function fundPlanLogic() {
     signing: "Confirm in the wallet",
     sent: "Sent, waiting for the block",
     confirmed: "Arrived",
+    unknown: "Sent, not confirmed",
     failed: "Not sent",
     skipped: "Skipped",
   };
   var phaseWord = function (p: RowPhase) { return PHASE_WORDS[p] || ""; };
 
-  /** One line for the whole run. */
+  /** One line for the whole run. A transfer sent without a receipt counts as sent, never as "nothing was sent". */
   var summary = function (phases: RowPhase[]): { text: string; tone: "plain" | "good" | "warn" | "bad"; done: boolean } {
-    var n = phases.length, ok = 0, bad = 0, skip = 0, busy = 0;
+    var n = phases.length, ok = 0, unk = 0, bad = 0, skip = 0, busy = 0;
     for (var i = 0; i < n; i++) {
       var p = phases[i];
       if (p === "confirmed") ok++;
+      else if (p === "unknown") unk++;
       else if (p === "failed") bad++;
       else if (p === "skipped") skip++;
       else if (p !== "waiting") busy++;
     }
-    var done = ok + bad + skip === n;
+    var ended = ok + unk + bad + skip;
+    var done = ended === n;
+    var s = function (k: number) { return k === 1 ? "" : "s"; };
     if (!n) return { text: "Nothing to send: every amount is zero.", tone: "plain", done: true };
-    if (!done) return { text: (busy ? "Sending " + (ok + bad + skip + 1) : "Ready to send") + " of " + n + " transfer" + (n === 1 ? "" : "s") + ".", tone: "plain", done: false };
-    if (ok === n) return { text: "All " + n + " transfer" + (n === 1 ? "" : "s") + " arrived.", tone: "good", done: true };
-    if (!ok) return { text: "Nothing was sent.", tone: "bad", done: true };
-    return { text: ok + " of " + n + " arrived; " + (bad ? bad + " not sent" : "") + (bad && skip ? ", " : "") + (skip ? skip + " skipped" : "") + ".", tone: "warn", done: true };
+    if (!done) return { text: (busy ? "Sending " + (ended + 1) : "Ready to send") + " of " + n + " transfer" + s(n) + ".", tone: "plain", done: false };
+    if (ok === n) return { text: "All " + n + " transfer" + s(n) + " arrived.", tone: "good", done: true };
+    if (!ok && !unk) return { text: "Nothing was sent.", tone: "bad", done: true };
+    var parts: string[] = [];
+    if (ok) parts.push(ok + " arrived");
+    if (unk) parts.push(unk + " sent but not confirmed yet");
+    if (bad) parts.push(bad + " not sent");
+    if (skip) parts.push(skip + " skipped");
+    return { text: parts.join(", ") + ".", tone: "warn", done: true };
   };
 
   return { split: split, order: order, switches: switches, phaseWord: phaseWord, summary: summary };
