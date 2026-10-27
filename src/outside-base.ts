@@ -136,7 +136,7 @@ export function toHolding(raw: OutsideRaw, ethUsd: number | null): OutsideHoldin
  */
 export async function readOutsideBase(
   addresses: readonly string[],
-  opts: { rpcUrls?: string; baseEthUsd: number | null; fetchFn?: OutsideFetch },
+  opts: { rpcUrls?: string; baseEthUsd: number | null; fetchFn?: OutsideFetch; deadlineMs?: number },
 ): Promise<Map<string, OutsideHolding>> {
   const out = new Map<string, OutsideHolding>();
   const fetchFn = opts.fetchFn ?? fetch;
@@ -147,7 +147,12 @@ export async function readOutsideBase(
   const chunks: string[][] = [];
   for (let i = 0; i < unique.length; i += CHUNK) chunks.push(unique.slice(i, i + CHUNK));
   // Chunks run in parallel; a chunk that fails stays "not read" and does not affect the others.
-  await Promise.all(
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, opts.deadlineMs ?? OUTSIDE_DEADLINE_MS);
+  });
+  // On the deadline, chunks already read are kept; the rest stay "not read".
+  await Promise.race([deadline, Promise.all(
     chunks.map(async (chunk) => {
       try {
         (await readChunk(chunk, urls, fetchFn))?.forEach((r, k) => {
@@ -157,7 +162,8 @@ export async function readOutsideBase(
         // Not read.
       }
     }),
-  );
+  )]);
+  clearTimeout(timer);
   let ethUsd = opts.baseEthUsd;
   if (ethUsd === null && [...raws.values()].some((r) => r.ethWei > 0n)) ethUsd = await readEthSpot(fetchFn);
   for (const [address, raw] of raws) out.set(address, toHolding(raw, ethUsd));
