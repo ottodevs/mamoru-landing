@@ -1552,6 +1552,8 @@ export function opsClientScript(nonce: string): string {
       var line = $("fp-line"), sendBtn = $("fp-send"), stopBtn = $("fp-stop");
       var eth = window.ethereum || null;
       var alive = true;
+      // Set once a transfer went out without a receipt: nothing more is sent from this page until it is reloaded.
+      var locked = false;
 
       function showTab(id) {
         var tabs = box.querySelectorAll("[data-tab]");
@@ -1602,7 +1604,8 @@ export function opsClientScript(nonce: string): string {
         }
         var n = plan.length;
         sendBtn.textContent = n ? "Send " + n + " transfer" + (n === 1 ? "" : "s") : "Send";
-        sendBtn.disabled = !n || !eth;
+        sendBtn.disabled = !n || !eth || locked;
+        if (locked) return;
         var sw = P.switches(plan, null);
         if (!eth) setLine("Sending from this page needs a browser wallet. Each wallet's address is in the One wallet tab.", "plain");
         else setLine(n ? n + " transfer" + (n === 1 ? "" : "s") + " on " + sw + " network" + (sw === 1 ? "" : "s") + ". The wallet asks you to confirm each one." : "Tick a wallet and give it an amount.", "plain");
@@ -1691,6 +1694,7 @@ export function opsClientScript(nonce: string): string {
         main.removeAttribute("data-busy");
         if (unknown) {
           // Nothing more from this page until a fresh reading shows where the pending transfer landed.
+          locked = true;
           setLine(s.text + " Refresh the page once the explorer shows it, before sending anything else.", s.tone);
           sendBtn.disabled = true;
           sendBtn.textContent = "Send";
@@ -1702,7 +1706,7 @@ export function opsClientScript(nonce: string): string {
       }
       function run() {
         var plan = planned();
-        if (!plan.length || running) return;
+        if (!plan.length || running || locked) return;
         if (!eth) { paint(); return; }
         running = true; stopAsked = false;
         sendBtn.disabled = true;
