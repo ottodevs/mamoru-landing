@@ -70,9 +70,53 @@ describe("buildFundsMap", () => {
     expect(m.partial).toBe(true);
   });
 
-  test("monad rows land on Monad (testnet id too)", () => {
-    const m = buildFundsMap(snap(), [row({ chainId: 10143, usdcIdle: 5 })]);
+  test("monad mainnet (143) rows land on Monad", () => {
+    const m = buildFundsMap(snap(), [row({ chainId: 143, usdcIdle: 5 })]);
     expect(find(m, "Monad", "idle")!.usd).toBe(5);
+  });
+
+  test("testnets and unknown chains never enter the map, and are counted apart", () => {
+    const rows = [row({ usdcIdle: 3 }), row({ chainId: 10143, usdcIdle: 50 }), row({ chainId: 84532, lpUsd: 60 }), row({ chainId: 11155111, usdcIdle: 70 }), row({ chainId: 999, usdcIdle: 80 })];
+    const m = buildFundsMap(snap(), rows);
+    expect(m.excluded).toBe(4);
+    expect(m.working).toBe(3);
+    expect(m.chains.map((c) => c.name)).not.toContain("Chain 10143");
+    expect(find(m, "Monad", "idle")).toBeUndefined();
+    expect(renderFundsMap(m)).toContain("4 accounts on test networks, not counted.");
+    expect(renderFundsMap(buildFundsMap(snap(), [row()]))).not.toContain("test networks");
+  });
+
+  test("unread outside never renders as $0 anywhere", () => {
+    const html = renderFundsMap(buildFundsMap(snap(), [row({ lpUsd: 10 })]));
+    const nw = html.split('class="fm-x"><dt>')[1].split("</div>")[0];
+    expect(nw).toContain("not read");
+    expect(nw).not.toContain("$0");
+    const eth = html.split('<h3>Ethereum')[1].split("</h3>")[0];
+    expect(eth).toContain("not read");
+    expect(eth).not.toContain("$0");
+    const some = renderFundsMap(buildFundsMap(snap(), [row({ outside: { eth: 0, usdc: 10, usd: 10 } }), row()]));
+    expect(some).toContain("≥ $10.00");
+    expect(some).toContain("1 not read");
+  });
+
+  test("unpriced Safe gas shows the ETH and not priced, never $0", () => {
+    const html = renderFundsMap(buildFundsMap(snap({ ethUsd: null }), [row({ ethBalance: 0.0025, outside: { eth: 0, usdc: 0, usd: 0 } })]));
+    const gas = html.split('class="fm-r"><dt>')[1].split("</div>")[0];
+    expect(gas).toContain("not priced");
+    expect(gas).toContain("0.0025 ETH");
+    expect(gas).not.toContain("$0");
+  });
+
+  test("a floor total prints no exact shares", () => {
+    const rows = [row({ lpUsd: 10, outside: { eth: 0, usdc: 5, usd: 5 } }), row()];
+    const m = buildFundsMap(snap(), rows);
+    expect(m.partial).toBe(true);
+    const html = renderFundsMap(m);
+    expect(html).not.toMatch(/\d+\.\d%/);
+    expect(html).toContain("≥ $15.00");
+    expect(html).toContain("Shares are not shown");
+    const exact = renderFundsMap(buildFundsMap(snap(), [row({ lpUsd: 10, outside: { eth: 0, usdc: 10, usd: 10 } })]));
+    expect(exact).toMatch(/50\.0%/);
   });
 
   test("render escapes, links buckets, marks not working", () => {

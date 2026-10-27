@@ -48,20 +48,28 @@ export interface FundsMap {
   notWorking: number;
   /** User money only: working + reserve + notWorking. Operator relayers (team gas) are never added. */
   total: number;
-  /** True when any figure is a floor or unpriced. */
+  /** True when any user-money figure is a floor, unread or unpriced: totals are then a floor and shares are not exact. */
   partial: boolean;
+  /** Accounts on test networks or unknown chains: left out of the map entirely. */
+  excluded: number;
 }
 
 export const BASE_ID = 8453;
 export const ETHEREUM_ID = 1;
 export const MONAD_ID = 143;
-/** Monad testnet, as rows may carry it. */
-const MONAD_IDS = new Set([143, 10143]);
+/** Only these chains enter the map. Testnets (10143, 84532, 11155111) and unknown ids are counted apart, never mapped. */
+const MAPPED = new Set([BASE_ID, MONAD_ID]);
 
-type Row = Pick<AccountView, "chainId" | "usdcIdle" | "lpUsd" | "ethBalance" | "positions" | "outside">;
+type Row = Pick<AccountView, "chainId" | "usdcIdle" | "lpUsd" | "ethBalance" | "positions" | "outside"> & { unread?: boolean };
 
-const chainName = (id: number): string => (id === BASE_ID ? "Base" : id === ETHEREUM_ID ? "Ethereum" : MONAD_IDS.has(id) ? "Monad" : `Chain ${id}`);
-const canonical = (id: number): number => (MONAD_IDS.has(id) ? MONAD_ID : id);
+const chainName = (id: number): string => (id === BASE_ID ? "Base" : id === ETHEREUM_ID ? "Ethereum" : id === MONAD_ID ? "Monad" : `Chain ${id}`);
+const canonical = (id: number): number => id;
+
+export type FundsState = "ok" | "floor" | "unread" | "unpriced";
+export function stateOf(b: FundsBucket): FundsState {
+  if (b.usd === null) return b.note.startsWith("not read") ? "unread" : "unpriced";
+  return b.atLeast ? "floor" : "ok";
+}
 const positive = (n: number): boolean => n > 0;
 
 function wei(snapshot: Pick<InfraSnapshot, "funding">, id: string): number | null {
@@ -75,8 +83,10 @@ function fmtNative(n: number, symbol: string): string {
 
 export function buildFundsMap(
   snapshot: Pick<InfraSnapshot, "ethUsd" | "relayer" | "funding">,
-  rows: readonly Row[],
+  allRows: readonly Row[],
 ): FundsMap {
+  const rows = allRows.filter((r) => MAPPED.has(r.chainId));
+  const excluded = allRows.length - rows.length;
   const ethUsd = snapshot.ethUsd;
   const byChain = new Map<number, FundsBucket[]>();
   const put = (chainId: number, b: FundsBucket) => {
@@ -98,7 +108,7 @@ export function buildFundsMap(
       usd: rs.reduce((s, r) => s + r.lpUsd, 0),
       accounts: rs.filter((r) => positive(r.lpUsd)).length,
       note: "",
-      atLeast: false,
+      atLeast: rs.some((r) => r.unread === true),
     });
     put(cid, {
       id: "idle",
@@ -107,7 +117,7 @@ export function buildFundsMap(
       usd: rs.reduce((s, r) => s + r.usdcIdle, 0),
       accounts: rs.filter((r) => positive(r.usdcIdle)).length,
       note: "",
-      atLeast: false,
+      atLeast: rs.some((r) => r.unread === true),
     });
     const symbol = cid === MONAD_ID ? "MON" : "ETH";
     const priced = cid !== MONAD_ID && ethUsd !== null;
@@ -206,7 +216,8 @@ export function buildFundsMap(
     operator,
     notWorking,
     total: working + reserve + notWorking,
-    partial: chains.some((c) => c.buckets.some((b) => b.kind !== "operator" && (b.usd === null || b.atLeast))),
+    partial: chains.some((c) => c.buckets.some((b) => b.kind !== "operator" && stateOf(b) !== "ok")),
+    excluded,
   };
 }
 
@@ -256,10 +267,42 @@ export const FUNDS_STYLE = `
 .fm .fm-note { color: var(--muted); font-size: 0.85rem; margin: 0.9rem 0 0; }
 `;
 
-const usdCell = (b: FundsBucket): string =>
-  b.usd === null ? "n/a" : `${b.atLeast ? "≥ " : ""}${fmtUsd(b.usd)}`;
+/** A figure that is not known is never printed as $0: unread says "not read", unpriced says "not priced", a floor says "≥". */
+const usdCell = (b: FundsBucket): string => {
+  const st = stateOf(b);
+  return st === "unread" ? "not read" : st === "unpriced" ? "not priced" : `${st === "floor" ? "≥ " : ""}${fmtUsd(b.usd ?? 0)}`;
+};
+
+interface Agg { text: string; sub: string }
+/** One summary figure for every user bucket of the given kinds, honest about what is unknown. */
+function aggregate(f: FundsMap, kinds: FundsKind[], fallbackSub: string): Agg {
+  const bs = f.chains.flatMap((c) => c.buckets.filter((b) => kinds.includes(b.kind)));
+  const states = bs.map(stateOf);
+  const usd = bs.reduce((s, b) => s + (b.usd ?? 0), 0);
+  const unreadN = bs.filter((b) => stateOf(b) === "unread").length;
+  const unpriced = bs.filter((b) => stateOf(b) === "unpriced");
+  if (bs.length > 0 && states.every((x) => x === "unread")) return { text: "not read", sub: fallbackSub };
+  if (bs.length > 0 && states.every((x) => x === "unread" || x === "unpriced")) {
+    return { text: "not priced", sub: unpriced.map((b) => b.note.replace(/, not priced.*$/, "")).filter(Boolean).join(" · ") || fallbackSub };
+  }
+  if (states.some((x) => x !== "ok")) {
+    const why = [unpriced.length ? `${unpriced.map((b) => b.note.replace(/, not priced.*$/, "")).filter(Boolean).join(" · ")} not priced` : "", unreadN || bs.some((b) => b.atLeast) ? "some not read" : ""].filter(Boolean).join(" · ");
+    return { text: `≥ ${fmtUsd(usd)}`, sub: why || fallbackSub };
+  }
+  return { text: fmtUsd(usd), sub: fallbackSub };
+}
+
+function chainTotal(c: FundsChain): string {
+  const user = c.buckets.filter((b) => b.kind !== "operator");
+  if (user.length === 0) return "team gas only";
+  const st = user.map(stateOf);
+  if (st.every((x) => x === "unread")) return "not read";
+  if (st.every((x) => x === "unread" || x === "unpriced")) return "not priced";
+  return `${st.some((x) => x !== "ok") ? "≥ " : ""}${fmtUsd(c.usd)}`;
+}
 
 function bar(c: FundsChain, scale: number): string {
+  // Known amounts only: unread and unpriced buckets have usd null and draw nothing.
   const segs = c.buckets
     .filter((b) => b.usd !== null && b.usd > 0)
     .filter((b) => b.kind !== "operator")
@@ -275,9 +318,9 @@ function bar(c: FundsChain, scale: number): string {
   return `<div class="fm-bar" role="img" aria-label="${esc(`${c.name}: ${desc || "nothing held"}`)}">${segs}</div>`;
 }
 
-function chainBlock(c: FundsChain, f: FundsMap): string {
+function chainBlock(c: FundsChain, f: FundsMap, scale: number): string {
   const row = (b: FundsBucket) => {
-      const share = b.kind === "operator" || b.usd === null || f.total <= 0 ? "—" : `${((b.usd / f.total) * 100).toFixed(1)}%`;
+      const share = f.partial || b.kind === "operator" || b.usd === null || f.total <= 0 ? "—" : `${((b.usd / f.total) * 100).toFixed(1)}%`;
       const label = b.kind === "operator" ? esc("Operator (team gas)") : `<a href="/ops/accounts">${esc(b.label)}</a>`;
       return `<tr class="${KIND_CLASS[b.kind]}"><td>${label}<span class="tag">${KIND_TAG[b.kind]}</span>${b.note ? `<small>${esc(b.note)}</small>` : ""}</td>
         <td class="n">${esc(usdCell(b))}</td><td class="n">${esc(share)}</td><td class="n">${b.accounts === null ? "—" : fmtInt(b.accounts)}</td></tr>`;
@@ -285,8 +328,8 @@ function chainBlock(c: FundsChain, f: FundsMap): string {
   const rows = c.buckets.filter((b) => b.kind !== "operator").map(row).join("");
   const team = c.buckets.filter((b) => b.kind === "operator").map(row).join("");
   return `<div class="fm-chain">
-    <h3>${esc(c.name)}<span>${esc(c.buckets.every((b) => b.kind === "operator") ? "team gas only" : fmtUsd(c.usd))}</span></h3>
-    ${bar(c, f.total)}
+    <h3>${esc(c.name)}<span>${esc(chainTotal(c))}</span></h3>
+    ${bar(c, scale)}
     <table><caption class="sr">${esc(c.name)} balances by bucket</caption>
       <thead><tr><th scope="col">Bucket</th><th scope="col" class="n">USD</th><th scope="col" class="n">Share</th><th scope="col" class="n">Accounts</th></tr></thead>
       <tbody>${rows}</tbody>${team ? `<tbody class="fm-team">${team}</tbody>` : ""}</table>
@@ -295,19 +338,25 @@ function chainBlock(c: FundsChain, f: FundsMap): string {
 
 /** The "Where the money is" section. Working and not-working are shown apart; only the last line adds them. */
 export function renderFundsMap(f: FundsMap): string {
-  const sum = (cls: string, label: string, value: number, sub = "") =>
-    `<div class="${cls}"><dt>${esc(label)}</dt><dd>${esc(fmtUsd(value))}</dd>${sub ? `<small>${esc(sub)}</small>` : ""}</div>`;
+  const sum = (cls: string, label: string, a: Agg | number, sub = "") => {
+    const v = typeof a === "number" ? { text: fmtUsd(a), sub } : a;
+    return `<div class="${cls}"><dt>${esc(label)}</dt><dd>${esc(v.text)}</dd>${v.sub ? `<small>${esc(v.sub)}</small>` : ""}</div>`;
+  };
+  // Bars: against the total when it is exact; otherwise against the largest known chain, so no share is implied.
+  const scale = f.partial ? Math.max(0, ...f.chains.map((c) => c.usd)) : f.total;
+  const rest = f.total;
   return `<section class="fm" id="${FUNDS_ANCHOR}" aria-labelledby="fm-h">
     <style>${FUNDS_STYLE}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}</style>
     <div class="fm-head"><h2 id="fm-h">Where the money is</h2><a href="/ops/accounts">Accounts</a></div>
     <dl class="fm-sum">
-      ${sum("fm-w", "Working (Value held)", f.working, "Positions and idle USDC")}
-      ${sum("fm-r", "Gas in the Safes", f.reserve, "Not part of Value held")}
+      ${sum("fm-w", "Working (Value held)", aggregate(f, ["working"], "Positions and idle USDC"))}
+      ${sum("fm-r", "Gas in the Safes", aggregate(f, ["reserve"], "Not part of Value held"))}
       ${sum("fm-o", "Operator relayers (team gas)", f.operator, "Team money, not in any total")}
-      ${sum("fm-x", "Not working", f.notWorking, "Outside Base, never in Value held")}
-      ${sum("fm-t", "Total including not working", f.total, f.partial ? "User money only. A floor: some figures are unread or unpriced" : "User money only: working + Safe gas + not working")}
+      ${sum("fm-x", "Not working", aggregate(f, ["outside"], "Outside Base, never in Value held"))}
+      ${sum("fm-t", "Total including not working", f.partial ? { text: `≥ ${fmtUsd(rest)}`, sub: "User money only. A floor: some figures are unread or unpriced" } : { text: fmtUsd(rest), sub: "User money only: working + Safe gas + not working" })}
     </dl>
-    ${f.chains.map((c) => chainBlock(c, f)).join("")}
-    <p class="fm-note">Shares are of user money (working, Safe gas, not working). Operator relayers are team gas and sit outside every total and share. Dashed bars are money outside Base that earns nothing.</p>
+    ${f.chains.map((c) => chainBlock(c, f, scale)).join("")}
+    <p class="fm-note">${f.partial ? "Shares are not shown while some figures are unread or unpriced; bars show known amounts only." : "Shares are of user money (working, Safe gas, not working)."} Operator relayers are team gas and sit outside every total and share. Dashed bars are money outside Base that earns nothing.</p>
+    ${f.excluded > 0 ? `<p class="fm-note">${fmtInt(f.excluded)} ${f.excluded === 1 ? "account" : "accounts"} on test networks, not counted.</p>` : ""}
   </section>`;
 }
