@@ -1,5 +1,5 @@
 -- otto/mamoru-astro#30 (spec 008 phase 2 "the agent"). Reference copy only, same convention as
--- XXXX_lab_bench.sql in this directory: the canonical file to apply lives at migrations/d1/XXXX_lab_agent.sql
+-- XXXX_lab_bench.sql in this directory: the canonical file to apply lives at migrations/d1/0020_lab_agent.sql
 -- in ottodevs/mamoru, which owns D1 `mamoru` (Constitution VII).
 --
 -- lab_jobs gains the chat-turn fields (AL-01, AL-20, AL-40, AL-60). A bench job (`kind` = 'bench') leaves these
