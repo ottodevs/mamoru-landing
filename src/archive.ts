@@ -113,11 +113,24 @@ export const ARCHIVE: readonly ArchiveSnapshot[] = [
     commit: "55ead8035308f5baaef9716953177a997ce36c2e",
     page: "deck/index.html",
   },
+  {
+    id: "landing-v3",
+    version: "v3",
+    kind: "landing",
+    title: "Kami A, the film's flow and the 守 seal",
+    note: "Kami A paper, how it works as the launch film's canvas scene (USDC into the column, yield into Stables) and the flat allocation column below it. Shown without its script, so the canvas stays blank. Replaced by v4 on 27 Oct.",
+    servedAt: "/",
+    from: "2026-10-27",
+    to: "2026-10-27",
+    commit: "9667ad83a337d49ccbfbde280d7dbf793f3b783c",
+    page: "open/index.html",
+    static: true,
+  },
 ];
 
 /** What is live today, listed beside the archive so the two read as one history. */
 export const LIVE: readonly { kind: ArchiveKind; version: string; title: string; href: string; since: string }[] = [
-  { kind: "landing", version: "v3", title: "Kami A, the film's flow and the 守 seal", href: "/", since: "2026-10-27" },
+  { kind: "landing", version: "v4", title: "One deposit, one column: how it works pinned to the allocation", href: "/", since: "2026-10-27" },
   { kind: "deck", version: "v3", title: "Kami A and the 守 seal", href: "/deck", since: "2026-10-26" },
 ];
 
