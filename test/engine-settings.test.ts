@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import type { D1Db } from "../src/d1-infra";
-import { BOUNDS, DEFAULT_SETTINGS, canonicalJson, riskyChanges, settingsFromForm, validateSettings, type EngineSettings } from "../src/engine-settings-model";
+import { BOUNDS, DEFAULT_SETTINGS, canonicalJson, pctOf, riskyChanges, settingsFromForm, validateSettings, type EngineSettings } from "../src/engine-settings-model";
 import { appendVersion, listVersions, maxIdOf, SettingsConflict, type NewVersion } from "../src/engine-settings-store";
 import { sealSession } from "../src/ops";
 import worker, { type Env } from "../src/worker";
@@ -54,14 +54,14 @@ function formFor(s: EngineSettings, extra: Record<string, string>): URLSearchPar
   return new URLSearchParams({
     env: "prod",
     template: "t",
-    ...(s.depth ? { depth_on: "1", depth_impact: String(s.depth.impactBps), depth_share: String(s.depth.shareBps), depth_stables: String(s.depth.stablesImpactBps ?? "") } : {}),
+    ...(s.depth ? { depth_on: "1", depth_impact_pct: pctOf(s.depth.impactBps), depth_share_pct: pctOf(s.depth.shareBps), depth_stables_pct: s.depth.stablesImpactBps === undefined ? "" : pctOf(s.depth.stablesImpactBps) } : {}),
     cap: s.capUsdc === null ? "" : String(s.capUsdc),
     ...(s.guard.enabled ? { guard_on: "1" } : {}),
-    btc_fall: String(s.guard.btc.fallBps),
-    btc_vol: String(s.guard.btc.volBps),
-    eth_fall: String(s.guard.eth.fallBps),
-    eth_vol: String(s.guard.eth.volBps),
-    ...(s.minEntry ? { min_entry_gas: String(s.minEntry.gasMultiple) } : {}),
+    btc_fall_pct: pctOf(s.guard.btc.fallBps),
+    btc_vol_pct: pctOf(s.guard.btc.volBps),
+    eth_fall_pct: pctOf(s.guard.eth.fallBps),
+    eth_vol_pct: pctOf(s.guard.eth.volBps),
+    ...(s.minEntry ? { min_entry_on: "1", min_entry_gas: String(s.minEntry.gasMultiple) } : {}),
     reason: "test",
     ...extra,
   });
@@ -107,7 +107,7 @@ describe("engine settings model (copy of packages/policy/src/engine-settings.ts)
     const f = new FormData();
     for (const [k, v] of formFor(on, {})) f.set(k, v);
     expect(settingsFromForm(f)).toEqual(on);
-    f.delete("min_entry_gas");
+    f.delete("min_entry_on");
     expect(canonicalJson(settingsFromForm(f))).not.toContain("minEntry");
     expect(riskyChanges(on, DEPTH)).toEqual(["smaller entries go through, where gas is a larger share of what they place"]);
     expect(riskyChanges(DEPTH, on)).toEqual([]);
@@ -437,3 +437,26 @@ describe('concurrent writers: property over every interleaving (spec 006, Sol ro
     }
   })
 })
+
+describe("settings form units (otto/mamoru-astro#22)", () => {
+  const parse = (o: Record<string, string>) => {
+    const f = new FormData();
+    for (const [k, v] of Object.entries({ depth_on: "1", depth_impact_pct: "0.3", depth_share_pct: "5", depth_stables_pct: "0,05", cap: "1,000", btc_fall_pct: "7", btc_vol_pct: "80", eth_fall_pct: "9", eth_vol_pct: "100", ...o })) f.set(k, v);
+    return settingsFromForm(f);
+  };
+  test("percent and grouped USDC read back to basis points and whole USDC", () => {
+    expect(parse({})).toEqual(DEPTH);
+    expect(parse({ cap: "1 000 000" }).capUsdc).toBe(1_000_000);
+    expect(parse({ cap: "1,00,000" }).capUsdc).toBeNaN();
+    expect(parse({ depth_impact_pct: "0.333" }).depth!.impactBps).toBeNaN();
+  });
+  test("a page from before the percent fields is refused, never read as percent", () => {
+    const f = new FormData();
+    for (const [k, v] of Object.entries({ depth_on: "1", depth_impact: "30", depth_share: "500", cap: "1000", btc_fall: "700", btc_vol: "8000", eth_fall: "900", eth_vol: "10000" })) f.set(k, v);
+    expect(validateSettings(settingsFromForm(f)).length).toBeGreaterThan(0);
+  });
+  test("smallest entry needs its switch on", () => {
+    expect(parse({ min_entry_gas: "5" }).minEntry).toBeUndefined();
+    expect(parse({ min_entry_on: "1", min_entry_gas: "5" }).minEntry).toEqual({ gasMultiple: 5 });
+  });
+});

@@ -32,6 +32,24 @@ export const DEFAULT_SETTINGS: EngineSettings = {
   guard: { enabled: false, btc: { fallBps: 700, volBps: 8000 }, eth: { fallBps: 900, volBps: 10_000 } },
 };
 
+/**
+ * What the form proposes when a field has no better reference: the set Ot approved on 20 Oct (versions v1 beta, v2
+ * prod): cap 1,000 with depth sizing 30/500/5, the fall guard as it ran, and the smallest entry at 5 times its gas
+ * (the proposal of otto/mamoru#195). The cap stays at 1,000 until otto/mamoru#184 lets depth see every account.
+ */
+export const RECOMMENDED_SETTINGS: EngineSettings = {
+  depth: { impactBps: 30, shareBps: 500, stablesImpactBps: 5 },
+  capUsdc: 1000,
+  guard: DEFAULT_SETTINGS.guard,
+  minEntry: { gasMultiple: 5 },
+};
+
+/** Basis points as the percent a person reads and types: 30 → "0.3", 500 → "5", 8000 → "80". */
+export const pctOf = (bps: number): string => String(bps / 100);
+
+/** Whole USDC grouped for reading: 1000000 → "1,000,000". */
+export const usdcOf = (n: number): string => n.toLocaleString("en-US");
+
 const isInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n);
 
 function inRange(errors: string[], field: string, v: unknown, b: { min: number; max: number }): void {
@@ -107,22 +125,51 @@ function int(form: FormData, name: string): number | null {
   return /^-?[0-9]+$/.test(raw) ? Number(raw) : Number.NaN;
 }
 
-/** The settings a submitted form describes. Field names match ops-settings.ts. */
+/**
+ * Reads whole USDC, plain or grouped in threes with one separator ("1000000", "1,000,000", "1 000 000",
+ * "1.000.000"); blank is null. A decimal, a mixed or misplaced separator ("1,00,000", "1,000.000") or anything else
+ * is NaN (refused by validate): a typo in the cap is never read as some other cap.
+ */
+function usdc(form: FormData, name: string): number | null {
+  const raw = String(form.get(name) ?? "").trim();
+  if (raw === "") return null;
+  if (/^[0-9]+$/.test(raw)) return Number(raw);
+  return /^[0-9]{1,3}(?:([,. '_])[0-9]{3})(?:\1[0-9]{3})*$/.test(raw) ? Number(raw.replace(/[^0-9]/g, "")) : Number.NaN;
+}
+
+/**
+ * Reads a percent and returns basis points: "0.3" → 30, "0,05 %" → 5. Blank is null. More than two decimals (finer
+ * than one basis point) or anything that is not a number is NaN (refused by validate).
+ */
+function pct(form: FormData, name: string): number | null {
+  const raw = String(form.get(name) ?? "").trim().replace(/\s*%$/, "").replace(",", ".");
+  if (raw === "") return null;
+  if (!/^[0-9]+(\.[0-9]{1,2})?$/.test(raw)) return Number.NaN;
+  const [whole, frac = ""] = raw.split(".");
+  return Number(whole) * 100 + Number(frac.padEnd(2, "0"));
+}
+
+/**
+ * The settings a submitted form describes. Field names match ops-settings.ts. Percents arrive in `*_pct` fields, so
+ * a page rendered before they existed sends names this reads as blank, which validate refuses: an old page can never
+ * write basis points read as percent.
+ */
 export function settingsFromForm(form: FormData): EngineSettings {
   const depthOn = form.get("depth_on") === "1";
-  const stables = int(form, "depth_stables");
-  const gas = int(form, "min_entry_gas");
+  const stables = pct(form, "depth_stables_pct");
+  // Off is its own switch, so a multiple typed while it is off is not applied.
+  const gas = form.get("min_entry_on") === "1" ? (int(form, "min_entry_gas") ?? Number.NaN) : null;
   return {
     depth: depthOn
-      ? { impactBps: int(form, "depth_impact") ?? Number.NaN, shareBps: int(form, "depth_share") ?? Number.NaN, ...(stables === null ? {} : { stablesImpactBps: stables }) }
+      ? { impactBps: pct(form, "depth_impact_pct") ?? Number.NaN, shareBps: pct(form, "depth_share_pct") ?? Number.NaN, ...(stables === null ? {} : { stablesImpactBps: stables }) }
       : null,
-    capUsdc: int(form, "cap"),
+    capUsdc: usdc(form, "cap"),
     guard: {
       enabled: form.get("guard_on") === "1",
-      btc: { fallBps: int(form, "btc_fall") ?? Number.NaN, volBps: int(form, "btc_vol") ?? Number.NaN },
-      eth: { fallBps: int(form, "eth_fall") ?? Number.NaN, volBps: int(form, "eth_vol") ?? Number.NaN },
+      btc: { fallBps: pct(form, "btc_fall_pct") ?? Number.NaN, volBps: pct(form, "btc_vol_pct") ?? Number.NaN },
+      eth: { fallBps: pct(form, "eth_fall_pct") ?? Number.NaN, volBps: pct(form, "eth_vol_pct") ?? Number.NaN },
     },
-    // Blank is off, and then the key is left out so the stored JSON (and its hash) stays as before #195.
+    // Off is left out of the JSON so the stored set (and its hash) stays as before #195.
     ...(gas === null ? {} : { minEntry: { gasMultiple: gas } }),
   };
 }
