@@ -89,12 +89,36 @@ export const ARCHIVE: readonly ArchiveSnapshot[] = [
     commit: "676e0c610a9f336a7f554a3fda7acb10aa9610b3",
     page: "pitch/index.html",
   },
+  {
+    id: "landing-v2",
+    version: "v2",
+    kind: "landing",
+    title: "Savings, automated",
+    note: "Flat washi paper, the three-step how it works (Fund / Mamoru works / You save) and the allocation before slide 3 v3. Replaced by v3 on 27 Oct.",
+    servedAt: "/",
+    from: "2026-10-16",
+    to: "2026-10-27",
+    commit: "b7ec70f57a8e6da34837a178e6d46b1f1fc95ac8",
+    page: "open/index.html",
+  },
+  {
+    id: "deck-v2",
+    version: "v2",
+    kind: "deck",
+    title: "Savings, automated",
+    note: "The deck on flat washi paper, before Kami A and the 守 seal. Replaced at /deck by v3 on 26 Oct.",
+    servedAt: "/deck",
+    from: "2026-10-16",
+    to: "2026-10-26",
+    commit: "55ead8035308f5baaef9716953177a997ce36c2e",
+    page: "deck/index.html",
+  },
 ];
 
 /** What is live today, listed beside the archive so the two read as one history. */
 export const LIVE: readonly { kind: ArchiveKind; version: string; title: string; href: string; since: string }[] = [
-  { kind: "landing", version: "v2", title: "Savings, automated", href: "/", since: "2026-10-16" },
-  { kind: "deck", version: "v2", title: "Savings, automated", href: "/deck", since: "2026-10-16" },
+  { kind: "landing", version: "v3", title: "Kami A, the film's flow and the 守 seal", href: "/", since: "2026-10-27" },
+  { kind: "deck", version: "v3", title: "Kami A and the 守 seal", href: "/deck", since: "2026-10-26" },
 ];
 
 export const ARCHIVE_PREFIX = "/ops/archive";
