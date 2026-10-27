@@ -1,6 +1,5 @@
 ---
 import Base from "../layouts/Base.astro";
-import WorksStory from "../components/WorksStory.astro";
 import { DECK } from "../deck-copy";
 import { OPEN_COPY } from "../open-copy";
 
@@ -27,6 +26,8 @@ const askAt = [
       <img src="/mark-two-stones.png" width="26" height="26" alt="" />
       <span>Mamoru</span>
     </header>
+    <!-- The 守 seal signs every slide, as it signs the app's dashboard. -->
+    <img class="seal" src="/seal-mamoru.png" width="40" height="40" alt="" />
 
     <!-- 01 Cover: the landing hero -->
     <section class="slide cover" data-slide="1" aria-roledescription="slide" aria-label="Mamoru">
@@ -68,9 +69,16 @@ const askAt = [
       </p>
     </section>
 
-    <!-- 03 The solution: the landing's How it works loop, under the deck's own name -->
-    <section class="slide how" data-slide="3" aria-roledescription="slide" aria-label={OPEN_COPY.works.heading}>
-      <WorksStory eyebrow={loop.eyebrow} labels={loop.labels} />
+    <!-- 03 The solution: the launch film's allocation and night (Brais, 26 Oct): USDC fills the three positions, then
+         while you sleep the profits of Balance and Growth fall into Stable. Silent; it plays each time the slide arrives. -->
+    <section class="slide how" data-slide="3" aria-roledescription="slide" aria-label={loop.aria}>
+      <div class="film">
+        <p class="eyebrow rise" style="--d:0">{loop.eyebrow}</p>
+        <video class="js-how" muted playsinline preload="auto" aria-label={loop.aria}>
+          <source src="/deck-media/how-it-works.webm" type="video/webm" />
+          <source src="/deck-media/how-it-works.mp4" type="video/mp4" />
+        </video>
+      </div>
     </section>
 
     <!-- 04 Why trust Mamoru: six lines to speak to. A click brings up what each one means. -->
@@ -192,9 +200,7 @@ const askAt = [
       // Once the fall has given way to the question, its stage stays out of sight until the fall starts again.
       if (onFall && step > 0) fall?.classList.add("spent");
       playFall(onFall && step === 0);
-      if (at !== shown && slides[at]?.classList.contains("how")) {
-        slides[at]?.querySelector("#works")?.dispatchEvent(new Event("works:restart"));
-      }
+      if (at !== shown) playHow(slides[at]?.classList.contains("how") === true);
       shown = at;
       dots.forEach((d, k) => d.setAttribute("aria-current", k === at ? "step" : "false"));
       now.textContent = String(at + 1).padStart(2, "0");
@@ -275,6 +281,21 @@ const askAt = [
       );
     }
 
+    // 03: the film starts over each time the slide arrives and rests on its last frame. Reduced motion shows that frame.
+    const how = deck.querySelector<HTMLVideoElement>(".js-how");
+    function playHow(on: boolean) {
+      if (!how) return;
+      if (!on) return how.pause();
+      if (quiet) {
+        const end = () => { how.currentTime = Math.max(0, how.duration - 0.05); };
+        if (how.readyState >= 1) end();
+        else how.addEventListener("loadedmetadata", end, { once: true });
+        return;
+      }
+      how.currentTime = 0;
+      how.play().catch(() => {});
+    }
+
     function next() {
       const steps = Number(slides[at]?.dataset.steps ?? 0);
       if (step < steps) show(at, step + 1);
@@ -341,6 +362,11 @@ const askAt = [
   :global(body) {
     height: 100%;
     overflow: hidden;
+    /* Kami A, the brand's screen paper (the app's dashboard since otto/mamoru#198), on every slide. */
+    background-color: #f1eee5;
+    background-image: url("/kami-a-tile.png");
+    background-image: image-set(url("/kami-a-tile.webp") type("image/webp"), url("/kami-a-tile.png") type("image/png"));
+    background-size: 1024px 1024px;
   }
   /* Type grows with the screen, so a projector reads like a laptop. */
   :global(html) {
@@ -368,6 +394,15 @@ const askAt = [
     gap: 0.55rem;
     font-size: 1.05rem;
     letter-spacing: 0.02em;
+  }
+
+  .seal {
+    position: absolute;
+    left: clamp(1rem, 4vw, 3rem);
+    bottom: clamp(0.9rem, 2.6vh, 1.6rem);
+    z-index: 2;
+    width: 2rem;
+    height: 2rem;
   }
 
   /* Slides stack in place and cross-fade. */
@@ -678,25 +713,20 @@ const askAt = [
     transition-delay: 0.25s;
   }
 
-  /* 03 The solution: the landing section, drawn as large as the screen allows so a room can read it.
-     The slide gives up some of its padding, and the scene is sized by height: about 58% of the screen. */
+  /* 03 The solution: the film, as large as the slide allows at 16:9, on the same paper. */
   .slide.how {
     padding-block: clamp(3rem, 6vh, 4.5rem);
   }
-  .how :global(.scene-w) {
-    max-width: min(66rem, 104vh);
-    margin-block: clamp(0.5rem, 1.6vh, 1.25rem);
+  .film {
+    width: min(100%, calc((100dvh - 11rem) * 16 / 9));
   }
-  .how :global(.scene-t) {
-    max-width: min(26rem, 46vh);
-    margin-block: 0.75rem;
-  }
-  .how :global(.disc-tag),
-  .how :global(.coin-tag) {
-    font-size: 11.5px;
-  }
-  .how :global(.steps) {
-    max-width: 64rem;
+  .film video {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    /* The film is drawn on Kami A too: no frame, its edges fade into the slide's paper. */
+    -webkit-mask-image: radial-gradient(ellipse 72% 68% at 50% 50%, #000 70%, transparent 100%);
+    mask-image: radial-gradient(ellipse 72% 68% at 50% 50%, #000 70%, transparent 100%);
   }
 
   .versus {
@@ -1098,6 +1128,9 @@ const askAt = [
       align-items: flex-start;
       overflow-y: auto;
       padding-bottom: 5rem;
+    }
+    .slide.how {
+      align-items: center;
     }
   }
 
