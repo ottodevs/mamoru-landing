@@ -142,6 +142,23 @@ export async function maxIdOf(db: D1Db, env: Env): Promise<number> {
   }
 }
 
+/**
+ * otto/mamoru#218: settings the operator understands but /ops has no field for (lazy re-range, bridge-out). Written
+ * from the form, a version would leave them out and silently switch them off for every account. Kept from `base`
+ * (the env-wide version in effect) when the draft does not carry them.
+ */
+export const KEPT_KEYS = ["rerange", "bridgeOut"] as const;
+
+export function keepUnedited(draft: EngineSettings, base: EngineSettings | null): EngineSettings {
+  if (!base) return draft;
+  const out = { ...draft } as Record<string, unknown>;
+  for (const k of KEPT_KEYS) {
+    const kept = (base as Record<string, unknown>)[k];
+    if (!(k in out) && kept !== undefined) out[k] = kept;
+  }
+  return out as EngineSettings;
+}
+
 /** Thrown when another version of the env was written after the one the change was checked against. */
 export class SettingsConflict extends Error {}
 
@@ -157,6 +174,8 @@ export type NewVersion = { env: Env; accountKeys: string[] | null; template: str
  * them; when the env moved, nothing is written and SettingsConflict is thrown, so the change is checked again.
  */
 export async function appendVersion(db: D1Db, v: NewVersion & { expectedMaxId: number }, now: Date = new Date()): Promise<number> {
+  // otto/mamoru#218: the form has no field for these, so a form write keeps what the env runs. A rollback writes its target as is.
+  if (!v.rollbackOf) v = { ...v, settings: keepUnedited(v.settings, (await inEffect(db))[v.env]?.wide?.settings ?? null) };
   const errors = validateSettings(v.settings);
   if (errors.length) throw new Error(errors.join("; "));
   if (!v.reason.trim()) throw new Error("a reason is required");
