@@ -5,11 +5,11 @@ import { OPEN_COPY } from "../open-copy";
 // which fills tramo by tramo; then the yield of Growth and Balance flows into Stables, which grows. No words inside
 // the film. It is a recorded loop, not a live canvas: the canvas version did not paint in Brave (2026-10-27), and a
 // video plays the same everywhere, like slide 3 of the deck. One loop is 12 s; the caption follows its clock.
-// Sources: frames of the canvas version, rendered frame by frame (wide 1920x800, tall 704x1112).
+// Sources: frames of the canvas version, rendered frame by frame (wide 1920x800, tall 704x646, the column on its side).
 const { eyebrow, lines, aria } = OPEN_COPY.flow;
 const films = [
   { id: "wide", w: 1920, h: 800 },
-  { id: "tall", w: 704, h: 1112 },
+  { id: "tall", w: 704, h: 646 },
 ];
 ---
 <section class="flow-story" id="works" aria-labelledby="works-title">
@@ -106,7 +106,7 @@ const films = [
   .stage-tall {
     display: none;
     max-width: 22.5rem;
-    aspect-ratio: 704 / 1112;
+    aspect-ratio: 704 / 646;
   }
   /* Both lines share one cell; the one in play fades in. */
   .caption {
