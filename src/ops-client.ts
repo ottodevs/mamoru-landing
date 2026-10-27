@@ -5,13 +5,14 @@
  *
  * Section contract: `modules[id](root, quiet)` mounts a section into `root` and
  * returns a teardown function the router calls before the next swap.
- * Pure decisions live in opsRouterLogic() and topupLogic(), embedded here from
+ * Pure decisions live in opsRouterLogic(), topupLogic() and fundPlanLogic(), embedded here from
  * source so the tests exercise the code that ships.
  */
 
 import { opsRouterLogic } from "./ops-router-logic";
 import { topupLogic } from "./topup-logic";
 import { labLogic } from "./lab-logic";
+import { fundPlanLogic } from "./fund-plan-logic";
 
 /** Runs before first paint so nothing flashes in its final state and then restarts. */
 export function motionHeadScript(nonce: string): string {
@@ -25,6 +26,7 @@ export function opsClientScript(nonce: string): string {
   var R = (/*router-logic*/${opsRouterLogic.toString()}/*end-router-logic*/)();
   var L = (/*topup-logic*/${topupLogic.toString()}/*end-topup-logic*/)();
   var LAB = (/*lab-logic*/${labLogic.toString()}/*end-lab-logic*/)();
+  var P = (/*fund-plan-logic*/${fundPlanLogic.toString()}/*end-fund-plan-logic*/)();
   var root = document.documentElement;
   var main = document.getElementById("ops-main");
   var live = document.getElementById("ops-live");
@@ -1534,16 +1536,304 @@ export function opsClientScript(nonce: string): string {
     return { init: init };
   })();
 
+  /* ---------- Funding: tabs and the run that funds every short wallet (otto/mamoru-astro#32) ---------- */
+  // Sends one plain transfer per ticked wallet, chain by chain, each checked against the wallet's balance on that
+  // chain first. A decline in the wallet stops the run; any other failure marks that transfer and moves on.
+  var FundPlan = (function () {
+    var running = false, stopAsked = false, timers = [];
+    function init(scope) {
+      var box = scope.querySelector("#topup");
+      if (!box || typeof BigInt !== "function") return function () {};
+      var cfg;
+      try { cfg = JSON.parse(box.getAttribute("data-topup")); } catch (err) { return function () {}; }
+      var byId = {};
+      for (var i = 0; i < (cfg.targets || []).length; i++) byId[cfg.targets[i].id] = cfg.targets[i];
+      var $ = function (id) { return box.querySelector("#" + id); };
+      var line = $("fp-line"), sendBtn = $("fp-send"), stopBtn = $("fp-stop");
+      var eth = window.ethereum || null;
+      var alive = true;
+
+      function showTab(id) {
+        var tabs = box.querySelectorAll("[data-tab]");
+        for (var t = 0; t < tabs.length; t++) tabs[t].setAttribute("aria-selected", String(tabs[t].getAttribute("data-tab") === id));
+        var plan = $("fd-plan"), one = $("fd-one");
+        if (plan) plan.hidden = id !== "plan";
+        if (one) one.hidden = id !== "one";
+      }
+      function rows() { return box.querySelectorAll(".fp-row"); }
+      function rowOf(id) { return box.querySelector('.fp-row[data-id="' + id + '"]'); }
+      function amountOf(row) {
+        var p = L.parseEth(row.querySelector(".fp-in input").value);
+        return p.ok ? p.wei : null;
+      }
+      function ticked(row) { return row.querySelector('input[type="checkbox"]').checked; }
+      function setLine(text, tone) { if (line) { line.textContent = text; line.className = "fp-line" + (tone && tone !== "plain" ? " " + tone : ""); } }
+      function setPhase(row, phase, note) {
+        row.setAttribute("data-phase", phase);
+        var st = row.querySelector(".fp-state");
+        st.textContent = P.phaseWord(phase) + (note ? ": " + note : "");
+      }
+      function planned() {
+        var out = [], rs = rows();
+        for (var r = 0; r < rs.length; r++) {
+          var t = byId[rs[r].getAttribute("data-id")];
+          var amt = amountOf(rs[r]);
+          if (t && ticked(rs[r]) && amt !== null) out.push({ id: t.id, chain: String(t.chain.hex).toLowerCase(), amount: amt });
+        }
+        return P.order(out);
+      }
+      function paint() {
+        if (running) return;
+        var plan = planned();
+        var totals = {};
+        for (var p = 0; p < plan.length; p++) totals[plan[p].chain] = (totals[plan[p].chain] || BigInt(0)) + plan[p].amount;
+        var cells = box.querySelectorAll("[data-total]");
+        for (var c = 0; c < cells.length; c++) {
+          var hex = String(cells[c].getAttribute("data-total")).toLowerCase();
+          var sym = "";
+          for (var id in byId) if (String(byId[id].chain.hex).toLowerCase() === hex) sym = byId[id].chain.symbol;
+          cells[c].textContent = totals[hex] ? "Sends " + L.formatEth(totals[hex]) + " " + sym + " in total." : "Nothing ticked on this chain.";
+        }
+        var rs = rows();
+        for (var r = 0; r < rs.length; r++) {
+          var bad = rs[r].querySelector(".fp-in input").value.trim() !== "" && amountOf(rs[r]) === null;
+          rs[r].classList.toggle("bad", bad);
+          if (rs[r].getAttribute("data-phase") === "waiting") rs[r].querySelector(".fp-state").textContent = bad ? "Not a number" : "";
+        }
+        var n = plan.length;
+        sendBtn.textContent = n ? "Send " + n + " transfer" + (n === 1 ? "" : "s") : "Send";
+        sendBtn.disabled = !n || !eth;
+        var sw = P.switches(plan, null);
+        if (!eth) setLine("Sending from this page needs a browser wallet. Each wallet's address is in the One wallet tab.", "plain");
+        else setLine(n ? n + " transfer" + (n === 1 ? "" : "s") + " on " + sw + " network" + (sw === 1 ? "" : "s") + ". The wallet asks you to confirm each one." : "Tick a wallet and give it an amount.", "plain");
+      }
+      function splitInto(input) {
+        var hex = String(input.getAttribute("data-split")).toLowerCase();
+        var total = L.parseEth(input.value);
+        if (!total.ok) return;
+        var targets = [], shorts = [];
+        var rs = rows();
+        for (var r = 0; r < rs.length; r++) {
+          var t = byId[rs[r].getAttribute("data-id")];
+          if (t && String(t.chain.hex).toLowerCase() === hex && ticked(rs[r])) { targets.push(rs[r]); shorts.push(BigInt(t.shortWei || "0")); }
+        }
+        var parts = P.split(total.wei, shorts);
+        for (var k = 0; k < targets.length; k++) targets[k].querySelector(".fp-in input").value = parts[k] > BigInt(0) ? L.formatEth(parts[k]) : "";
+      }
+
+      function req(method, params) { return eth.request({ method: method, params: params || [] }); }
+      function wait(ms) { return new Promise(function (ok) { timers.push(setTimeout(ok, ms)); }); }
+      function toChain(t) {
+        return req("eth_chainId").then(function (now) {
+          if (String(now).toLowerCase() === String(t.chain.hex).toLowerCase()) return false;
+          return req("wallet_switchEthereumChain", [{ chainId: t.chain.hex }]).catch(function (err) {
+            if (Number(err && err.code) !== 4902 || !t.chain.rpc) throw err;
+            return req("wallet_addEthereumChain", [{ chainId: t.chain.hex, chainName: t.chain.name, nativeCurrency: { name: t.chain.symbol === "ETH" ? "Ether" : t.chain.name, symbol: t.chain.symbol, decimals: 18 }, rpcUrls: [t.chain.rpc], blockExplorerUrls: [t.chain.explorerUrl] }]);
+          }).then(function () { return true; });
+        });
+      }
+      function receipt(hash, tries) {
+        return req("eth_getTransactionReceipt", [hash]).catch(function () { return null; }).then(function (rc) {
+          if (rc && rc.status) return Number(rc.status) === 1;
+          if (tries >= 60 || !alive) return null;
+          return wait(2500).then(function () { return receipt(hash, tries + 1); });
+        });
+      }
+      function one(account, step) {
+        var t = byId[step.id], row = rowOf(step.id);
+        var ctx = { relayer: t.address, chain: t.chain, recipientName: t.recipientName, costWei: null, ethUsd: null };
+        setPhase(row, "switching");
+        return toChain(t).then(function () {
+          return Promise.all([req("eth_chainId"), req("eth_getBalance", [account, "latest"]), req("eth_gasPrice")]);
+        }).then(function (res) {
+          if (String(res[0]).toLowerCase() !== String(t.chain.hex).toLowerCase()) throw { message: "the wallet is not on " + t.chain.name };
+          var bal = L.fromHex(res[1]), fee = L.estimateFee(L.fromHex(res[2]) || BigInt(0), t.chain);
+          if (bal === null) throw { message: "the wallet did not return a balance" };
+          if (!L.afford(bal, step.amount, fee).ok) throw { message: "the wallet holds " + L.formatEth(bal) + " " + t.chain.symbol + " on " + t.chain.name + ", short of this amount plus its fee" };
+          setPhase(row, "signing");
+          return req("eth_sendTransaction", [{ from: account, to: t.address, value: L.toHex(step.amount), chainId: t.chain.hex }]);
+        }).then(function (hash) {
+          setPhase(row, "sent");
+          var st = row.querySelector(".fp-state");
+          var a = document.createElement("a");
+          a.href = t.chain.explorerTx + hash;
+          a.textContent = " " + t.chain.explorerName;
+          st.appendChild(a);
+          return receipt(String(hash), 0).then(function (ok) {
+            if (ok === true) setPhase(row, "confirmed", L.formatEth(step.amount) + " " + t.chain.symbol);
+            else setPhase(row, "failed", ok === false ? "included but reverted, nothing arrived" : "no receipt yet; check " + t.chain.explorerName + " before sending again");
+            row.querySelector(".fp-state").appendChild(a);
+            return "next";
+          });
+        }).catch(function (err) {
+          var declined = Number(err && err.code) === 4001 || /reject|denied|cancel/i.test(String((err && err.message) || ""));
+          setPhase(row, "failed", L.explain(err, ctx).replace(/\\.$/, ""));
+          return declined ? "stop" : "next";
+        });
+      }
+      function finish(plan) {
+        running = false;
+        stopBtn.hidden = true;
+        var phases = [];
+        for (var i = 0; i < plan.length; i++) phases.push(rowOf(plan[i].id).getAttribute("data-phase"));
+        var s = P.summary(phases);
+        setLine(s.text + (s.tone === "good" || s.tone === "warn" ? " The balances above refresh in a moment." : ""), s.tone);
+        sendBtn.disabled = false;
+        sendBtn.textContent = "Send again";
+        main.removeAttribute("data-busy");
+        if (s.tone === "good" || s.tone === "warn") timers.push(setTimeout(function () { if (alive) Shell.refresh("/ops/infra?fresh=1"); }, 3500));
+      }
+      function run() {
+        var plan = planned();
+        if (!plan.length || running) return;
+        if (!eth) { paint(); return; }
+        running = true; stopAsked = false;
+        sendBtn.disabled = true;
+        stopBtn.hidden = false;
+        main.setAttribute("data-busy", "1");
+        var rs = rows();
+        for (var r = 0; r < rs.length; r++) setPhase(rs[r], "waiting");
+        setLine("Connect the wallet to start.", "plain");
+        req("eth_requestAccounts").then(function (accounts) {
+          if (!accounts || !accounts.length) throw { code: 4100 };
+          var account = accounts[0];
+          var i = 0;
+          var next = function () {
+            if (!alive) return;
+            if (i >= plan.length) { finish(plan); return; }
+            if (stopAsked) { for (; i < plan.length; i++) setPhase(rowOf(plan[i].id), "skipped"); finish(plan); return; }
+            setLine("Transfer " + (i + 1) + " of " + plan.length + ": " + byId[plan[i].id].label + ".", "plain");
+            one(account, plan[i]).then(function (what) {
+              i++;
+              if (what === "stop") stopAsked = true;
+              next();
+            });
+          };
+          next();
+        }).catch(function (err) {
+          running = false; stopBtn.hidden = true; main.removeAttribute("data-busy");
+          setLine(L.explain(err), "bad");
+          paint();
+        });
+      }
+
+      function onClick(ev) {
+        var node = ev.target && ev.target.closest ? ev.target.closest("button") : null;
+        if (!node || !box.contains(node)) return;
+        var tab = node.getAttribute("data-tab");
+        if (tab) { showTab(tab); return; }
+        if (node.getAttribute("data-fund")) { if (!running) showTab("one"); return; }
+        if (node.id === "fp-send") { run(); return; }
+        if (node.id === "fp-stop") { stopAsked = true; node.hidden = true; setLine("Stopping after the transfer under way.", "plain"); }
+      }
+      function onInput(ev) {
+        var el2 = ev.target;
+        if (el2 && el2.getAttribute && el2.getAttribute("data-split") !== null) splitInto(el2);
+        paint();
+      }
+      box.addEventListener("click", onClick);
+      box.addEventListener("input", onInput);
+      box.addEventListener("change", onInput);
+      // Wallets on phones can inject late.
+      timers.push(setTimeout(function () { if (!eth && window.ethereum) { eth = window.ethereum; paint(); } }, 1500));
+      paint();
+      return function () {
+        alive = false;
+        for (var t = 0; t < timers.length; t++) clearTimeout(timers[t]);
+        timers = [];
+        box.removeEventListener("click", onClick);
+        box.removeEventListener("input", onInput);
+        box.removeEventListener("change", onInput);
+        if (running) main.removeAttribute("data-busy");
+        running = false;
+      };
+    }
+    return { init: init };
+  })();
+
+  /* ---------- engine settings: mark what changed as it is typed (otto/mamoru-astro#22) ---------- */
+  // Only marks: without this the form submits the same and the server says what changed on the confirm screen.
+  var SettingsForm = (function () {
+    function num(raw, kind) {
+      var t = String(raw || "").trim();
+      if (kind === "pct") t = t.replace(/\\s*%$/, "").replace(",", ".");
+      else t = t.replace(/[\\s,.'_]/g, "");
+      if (t === "" || !/^[0-9]+(\\.[0-9]+)?$/.test(t)) return null;
+      return Number(t);
+    }
+    function pos(v, min, max) {
+      if (!(v > 0)) return 0;
+      var p = (Math.log(v) - Math.log(min)) / (Math.log(max) - Math.log(min)) * 100;
+      return Math.max(0, Math.min(100, p));
+    }
+    function init(scope) {
+      var form = scope.querySelector(".set-form");
+      if (!form) return function () {};
+      var count = scope.querySelector("#set-count");
+      var bar = scope.querySelector(".set-bar");
+      var env = form.getAttribute("data-env") || "";
+      var eg = scope.querySelector('[data-eg="cap"]');
+      function grouped(n) { return Math.round(n).toLocaleString("en-US"); }
+      function paint() {
+        var changed = 0;
+        var flds = form.querySelectorAll(".set-fld");
+        for (var i = 0; i < flds.length; i++) {
+          var f = flds[i], input = f.querySelector("input"), kind = f.getAttribute("data-kind");
+          var v = num(input.value, kind), was = num(f.getAttribute("data-now"), kind);
+          var grp = f.closest(".set-grp");
+          var tgl = grp ? grp.querySelector(".set-tgl input") : null;
+          // A field in a group switched off counts as unchanged: off is the change, said by the switch.
+          var live = !tgl || tgl.checked;
+          var differs = live && v !== was;
+          f.classList.toggle("changed", differs);
+          f.classList.toggle("bad", input.value.trim() !== "" && v === null);
+          if (differs) changed++;
+          var sc = f.querySelector(".set-scale"), dot = f.querySelector(".set-mk.val");
+          if (sc && dot) {
+            if (v === null) dot.style.display = "none";
+            else { dot.style.display = ""; dot.style.left = pos(v, Number(sc.getAttribute("data-min")), Number(sc.getAttribute("data-max"))) + "%"; }
+          }
+        }
+        var tgls = form.querySelectorAll(".set-tgl");
+        for (var t = 0; t < tgls.length; t++) {
+          var on = tgls[t].querySelector("input").checked;
+          var flip = on !== (tgls[t].getAttribute("data-now") === "1");
+          tgls[t].classList.toggle("changed", flip);
+          if (flip) changed++;
+        }
+        if (count) count.textContent = changed === 0 ? "Same as what runs on " + env + "." : changed + " change" + (changed === 1 ? "" : "s") + " from what runs on " + env + ".";
+        if (bar) bar.classList.toggle("dirty", changed > 0);
+        if (eg) {
+          var capIn = form.querySelector('input[name="cap"]');
+          var cap = num(capIn && capIn.value, "usdc");
+          if (cap === null) cap = 100;
+          var dep = cap >= 5000 ? cap * 2 : 5000;
+          eg.textContent = "An account that deposits " + grouped(dep) + " USDC puts " + grouped(Math.min(cap, dep)) + " to work" + (dep > cap ? " and keeps " + grouped(dep - cap) + " as USDC" : "") + ".";
+        }
+      }
+      form.addEventListener("input", paint);
+      form.addEventListener("change", paint);
+      paint();
+      return function () { form.removeEventListener("input", paint); form.removeEventListener("change", paint); };
+    }
+    return { init: init };
+  })();
+
   var modules = {
     overview: function (scope, quiet) { return mountMotion(scope, quiet); },
     mails: function (scope, quiet) { return mountMotion(scope, quiet); },
     experiments: function (scope, quiet) { return mountMotion(scope, quiet); },
-    settings: function (scope, quiet) { return mountMotion(scope, quiet); },
+    settings: function (scope, quiet) {
+      var offMotion = mountMotion(scope, quiet);
+      var offForm = SettingsForm.init(scope);
+      return function () { offMotion(); offForm(); };
+    },
     lab: function (scope) { return LabApp.init(scope); },
     infra: function (scope, quiet) {
       var offMotion = mountMotion(scope, quiet);
       var offTopup = Topup.init(scope);
-      return function () { offMotion(); offTopup(); };
+      var offPlan = FundPlan.init(scope);
+      return function () { offMotion(); offTopup(); offPlan(); };
     },
   };
 

@@ -68,7 +68,7 @@ const SECTIONS = [
   { path: "/ops/engine", section: "engine", title: "Engine", marker: "Engine" },
   { path: "/ops/costs", section: "costs", title: "Costs", marker: "Break-even" },
   { path: "/ops/mails", section: "mails", title: "Mails", marker: "On the list" },
-  { path: "/ops/infra", section: "infra", title: "Infra and costs", marker: "Relayer balance" },
+  { path: "/ops/infra", section: "infra", title: "Funding", marker: "Relayer balance" },
   { path: "/ops/experiments", section: "experiments", title: "Experiments", marker: "hero_cta" },
   { path: "/ops/functions", section: "functions", title: "Functions", marker: "Yield ledger" },
   { path: "/ops/archive", section: "archive", title: "Archive", marker: "Tokyo landing" },
