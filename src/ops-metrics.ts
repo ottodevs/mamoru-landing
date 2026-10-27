@@ -3,6 +3,7 @@
 import { filterQuery } from "./account-filter";
 import { renderBars, renderFunnel, renderTally, renderTimeChart } from "./metrics-charts";
 import { dauSlots, fmtInt, fmtUsd, shortDay } from "./metrics-math";
+import { outsideLine } from "./outside-base";
 import { DAU_DAYS, type Change, type Overview } from "./metrics-overview";
 import { accountFilterBar, pageHead, renderDocument, type SectionView } from "./ops";
 import { esc } from "./text";
@@ -52,7 +53,14 @@ function figures(o: Overview): string {
       label: "Value held",
       value: money ? count(o.tvl, "usd") : "—",
       lines: money
-        ? [`${fmtUsd(o.lp)} in positions · ${fmtUsd(o.idle)} idle USDC`, changeLine(o.changes.tvl, "usd") || "History starts today"]
+        ? [
+            `${fmtUsd(o.lp)} in positions · ${fmtUsd(o.idle)} idle USDC`,
+            changeLine(o.changes.tvl, "usd") || "History starts today",
+            `Outside Base (not working): ${outsideLine(o.outside, fmtUsd)}`,
+            o.outside.usd !== null && o.outside.unread === 0 && o.outside.read > 0
+              ? `Including outside Base: ${fmtUsd(o.tvl + o.outside.usd)}`
+              : "",
+          ]
         : ["Not available right now"],
     })}
     ${figure({ col: 2, label: "Users", value: count(o.users), lines: [changeLine(o.changes.users, "int") || since] })}

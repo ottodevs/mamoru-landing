@@ -532,6 +532,7 @@ table.accts { margin-top: 1.1rem; font-variant-numeric: tabular-nums; }
 table.accts th, table.accts td { border-color: var(--rule); padding: 0.5rem 0 0.5rem 1.2rem; text-align: right; white-space: nowrap; }
 table.accts .a-key { padding-left: 0; text-align: left; }
 table.accts .a-addr { text-align: left; }
+table.accts .a-out { white-space: normal; min-width: 7rem; }
 table.accts thead th { color: var(--muted); font-size: 0.85rem; }
 table.accts td.unread { color: var(--warn); }
 

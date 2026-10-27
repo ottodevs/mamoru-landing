@@ -428,6 +428,15 @@ describe("partial reads", () => {
     expect(isComplete(snapshot)).toBe(true);
   });
 
+  test("an Ethereum read that fails leaves the Base figures and the completeness exactly as they were (otto/mamoru-astro#31)", async () => {
+    const { client, db } = partialFixture({});
+    const down = async () => new Response("down", { status: 503 });
+    const snapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client, down);
+    expect(isComplete(snapshot)).toBe(true);
+    expect(snapshot.accounts?.idleUsdcUsd).toBeCloseTo(48, 9);
+    expect(snapshot.accounts?.rows.every((r) => r.outside === undefined)).toBe(true);
+  });
+
   test("calls that fail once are retried and the snapshot comes back complete", async () => {
     const { client, db } = partialFixture({ failOnce: ["balanceOf", "getEthBalance", "positions", "slot0", "getPool"] });
     const snapshot = await computeInfraSnapshot({ MAMORU_DB: db }, client, NO_FETCH);

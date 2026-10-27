@@ -65,7 +65,7 @@ bun run build && bunx wrangler dev
 | `src/worker.ts` | Assets, `POST /api/notify`, and the private list at `/ops` |
 | `src/staging-preview.ts` | `/ops/preview` proxy + the staging Worker's own self-gate |
 
-`POST /api/notify` writes the address into KV `WAITLIST` or it does not say it saved. The list is not a marketing tool. `/ops` is the private panel (secret `LIST_GATE`, not in git). The welcome note sends only when the `EMAIL` binding can send from `notify@mamoru.lol`, and only once. `/ops/infra` reads Base over public RPCs (optional secret `BASE_RPC_URL` tried first) and the read-only D1 binding `MAMORU_DB` (owned by `ottodevs/mamoru`). Nothing secret lives in this repo.
+`POST /api/notify` writes the address into KV `WAITLIST` or it does not say it saved. The list is not a marketing tool. `/ops` is the private panel (secret `LIST_GATE`, not in git). The welcome note sends only when the `EMAIL` binding can send from `notify@mamoru.lol`, and only once. `/ops/infra` reads Base over public RPCs (optional secret `BASE_RPC_URL` tried first), and the same account addresses on Ethereum Mainnet through Multicall3 (optional secret `ETHEREUM_RPC_URLS`, comma separated, tried before the public RPCs) for the separate "Outside Base" figure and the read-only D1 binding `MAMORU_DB` (owned by `ottodevs/mamoru`). Nothing secret lives in this repo.
 
 ## Archive
 

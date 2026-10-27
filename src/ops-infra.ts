@@ -5,6 +5,7 @@ import type { RelayerStatus } from "./cost";
 import type { InfraReading } from "./infra-cache";
 import type { AccountView, InfraSnapshot } from "./infra-snapshot";
 import { fmtInt, fmtUsd } from "./metrics-math";
+import { outsideLine, summarizeOutside } from "./outside-base";
 import { countUp, csrfField, noticeHtml, pageHead, renderDocument, type SectionView, when } from "./ops";
 import { esc } from "./text";
 
@@ -107,6 +108,17 @@ function costSection(s: InfraSnapshot): string {
   </section>`;
 }
 
+/** The Ethereum holdings of one account: kept apart from the Base columns, which are the working value. */
+function outsideCell(row: AccountView): string {
+  const o = row.outside;
+  if (!o) return "not read";
+  if (o.eth === 0 && o.usdc === 0) return "—";
+  const parts: string[] = [];
+  if (o.eth > 0) parts.push(`${fmtEth(o.eth)} ETH`);
+  if (o.usdc > 0) parts.push(`${fmtUsd(o.usdc)} USDC`);
+  return `${parts.join(" + ")}${o.usd === null ? "" : ` · ${fmtUsd(o.usd)}`}`;
+}
+
 function accountRow(row: AccountView): string {
   const cell = (text: string, cls = "") =>
     row.unread ? `<td class="unread ${cls}">${esc(text)}</td>` : `<td${cls ? ` class="${cls}"` : ""}>${esc(text)}</td>`;
@@ -117,6 +129,7 @@ function accountRow(row: AccountView): string {
     ${cell(fmtUsd(row.usdcIdle))}
     ${cell(fmtUsd(row.lpUsd))}
     ${cell(row.positions ? `${row.inRange} of ${row.positions}` : "—")}
+    <td class="a-out">${esc(outsideCell(row))}</td>
   </tr>`;
 }
 
@@ -127,7 +140,7 @@ function accountsSection(s: InfraSnapshot): string {
   }
   // Funded and unread accounts first, by value; the ones that never held anything are only counted.
   const value = (r: AccountView) => r.usdcIdle + r.lpUsd;
-  const listed = a.rows.filter((r) => r.unread || r.ethBalance > 0 || value(r) > 0).sort((x, y) => value(y) - value(x));
+  const listed = a.rows.filter((r) => r.unread || r.ethBalance > 0 || value(r) > 0 || (r.outside && (r.outside.eth > 0 || r.outside.usdc > 0))).sort((x, y) => value(y) - value(x));
   const empty = a.rows.length - listed.length;
   // Unread accounts are always shown; beyond that the ledger stops at the largest ones.
   const shown = listed.filter((r, i) => r.unread || i < ACCOUNT_ROWS);
@@ -136,7 +149,7 @@ function accountsSection(s: InfraSnapshot): string {
   const unread = a.unreadAccounts ?? 0;
   const table = listed.length
     ? `<table class="accts">
-        <thead><tr><th class="a-key wide-only">Account</th><th class="a-addr">Address</th><th class="wide-only">Gas, ETH</th><th>Idle USDC</th><th>In positions</th><th>In range</th></tr></thead>
+        <thead><tr><th class="a-key wide-only">Account</th><th class="a-addr">Address</th><th class="wide-only">Gas, ETH</th><th>Idle USDC</th><th>In positions</th><th>In range</th><th>On Ethereum</th></tr></thead>
         <tbody>${shown.map(accountRow).join("")}</tbody>
       </table>`
     : "";
@@ -149,7 +162,7 @@ function accountsSection(s: InfraSnapshot): string {
       : `<p class="sum">${a.rows.length ? "No funded accounts yet." : "No accounts yet."}</p>`;
   const totals = a.error
     ? `<p class="soft sum">${esc(a.error)}</p>`
-    : `<p class="sum">${unread ? "At least " : ""}${esc(fmtUsd(a.tvlUsd))} held: ${esc(fmtUsd(a.lpUsd))} in positions and ${esc(fmtUsd(a.idleUsdcUsd))} idle USDC. Gas reserves of ${esc(fmtEth(a.gasReservesEth))} ETH sit in the Safes, apart from that.</p>${
+    : `<p class="sum">${unread ? "At least " : ""}${esc(fmtUsd(a.tvlUsd))} held: ${esc(fmtUsd(a.lpUsd))} in positions and ${esc(fmtUsd(a.idleUsdcUsd))} idle USDC. Gas reserves of ${esc(fmtEth(a.gasReservesEth))} ETH sit in the Safes, apart from that.</p><p class="sum soft">Outside Base (not working, not in the figure above): ${esc(outsideLine(summarizeOutside(a.rows), fmtUsd))}.</p>${
         unread
           ? `<p class="sum status-low">Some balances could not be read: ${fmtInt(unread)} of ${fmtInt(a.rows.length)} ${a.rows.length === 1 ? "account" : "accounts"}. They are listed and marked; none were counted as zero.</p>`
           : ""
