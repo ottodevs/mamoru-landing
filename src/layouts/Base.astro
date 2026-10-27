@@ -4,11 +4,14 @@ interface Props {
   title?: string;
   description?: string;
   canonical?: string;
+  /** Browser chrome and overscroll tint; the landing on Kami A passes its paper colour. */
+  themeColor?: string;
 }
 const {
   title = "Mamoru.lol",
   description = "Savings, automated.",
   canonical,
+  themeColor = "#F8F5EF",
 } = Astro.props;
 ---
 <!doctype html>
@@ -22,7 +25,7 @@ const {
     {canonical && <meta property="og:description" content={description} />}
     {canonical && <meta property="og:url" content={canonical} />}
     {canonical && <meta property="og:image" content="https://mamoru.lol/mark-two-stones.png" />}
-    <meta name="theme-color" content="#F8F5EF" />
+    <meta name="theme-color" content={themeColor} />
     <link rel="icon" href="/mark-two-stones.png" type="image/png" />
     <link
       rel="preload"

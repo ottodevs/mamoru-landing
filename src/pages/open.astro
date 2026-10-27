@@ -6,7 +6,7 @@ import { APP_HREF, OPEN_COPY as copy } from "../open-copy";
 
 const emailHref = `mailto:${copy.footer.email}`;
 ---
-<Base title={copy.title} description={copy.description} canonical="https://mamoru.lol/">
+<Base title={copy.title} description={copy.description} canonical="https://mamoru.lol/" themeColor="#F1EEE5">
   <a class="skip" href="#content">Skip to content</a>
   <header class="nav">
     <a class="brand" href="#top">
@@ -214,10 +214,15 @@ const emailHref = `mailto:${copy.footer.email}`;
     font-style: normal;
     font-display: swap;
   }
+  /* The tile's mean colour, as in the app: what shows where the image does not reach (overscroll, the strip
+     under the last section), so no rice paper peeks through. */
+  :global(:root) {
+    --kami: #f1eee5;
+  }
   /* Kami A, the dashboard's screen paper (otto/mamoru#198), on the whole landing. */
   :global(html),
   :global(html > body) {
-    background-color: var(--rice);
+    background-color: var(--kami);
     background-image: url("/kami-a-tile.png");
     background-image: image-set(
       url("/kami-a-tile.webp") type("image/webp"),
@@ -252,7 +257,7 @@ const emailHref = `mailto:${copy.footer.email}`;
     min-height: 4rem;
     max-height: 4.5rem;
     padding: 0.55rem clamp(1rem, 4vw, 2rem);
-    background-color: var(--rice);
+    background-color: var(--kami);
     background-image: url("/kami-a-tile.png");
     background-image: image-set(
       url("/kami-a-tile.webp") type("image/webp"),
