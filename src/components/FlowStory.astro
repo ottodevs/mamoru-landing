@@ -20,6 +20,7 @@ const films = [
       width={f.w}
       height={f.h}
       muted
+      autoplay
       loop
       playsinline
       preload="metadata"
@@ -40,36 +41,49 @@ const films = [
   const YIELD_AT = 5.4;
   const root = document.querySelector<HTMLElement>(".flow-story");
   const films = [...(root?.querySelectorAll<HTMLVideoElement>(".stage") ?? [])];
-  const quiet = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  // The loop is how the product works, slow and without flashes: it plays even with reduced motion, like the
+  // deck's slide 3. It starts as soon as the page loads (muted autoplay is allowed everywhere) and pauses only
+  // while it is off screen. If a browser still refuses, the first tap, click or key on the page starts it.
   if (root && films.length) {
     const live = () => films.find((v) => getComputedStyle(v).display !== "none");
-    if (quiet) {
-      // The poster is the loop's settled frame; the line under it is the second one.
-      root.dataset.line = "1";
-    } else {
-      let seen = false;
-      const sync = () => {
-        const v = live();
-        films.forEach((f) => f !== v && !f.paused && f.pause());
-        if (!v) return;
-        if (seen && v.paused) v.play().catch(() => {});
-        if (!seen && !v.paused) v.pause();
-      };
-      films.forEach((v) =>
-        v.addEventListener("timeupdate", () => {
-          if (v === live()) root.dataset.line = v.currentTime < YIELD_AT ? "0" : "1";
-        }),
-      );
-      new IntersectionObserver(
-        (entries) => {
-          seen = entries.some((e) => e.isIntersecting);
-          sync();
-        },
-        { threshold: 0.25 },
-      ).observe(root);
-      window.matchMedia("(max-width: 760px)").addEventListener("change", sync);
-    }
+    let offscreen = false;
+    let refused = false;
+    const sync = () => {
+      const v = live();
+      films.forEach((f) => f !== v && !f.paused && f.pause());
+      if (!v) return;
+      if (offscreen) {
+        if (!v.paused) v.pause();
+        return;
+      }
+      if (v.paused) {
+        v.muted = true;
+        v.play().then(
+          () => (refused = false),
+          () => (refused = true),
+        );
+      }
+    };
+    films.forEach((v) => {
+      v.muted = true;
+      v.addEventListener("timeupdate", () => {
+        if (v === live()) root.dataset.line = v.currentTime < YIELD_AT ? "0" : "1";
+      });
+      // A paused frame never stays: whatever paused it, the loop resumes while on screen.
+      v.addEventListener("pause", () => !offscreen && v === live() && !v.ended && setTimeout(sync, 300));
+    });
+    const nudge = () => refused && sync();
+    for (const type of ["pointerdown", "touchstart", "keydown"]) window.addEventListener(type, nudge, { passive: true });
+    new IntersectionObserver(
+      (entries) => {
+        offscreen = !entries.some((e) => e.isIntersecting);
+        sync();
+      },
+      { threshold: 0 },
+    ).observe(root);
+    window.matchMedia("(max-width: 760px)").addEventListener("change", sync);
+    sync();
   }
 </script>
 
