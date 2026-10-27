@@ -34,7 +34,7 @@ export interface FundsChain {
   chainId: number;
   name: string;
   buckets: FundsBucket[];
-  /** Sum of priced buckets of every kind. */
+  /** User money only: working + reserve + outside. Operator (team gas) is never in it. */
   usd: number;
 }
 
@@ -46,7 +46,7 @@ export interface FundsMap {
   operator: number;
   /** Outside Base, not working. Priced part only. */
   notWorking: number;
-  /** working + reserve + operator + notWorking. */
+  /** User money only: working + reserve + notWorking. Operator relayers (team gas) are never added. */
   total: number;
   /** True when any figure is a floor or unpriced. */
   partial: boolean;
@@ -189,7 +189,7 @@ export function buildFundsMap(
       const buckets = all
         .filter((b) => (b.usd ?? 0) > 0 || (b.accounts ?? 0) > 0 || b.note !== "" || b.kind === "working")
         .sort((a, b) => kindOrder[a.kind] - kindOrder[b.kind]);
-      return { chainId, name: chainName(chainId), buckets, usd: buckets.reduce((s, b) => s + (b.usd ?? 0), 0) };
+      return { chainId, name: chainName(chainId), buckets, usd: buckets.filter((b) => b.kind !== "operator").reduce((s, b) => s + (b.usd ?? 0), 0) };
     })
     .filter((c) => c.chainId === BASE_ID || c.buckets.length > 0);
 
@@ -205,8 +205,8 @@ export function buildFundsMap(
     reserve,
     operator,
     notWorking,
-    total: working + reserve + operator + notWorking,
-    partial: chains.some((c) => c.buckets.some((b) => b.usd === null || b.atLeast)),
+    total: working + reserve + notWorking,
+    partial: chains.some((c) => c.buckets.some((b) => b.kind !== "operator" && (b.usd === null || b.atLeast))),
   };
 }
 
@@ -250,6 +250,9 @@ export const FUNDS_STYLE = `
 .fm tr.fm-x td, .fm tr.fm-x td a, .fm tr.fm-x td small { color: var(--warn); }
 .fm .tag { font-size: 0.72rem; letter-spacing: 0.02em; color: var(--muted); border: 1px solid var(--rule); padding: 0 0.3rem; margin-left: 0.4rem; white-space: nowrap; }
 .fm tr.fm-x .tag { color: var(--warn); border-color: var(--warn); }
+.fm tbody.fm-team td { color: var(--muted); border-top: 1px solid var(--rule); font-size: 0.85rem; }
+.fm tbody.fm-team tr:first-child td { border-top: 2px solid var(--rule); }
+.fm-sum .fm-o dd, .fm-sum .fm-o dt { color: var(--muted); }
 .fm .fm-note { color: var(--muted); font-size: 0.85rem; margin: 0.9rem 0 0; }
 `;
 
@@ -259,33 +262,34 @@ const usdCell = (b: FundsBucket): string =>
 function bar(c: FundsChain, scale: number): string {
   const segs = c.buckets
     .filter((b) => b.usd !== null && b.usd > 0)
+    .filter((b) => b.kind !== "operator")
     .map((b) => {
       const cls = `${KIND_CLASS[b.kind]}${b.id === "idle" ? " fm-idle" : ""}`;
       return `<i class="${cls}" style="width:${barPct(b.usd ?? 0, scale).toFixed(2)}%"></i>`;
     })
     .join("");
   const desc = c.buckets
-    .filter((b) => b.usd !== null && b.usd > 0)
+    .filter((b) => b.kind !== "operator" && b.usd !== null && b.usd > 0)
     .map((b) => `${b.label} ${fmtUsd(b.usd ?? 0)}`)
     .join(", ");
   return `<div class="fm-bar" role="img" aria-label="${esc(`${c.name}: ${desc || "nothing held"}`)}">${segs}</div>`;
 }
 
 function chainBlock(c: FundsChain, f: FundsMap): string {
-  const rows = c.buckets
-    .map((b) => {
-      const share = b.usd === null || f.total <= 0 ? "—" : `${((b.usd / f.total) * 100).toFixed(1)}%`;
-      const label = b.kind === "operator" ? esc(b.label) : `<a href="/ops/accounts">${esc(b.label)}</a>`;
+  const row = (b: FundsBucket) => {
+      const share = b.kind === "operator" || b.usd === null || f.total <= 0 ? "—" : `${((b.usd / f.total) * 100).toFixed(1)}%`;
+      const label = b.kind === "operator" ? esc("Operator (team gas)") : `<a href="/ops/accounts">${esc(b.label)}</a>`;
       return `<tr class="${KIND_CLASS[b.kind]}"><td>${label}<span class="tag">${KIND_TAG[b.kind]}</span>${b.note ? `<small>${esc(b.note)}</small>` : ""}</td>
         <td class="n">${esc(usdCell(b))}</td><td class="n">${esc(share)}</td><td class="n">${b.accounts === null ? "—" : fmtInt(b.accounts)}</td></tr>`;
-    })
-    .join("");
+  };
+  const rows = c.buckets.filter((b) => b.kind !== "operator").map(row).join("");
+  const team = c.buckets.filter((b) => b.kind === "operator").map(row).join("");
   return `<div class="fm-chain">
-    <h3>${esc(c.name)}<span>${esc(c.usd === 0 && c.buckets.some((b) => b.usd === null) ? "not priced" : fmtUsd(c.usd))}</span></h3>
+    <h3>${esc(c.name)}<span>${esc(c.buckets.every((b) => b.kind === "operator") ? "team gas only" : fmtUsd(c.usd))}</span></h3>
     ${bar(c, f.total)}
     <table><caption class="sr">${esc(c.name)} balances by bucket</caption>
       <thead><tr><th scope="col">Bucket</th><th scope="col" class="n">USD</th><th scope="col" class="n">Share</th><th scope="col" class="n">Accounts</th></tr></thead>
-      <tbody>${rows}</tbody></table>
+      <tbody>${rows}</tbody>${team ? `<tbody class="fm-team">${team}</tbody>` : ""}</table>
   </div>`;
 }
 
@@ -299,11 +303,11 @@ export function renderFundsMap(f: FundsMap): string {
     <dl class="fm-sum">
       ${sum("fm-w", "Working (Value held)", f.working, "Positions and idle USDC")}
       ${sum("fm-r", "Gas in the Safes", f.reserve, "Not part of Value held")}
-      ${sum("fm-o", "Operator relayers", f.operator, "Pays gas, not user money")}
+      ${sum("fm-o", "Operator relayers (team gas)", f.operator, "Team money, not in any total")}
       ${sum("fm-x", "Not working", f.notWorking, "Outside Base, never in Value held")}
-      ${sum("fm-t", "Total including not working", f.total, f.partial ? "A floor: some figures are unread or unpriced" : "")}
+      ${sum("fm-t", "Total including not working", f.total, f.partial ? "User money only. A floor: some figures are unread or unpriced" : "User money only: working + Safe gas + not working")}
     </dl>
     ${f.chains.map((c) => chainBlock(c, f)).join("")}
-    <p class="fm-note">Shares are of the total including not working. Dashed bars are money outside Base that earns nothing.</p>
+    <p class="fm-note">Shares are of user money (working, Safe gas, not working). Operator relayers are team gas and sit outside every total and share. Dashed bars are money outside Base that earns nothing.</p>
   </section>`;
 }
