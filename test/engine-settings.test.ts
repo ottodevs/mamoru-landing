@@ -476,6 +476,20 @@ describe('/ops never drops settings it has no field for (otto/mamoru#218)', () =
     expect(s.rerange).toEqual(LAZY)
   })
 
+  test('a canary edit keeps what its accounts run: the canary in effect when they are all in it, else env-wide', async () => {
+    const db = memoryDb()
+    const A = '11111111-aaaa-4bbb-8ccc-00000000000a'
+    const B = '11111111-aaaa-4bbb-8ccc-00000000000b'
+    const EAGER2 = { mode: 'eager', maxPerWeek: 2 }
+    await seed(db, { env: 'prod', accountKeys: null, template: 'wide lazy', settings: WITH_LAZY, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: [A], template: 'canary eager', settings: { ...DEFAULT_SETTINGS, rerange: EAGER2 } as unknown as EngineSettings, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: [A], template: 'canary edit', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    const newest = async () => (await listVersions(db))![0].settings as unknown as Record<string, unknown>
+    expect((await newest()).rerange).toEqual(EAGER2)
+    await seed(db, { env: 'prod', accountKeys: [A, B], template: 'wider canary', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    expect((await newest()).rerange).toEqual(LAZY)
+  })
+
   test('only the same env is a source, and a rollback writes its target as is', async () => {
     const db = memoryDb()
     const plain = await seed(db, { env: 'prod', accountKeys: null, template: 'plain', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
