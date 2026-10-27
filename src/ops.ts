@@ -729,7 +729,7 @@ export function renderDocument(
 ): string {
   const chrome = opts.chrome !== false && Boolean(opts.csrf);
   const who = chrome
-    ? `<form class="ops-who" method="post" action="/ops/logout">${csrfField(opts.csrf ?? "")}${opts.who ? `<span>${esc(opts.who)}</span>` : ""}<button class="link" type="submit">Sign out</button></form>`
+    ? `<form class="ops-who" method="post" action="/ops/logout">${csrfField(opts.csrf ?? "")}${opts.who ? `<span>${esc(maskEmail(opts.who))}</span>` : ""}<button class="link" type="submit">Sign out</button></form>`
     : "";
   const brand = chrome
     ? `<a class="ops-brand" href="/ops" data-section-home aria-label="Mamoru ops, overview"><img src="/mark-two-stones.png" width="28" height="28" alt="" /><span>Mamoru</span></a>`

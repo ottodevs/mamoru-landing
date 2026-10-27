@@ -595,6 +595,12 @@ const NEVER: InfraSnapshot = {
 describe("ops-infra.ts render", () => {
   const render = (reading: InfraReading) => renderInfra({ reading, csrf: "csrf-token", nonce: "nonce-abc", who: "ot@example.com" });
 
+  test("the header shows the session email masked, so a screenshot can be shared", () => {
+    const html = render({ snapshot: HEALTHY });
+    expect(html).not.toContain("ot@example.com");
+    expect(html).toContain("<span>o•••@ex•••.com</span>");
+  });
+
   test("healthy: the relayer leads, status in words, cost ledger, accounts, and no leftovers", () => {
     const html = render({ snapshot: HEALTHY });
     expect(html).toContain("<h1>Funding</h1>");

@@ -8,7 +8,7 @@
 import type { FlagChangeRow } from "./ops-flags-store";
 import { OPS_FLAG_NAMES, OPS_FLAGS, type OpsFlagName } from "./ops-flags-model";
 import { fmtDateUtc, fmtRelative } from "./ops-format";
-import { csrfField, noticeHtml, pageHead, type SectionView } from "./ops";
+import { csrfField, maskEmail, noticeHtml, pageHead, type SectionView } from "./ops";
 import { esc } from "./text";
 
 function pill(enabled: boolean): string {
@@ -17,7 +17,7 @@ function pill(enabled: boolean): string {
 
 function lastChange(row: FlagChangeRow | undefined): string {
   if (!row) return `<span class="dim">No change recorded. Off by default.</span>`;
-  return `${esc(row.author)}<br><span class="dim">${esc(fmtDateUtc(row.createdAt))} · ${esc(row.reason)}</span>`;
+  return `${esc(maskEmail(row.author))}<br><span class="dim">${esc(fmtDateUtc(row.createdAt))} · ${esc(row.reason)}</span>`;
 }
 
 function toggleForm(csrf: string, flag: OpsFlagName, enabled: boolean): string {
@@ -54,7 +54,7 @@ function historyBlock(rows: readonly FlagChangeRow[]): string {
   if (!rows.length) return `<section aria-labelledby="fn-hist"><h2 id="fn-hist">History</h2><p class="empty">No change written yet. Every flag runs off.</p></section>`;
   const body = rows
     .map(
-      (r) => `<tr><td>${esc(OPS_FLAGS[r.flag as OpsFlagName]?.label ?? r.flag)}</td><td>${pill(r.enabled)}</td><td>${esc(r.author)}<br><span class="dim">${esc(fmtDateUtc(r.createdAt))}</span></td><td>${esc(r.reason)}</td></tr>`,
+      (r) => `<tr><td>${esc(OPS_FLAGS[r.flag as OpsFlagName]?.label ?? r.flag)}</td><td>${pill(r.enabled)}</td><td>${esc(maskEmail(r.author))}<br><span class="dim">${esc(fmtDateUtc(r.createdAt))}</span></td><td>${esc(r.reason)}</td></tr>`,
     )
     .join("");
   return `<section aria-labelledby="fn-hist"><h2 id="fn-hist">History</h2>

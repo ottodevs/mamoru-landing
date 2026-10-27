@@ -4,7 +4,7 @@
 // without script every chart still has its figures in a <details> table.
 import { type ConsoleEnv, type ConsoleModel, type AccountYield, type AccountCap, capNow, money, pct, poolLabel } from "./console-data";
 import { capSourceWords, DEFAULT_CAP_USDC, usdc } from "./account-cap-model";
-import { csrfField, type SectionId, type SectionView } from "./ops";
+import { csrfField, maskEmail, type SectionId, type SectionView } from "./ops";
 import { esc } from "./text";
 
 const int = (n: number) => n.toLocaleString("en-US");
@@ -135,7 +135,7 @@ function capLines(m: ConsoleModel, c: AccountCap): string[] {
   const out: string[] = [];
   const a = c.authorization;
   const o = c.override;
-  const asked = o ? `${o.capUsdc == null ? "Back to the general cap" : `Its own cap of ${usdc(o.capUsdc)}`}, set by ${o.author} on ${timeLabel(o.createdAt)}: ${o.reason}` : null;
+  const asked = o ? `${o.capUsdc == null ? "Back to the general cap" : `Its own cap of ${usdc(o.capUsdc)}`}, set by ${maskEmail(o.author)} on ${timeLabel(o.createdAt)}: ${o.reason}` : null;
   if (asked) out.push(asked);
   if (!a) return out;
   const reportedAfter = m.operator && o ? m.operator.generatedAt >= o.createdAt : false;
@@ -200,7 +200,7 @@ function ownCapsSheet(m: ConsoleModel, drawerKeys: Set<string>): string {
     const a = c.authorization;
     const running = a?.capUsdc != null ? `${usdc(a.capUsdc)}, ${a.capSource ? capSourceWords(a.capSource) : "source not reported"}` : a ? "cap not reported" : m.caps.reported && m.caps.complete ? "no approval reported" : "not reported yet";
     const keyHtml = drawerKeys.has(c.key) ? `<button type="button" class="c-linkish" data-account="${esc(c.key)}">${esc(c.key)}</button>` : `<span class="c-mono">${esc(c.key)}</span>`;
-    return `<li>${keyHtml}<div><b>${esc(usdc(o.capUsdc!))} asked</b><span>${esc(`runs ${running}`)}${c.env !== "prod" ? ` · ${esc(c.env)}` : ""}</span><span>${esc(`${o.author}, ${timeLabel(o.createdAt)}`)}</span></div>${!a && m.caps.reported && m.caps.complete ? chip("No approval") : a?.capUsdc == null ? chip("Not reported") : a.capSource === "override" && a.capUsdc === o.capUsdc ? chip("In effect", "good") : chip("Not in effect", "warn")}</li>`;
+    return `<li>${keyHtml}<div><b>${esc(usdc(o.capUsdc!))} asked</b><span>${esc(`runs ${running}`)}${c.env !== "prod" ? ` · ${esc(c.env)}` : ""}</span><span>${esc(`${maskEmail(o.author)}, ${timeLabel(o.createdAt)}`)}</span></div>${!a && m.caps.reported && m.caps.complete ? chip("No approval") : a?.capUsdc == null ? chip("Not reported") : a.capSource === "override" && a.capUsdc === o.capUsdc ? chip("In effect", "good") : chip("Not in effect", "warn")}</li>`;
   };
   return sheet("Accounts with their own cap", `${own.length} account${own.length === 1 ? "" : "s"} above or below the general cap`, `<ul class="c-feed c-owncaps">${own.map(row).join("")}</ul>`);
 }
