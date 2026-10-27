@@ -217,7 +217,7 @@ function funnelSection(o: Overview): string {
 const STATUS_COPY = { ok: "OK", low: "Low", empty: "Empty" } as const;
 
 function runwaySection(o: Overview): string {
-  const link = `<a href="/ops/infra">Infra and costs</a>`;
+  const link = `<a href="/ops/money/funding">Funding</a>`;
   if (!o.relayer) {
     return `<section class="sec full" style="--s:0ms">
       <div class="sec-head"><h2>Relayer runway</h2>${link}</div>
