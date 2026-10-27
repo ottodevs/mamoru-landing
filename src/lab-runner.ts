@@ -9,6 +9,7 @@ import {
   agentThreadHistory,
   claimJobById,
   failExhaustedLeases,
+  citedRunIdsOfAnswer,
   finishAgentJobDone,
   finishJobDoneWithRun,
   finishJobFailed,
@@ -97,11 +98,16 @@ async function handleHeartbeat(db: D1Db, body: unknown): Promise<Response> {
  * The agent half of `/ops/lab/runner/result` (otto/mamoru-astro#30, AL-21): stores the verified answer/
  * verifier/cost and the job's citable runs in one fenced batch (`finishAgentJobDone`). `runHashes` were all
  * POSTed to `/publish` earlier in the job (coordinator note), so citing a hash not yet in `lab_runs` is the
- * runner's own bug, not a race -- refused whole with `LAB_RUN_MISSING`, nothing written.
+ * runner's own bug, not a race -- refused whole with `LAB_RUN_MISSING`, nothing written. A block citing a run
+ * outside `runHashes` is refused the same way with `LAB_ANSWER_UNCITED`.
  */
 async function handleAgentResult(db: D1Db, b: { id: string; leaseId: string; answer?: unknown; verifier?: unknown; cost?: unknown; runHashes?: unknown }, nowIso: string): Promise<Response> {
   if (!b.answer || typeof b.answer !== "object") return json({ error: "LAB_RUNNER_BAD_BODY" }, 400);
   if (!Array.isArray(b.runHashes) || !b.runHashes.every((h) => typeof h === "string")) return json({ error: "LAB_RUNNER_BAD_BODY" }, 400);
+  // AL-21: every run the answer's claim/verdict/chart blocks cite must be among this result's own `runHashes`
+  // (which `finishAgentJobDone` then records in `lab_job_runs`). Refused whole, nothing written.
+  const declared = new Set(b.runHashes as string[]);
+  if (citedRunIdsOfAnswer(b.answer).some((h) => !declared.has(h))) return json({ error: "LAB_ANSWER_UNCITED" }, 409);
   const result = await finishAgentJobDone(db, {
     id: b.id,
     leaseId: b.leaseId,
