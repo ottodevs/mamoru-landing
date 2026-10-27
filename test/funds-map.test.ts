@@ -36,7 +36,7 @@ describe("buildFundsMap", () => {
     expect(out.kind).toBe("outside");
     expect(out.accounts).toBe(1);
     expect(out.note).toContain("0.0554 ETH");
-    expect(m.total).toBeCloseTo(m.working + m.reserve + m.operator + m.notWorking, 6);
+    expect(m.total).toBeCloseTo(m.working + m.reserve + m.notWorking, 6);
     expect(find(m, "Base", "gas")!.usd).toBeCloseTo(2, 6);
     expect(find(m, "Base", "relayer")!.usd).toBe(20);
     expect(find(m, "Ethereum", "relayer")!.usd).toBeCloseTo(6, 6);
@@ -81,5 +81,22 @@ describe("buildFundsMap", () => {
     expect(html).toContain("Total including not working");
     expect(html).toContain('href="/ops/accounts"');
     expect(html).toContain("Not working</span>");
+  });
+
+  test("operator relayers never enter totals, chain totals, shares or bars", () => {
+    const rows = [row({ lpUsd: 10, usdcIdle: 5, ethBalance: 0.001 })];
+    const withRelayers = buildFundsMap(snap(), rows);
+    const without = buildFundsMap({ ethUsd: 2000, relayer: null }, rows);
+    expect(withRelayers.operator).toBeGreaterThan(0);
+    expect(withRelayers.total).toBeCloseTo(without.total, 9);
+    expect(withRelayers.total).toBeCloseTo(17, 6);
+    for (const name of ["Base", "Ethereum"]) {
+      expect(withRelayers.chains.find((c) => c.name === name)!.usd).toBeCloseTo(without.chains.find((c) => c.name === name)?.usd ?? 0, 9);
+    }
+    const html = renderFundsMap(withRelayers);
+    const team = html.split('class="fm-team"')[1].split("</tbody>")[0];
+    expect(team).not.toMatch(/\d+\.\d%/);
+    expect(html.split("fm-team")[0]).not.toContain("Operator (team gas)</td>");
+    expect(html).toContain("team gas");
   });
 });
