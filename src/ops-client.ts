@@ -1650,7 +1650,6 @@ export function opsClientScript(nonce: string): string {
       // can never overwrite the selected thread.
       var myGen = ++askGen;
       clearTimeout(askTimer);
-      state.askSending = false;
       state.askThreadId = id || null;
       state.askJobs = [];
       state.askRuns = {};
@@ -1702,9 +1701,18 @@ export function opsClientScript(nonce: string): string {
       var body = new URLSearchParams({ csrf: csrf, question: q, threadId: state.askThreadId || "", windowId: (w && w.windowId) || "" }).toString();
       api("/ops/lab/api/ask", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: body })
         .then(function (r) {
-          if (askGen !== myGen) return;
+          // The POST has settled: the send button re-enables whether or not the viewer switched threads meanwhile.
           state.askSending = false;
-          if (!r.ok || !r.body || !r.body.job) {
+          var ok = r.ok && r.body && r.body.job;
+          if (askGen !== myGen) {
+            // The viewer switched thread / pressed "Nuevo hilo" while this was in flight. A created thread must
+            // still show up in the picker (its pending job is reachable by selecting it); only the transcript
+            // render is skipped because that thread is no longer the selected one.
+            if (ok) loadAskThreads();
+            renderAskForm();
+            return;
+          }
+          if (!ok) {
             state.askError = LAB.askSendErrorText((r.body && r.body.error) || "LAB_NETWORK");
             renderAskForm();
             return;
@@ -1722,8 +1730,8 @@ export function opsClientScript(nonce: string): string {
           pollAskThread(myGen);
         })
         .catch(function () {
-          if (askGen !== myGen) return;
           state.askSending = false;
+          if (askGen !== myGen) { renderAskForm(); return; }
           state.askError = LAB.askSendErrorText("LAB_NETWORK");
           renderAskForm();
         });

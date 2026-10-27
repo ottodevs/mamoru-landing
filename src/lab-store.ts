@@ -653,13 +653,13 @@ export interface AgentJobRow {
   updatedAt: string;
 }
 
-/** AL-50: a thread's turns, oldest first (a chat transcript reads top to bottom). */
-export async function agentJobsByThread(db: D1Db, threadId: string): Promise<AgentJobRow[]> {
+/** AL-50: a thread's latest `limit` turns, oldest first (a chat transcript reads top to bottom); `truncated` when older turns were cut. */
+export async function agentJobsByThread(db: D1Db, threadId: string, limit = 50): Promise<{ jobs: AgentJobRow[]; truncated: boolean }> {
   const { results } = await db
     .prepare(
-      "SELECT id, question, status, answer_json, verifier_json, cost_json, error_code, created_at, updated_at FROM lab_jobs WHERE thread_id = ? AND kind = 'agent' ORDER BY created_at ASC",
+      "SELECT id, question, status, answer_json, verifier_json, cost_json, error_code, created_at, updated_at FROM lab_jobs WHERE thread_id = ? AND kind = 'agent' ORDER BY created_at DESC LIMIT ?",
     )
-    .bind(threadId)
+    .bind(threadId, limit + 1)
     .all<{
       id: string;
       question: string | null;
@@ -671,7 +671,9 @@ export async function agentJobsByThread(db: D1Db, threadId: string): Promise<Age
       created_at: string;
       updated_at: string;
     }>();
-  return results.map((r) => ({
+  const truncated = results.length > limit;
+  const rows = results.slice(0, limit).reverse();
+  const jobs = rows.map((r) => ({
     id: r.id,
     question: r.question ?? "",
     status: r.status,
@@ -682,6 +684,7 @@ export async function agentJobsByThread(db: D1Db, threadId: string): Promise<Age
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }));
+  return { jobs, truncated };
 }
 
 /** The runner claim contract's `history` (AL-03): earlier *done* turns of the thread, oldest first, with their
@@ -711,31 +714,82 @@ export async function runSummaryByHash(db: D1Db, hash: string): Promise<LabRunSu
   }
 }
 
-/** Every run hash one answer block cites (claim/verdict `runId`, a verdict's `against` when it is another run,
- * chart `runIds`). Text/caveat blocks cite nothing. */
-export function citedRunIdsOfBlock(raw: unknown): string[] {
+const VERIFIED_BLOCK_TYPES = new Set(["claim", "verdict", "chart"]);
+
+/**
+ * The run hashes one answer block cites, or `null` when the block is a verified kind (claim/verdict/chart)
+ * whose citation is missing or malformed (`runId` / `against` not a non-empty string, `runIds` not a non-empty
+ * array of non-empty strings). A verified block with no citable run is never valid. `against` of "hold"/"usdc"
+ * is a baseline, not a hash. Text/caveat blocks cite nothing (`[]`).
+ */
+export function citedRunIdsOfBlock(raw: unknown): string[] | null {
   const b = (raw ?? {}) as Record<string, unknown>;
+  const str = (v: unknown): v is string => typeof v === "string" && v.length > 0;
+  if (b.type === "claim") return str(b.runId) ? [b.runId] : null;
+  if (b.type === "verdict") {
+    if (!str(b.runId) || !str(b.against)) return null;
+    return b.against === "hold" || b.against === "usdc" ? [b.runId] : [b.runId, b.against];
+  }
+  if (b.type === "chart") {
+    if (!Array.isArray(b.runIds) || b.runIds.length === 0 || !b.runIds.every(str)) return null;
+    return b.runIds as string[];
+  }
+  return [];
+}
+
+export function isVerifiedBlockType(raw: unknown): boolean {
+  return VERIFIED_BLOCK_TYPES.has(((raw ?? {}) as { type?: unknown }).type as string);
+}
+
+/** Citations of a whole answer; `null` when any block's citation is malformed (see `citedRunIdsOfBlock`). */
+export function citedRunIdsOfAnswer(answer: unknown): string[] | null {
+  const blocks = (answer as { blocks?: unknown } | null)?.blocks;
+  if (!Array.isArray(blocks)) return [];
   const out: string[] = [];
-  if (b.type === "claim" && typeof b.runId === "string") out.push(b.runId);
-  else if (b.type === "verdict") {
-    if (typeof b.runId === "string") out.push(b.runId);
-    if (typeof b.against === "string" && b.against !== "hold" && b.against !== "usdc") out.push(b.against);
-  } else if (b.type === "chart" && Array.isArray(b.runIds)) {
-    for (const r of b.runIds) if (typeof r === "string") out.push(r);
+  for (const blk of blocks) {
+    const c = citedRunIdsOfBlock(blk);
+    if (c === null) return null;
+    out.push(...c);
   }
   return out;
 }
 
-export function citedRunIdsOfAnswer(answer: unknown): string[] {
-  const blocks = (answer as { blocks?: unknown } | null)?.blocks;
-  if (!Array.isArray(blocks)) return [];
-  return blocks.flatMap(citedRunIdsOfBlock);
+const IN_CHUNK = 50;
+
+/** AL-21: the runs a job's answer may cite are exactly its `lab_job_runs` rows, never "any run that exists".
+ * One query per chunk of 50 jobs (so one query for a normal, capped transcript). */
+export async function recordedRunHashesForJobs(db: D1Db, jobIds: string[]): Promise<Map<string, Set<string>>> {
+  const out = new Map<string, Set<string>>();
+  for (const id of jobIds) out.set(id, new Set());
+  for (let i = 0; i < jobIds.length; i += IN_CHUNK) {
+    const chunk = jobIds.slice(i, i + IN_CHUNK);
+    const { results } = await db
+      .prepare(`SELECT job_id, result_hash FROM lab_job_runs WHERE job_id IN (${chunk.map(() => "?").join(",")})`)
+      .bind(...chunk)
+      .all<{ job_id: string; result_hash: string }>();
+    for (const r of results) out.get(r.job_id)?.add(r.result_hash);
+  }
+  return out;
 }
 
-/** AL-21: the runs a job's answer may cite are exactly its `lab_job_runs` rows, never "any run that exists". */
-export async function recordedRunHashesForJob(db: D1Db, jobId: string): Promise<Set<string>> {
-  const { results } = await db.prepare("SELECT result_hash FROM lab_job_runs WHERE job_id = ?").bind(jobId).all<{ result_hash: string }>();
-  return new Set(results.map((r) => r.result_hash));
+/** Summaries for many hashes, chunked `IN` queries instead of one query per hash. */
+export async function runSummariesByHashes(db: D1Db, hashes: string[]): Promise<Record<string, LabRunSummary>> {
+  const out: Record<string, LabRunSummary> = {};
+  for (let i = 0; i < hashes.length; i += IN_CHUNK) {
+    const chunk = hashes.slice(i, i + IN_CHUNK);
+    const { results } = await db
+      .prepare(`SELECT result_hash, summary_json FROM lab_runs WHERE result_hash IN (${chunk.map(() => "?").join(",")})`)
+      .bind(...chunk)
+      .all<{ result_hash: string; summary_json: string }>();
+    for (const r of results) {
+      try {
+        out[r.result_hash] = JSON.parse(r.summary_json) as LabRunSummary;
+      } catch {
+        /* unparsable summary: treated as absent */
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -821,15 +875,23 @@ export type ShadowPriceTable = {
  * config table with a date"). Returns `null` when nothing is configured yet, so callers can treat "shadow
  * cost" as simply absent rather than zero (coordinator: "shadow cost if present").
  */
-export async function loadShadowPriceTable(db: D1Db, asOfIso: string): Promise<ShadowPriceTable | null> {
+export type ShadowPriceRow = { resource: string; unit: string; usd: number; valid_from: string };
+
+/** All price rows with `valid_from <= uptoIso`, ascending: one query, then `shadowPriceTableAt` picks per job. */
+export async function loadShadowPriceRows(db: D1Db, uptoIso: string): Promise<ShadowPriceRow[]> {
   const { results } = await db
     .prepare("SELECT resource, unit, usd, valid_from FROM lab_prices WHERE valid_from <= ? ORDER BY valid_from ASC")
-    .bind(asOfIso)
-    .all<{ resource: string; unit: string; usd: number; valid_from: string }>();
-  if (!results.length) return null;
+    .bind(uptoIso)
+    .all<ShadowPriceRow>();
+  return results;
+}
+
+/** Pure: for each (resource, unit) the latest row with `valid_from <= asOfIso` (rows ascending); `null` when none. */
+export function shadowPriceTableAt(rows: ShadowPriceRow[], asOfIso: string): ShadowPriceTable | null {
   // Later rows (ASC order) overwrite earlier ones for the same (resource, unit): "the latest row <= asOf" wins.
   const latest = new Map<string, number>();
-  for (const r of results) latest.set(`${r.resource}|${r.unit}`, r.usd);
+  for (const r of rows) if (r.valid_from <= asOfIso) latest.set(`${r.resource}|${r.unit}`, r.usd);
+  if (!latest.size) return null;
   const table: ShadowPriceTable = { models: {}, computeUsdPerCpuMs: 0, dataUsdPerJob: 0, settlementUsdPerJob: 0 };
   for (const [key, usd] of latest) {
     const [resource, unit] = key.split("|");
@@ -844,6 +906,10 @@ export async function loadShadowPriceTable(db: D1Db, asOfIso: string): Promise<S
     }
   }
   return table;
+}
+
+export async function loadShadowPriceTable(db: D1Db, asOfIso: string): Promise<ShadowPriceTable | null> {
+  return shadowPriceTableAt(await loadShadowPriceRows(db, asOfIso), asOfIso);
 }
 
 export type CostMeterLike = {

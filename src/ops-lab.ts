@@ -28,13 +28,14 @@ import {
   insertQueuedJobIfEligible,
   insertThreadWithQueuedAgentJobIfEligible,
   citedRunIdsOfBlock,
-  recordedRunHashesForJob,
+  recordedRunHashesForJobs,
+  runSummariesByHashes,
+  loadShadowPriceRows,
+  shadowPriceTableAt,
   jobById,
-  loadShadowPriceTable,
   readCatalog,
   runByHash,
   runSummariesForWindow,
-  runSummaryByHash,
   shadowCostUsd,
   threadById,
   threadsByOwner,
@@ -255,46 +256,44 @@ export async function handleLabThreads(db: D1Db | undefined, owner: string): Pro
   return json({ threads: await threadsByOwner(db, owner) });
 }
 
+const MAX_THREAD_TURNS = 50;
+
 export async function handleLabThread(db: D1Db | undefined, owner: string, id: string): Promise<Response> {
   if (!db) return json({ error: "LAB_THREAD_NOT_FOUND" }, 404);
   const thread = await threadById(db, id);
   if (!thread || thread.owner !== owner) return json({ error: "LAB_THREAD_NOT_FOUND" }, 404);
-  const rawJobs = await agentJobsByThread(db, id);
+  const { jobs: rawJobs, truncated } = await agentJobsByThread(db, id, MAX_THREAD_TURNS);
   // AL-21: a job's answer may only show runs recorded for THAT job in `lab_job_runs`. A block citing any other
-  // hash (even one that exists in `lab_runs`) is dropped, never rendered as a verified figure; `droppedBlocks`
-  // tells the client the answer is partial.
-  const runs: Record<string, Awaited<ReturnType<typeof runSummaryByHash>>> = {};
-  const jobs: (AgentJobRow & { droppedBlocks: number })[] = [];
-  for (const job of rawJobs) {
+  // hash, or a verified block with no valid citation at all, is dropped -- never rendered as a verified figure;
+  // `droppedBlocks` tells the client the answer is partial. A constant number of D1 queries: one for all the
+  // jobs' recorded runs, one for the cited run summaries, one for the price rows (plus thread + jobs).
+  const recorded = await recordedRunHashesForJobs(db, rawJobs.map((j) => j.id));
+  const wanted = new Set<string>();
+  const jobs: (AgentJobRow & { droppedBlocks: number })[] = rawJobs.map((job) => {
     let droppedBlocks = 0;
     let answer = job.answer;
     const blocks = (job.answer as { blocks?: unknown } | null)?.blocks;
     if (Array.isArray(blocks)) {
-      const allowed = await recordedRunHashesForJob(db, job.id);
-      const kept = blocks.filter((blk) => citedRunIdsOfBlock(blk).every((h) => allowed.has(h)));
+      const allowed = recorded.get(job.id) ?? new Set<string>();
+      const kept = blocks.filter((blk) => {
+        const cites = citedRunIdsOfBlock(blk);
+        return cites !== null && cites.every((h) => allowed.has(h));
+      });
       droppedBlocks = blocks.length - kept.length;
       if (droppedBlocks) answer = { ...(job.answer as object), blocks: kept };
-      for (const blk of kept) {
-        for (const hash of citedRunIdsOfBlock(blk)) {
-          if (hash in runs) continue;
-          const summary = await runSummaryByHash(db, hash);
-          if (summary) runs[hash] = summary;
-        }
-      }
+      for (const blk of kept) for (const h of citedRunIdsOfBlock(blk) ?? []) wanted.add(h);
     }
-    jobs.push({ ...job, answer, droppedBlocks });
-  }
+    return { ...job, answer, droppedBlocks };
+  });
+  const runs = await runSummariesByHashes(db, [...wanted]);
   // AL-41 footer, "shadow cost if present": priced with the shadow prices in force when the job was created
-  // (AL-40: latest `valid_from <= created_at`), only when lab_prices has rows and the job's own cost meter
-  // parsed cleanly; otherwise the figure is simply omitted.
-  const priceCache = new Map<string, Awaited<ReturnType<typeof loadShadowPriceTable>>>();
+  // (AL-40: latest `valid_from <= created_at`), picked in memory from one price query; only when lab_prices
+  // has rows and the job's own cost meter parsed cleanly; otherwise the figure is simply omitted.
+  const newest = jobs.reduce((m, j) => (j.createdAt > m ? j.createdAt : m), "");
+  const priceRows = jobs.length ? await loadShadowPriceRows(db, newest) : [];
   const jobsOut = [];
   for (const job of jobs) {
-    let prices = priceCache.get(job.createdAt);
-    if (prices === undefined) {
-      prices = await loadShadowPriceTable(db, job.createdAt);
-      priceCache.set(job.createdAt, prices);
-    }
+    const prices = shadowPriceTableAt(priceRows, job.createdAt);
     let shadowUsd: number | null = null;
     if (prices && job.cost && typeof job.cost === "object") {
       const c = job.cost as { modelCalls?: unknown; runs?: unknown; sweepCpuMs?: unknown };
@@ -308,7 +307,7 @@ export async function handleLabThread(db: D1Db | undefined, owner: string, id: s
     }
     jobsOut.push({ ...job, shadowUsd });
   }
-  return json({ thread, jobs: jobsOut, runs });
+  return json({ thread, jobs: jobsOut, runs, truncated });
 }
 
 /**
