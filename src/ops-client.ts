@@ -1628,7 +1628,9 @@ export function opsClientScript(nonce: string): string {
           if (String(now).toLowerCase() === String(t.chain.hex).toLowerCase()) return false;
           return req("wallet_switchEthereumChain", [{ chainId: t.chain.hex }]).catch(function (err) {
             if (Number(err && err.code) !== 4902 || !t.chain.rpc) throw err;
-            return req("wallet_addEthereumChain", [{ chainId: t.chain.hex, chainName: t.chain.name, nativeCurrency: { name: t.chain.symbol === "ETH" ? "Ether" : t.chain.name, symbol: t.chain.symbol, decimals: 18 }, rpcUrls: [t.chain.rpc], blockExplorerUrls: [t.chain.explorerUrl] }]);
+            // Adding a chain does not make it active (EIP-3085): ask for the switch again once it is known.
+            return req("wallet_addEthereumChain", [{ chainId: t.chain.hex, chainName: t.chain.name, nativeCurrency: { name: t.chain.symbol === "ETH" ? "Ether" : t.chain.name, symbol: t.chain.symbol, decimals: 18 }, rpcUrls: [t.chain.rpc], blockExplorerUrls: [t.chain.explorerUrl] }])
+              .then(function () { return req("wallet_switchEthereumChain", [{ chainId: t.chain.hex }]); });
           }).then(function () { return true; });
         });
       }
@@ -1660,8 +1662,10 @@ export function opsClientScript(nonce: string): string {
           a.textContent = " " + t.chain.explorerName;
           st.appendChild(a);
           return receipt(String(hash), 0).then(function (ok) {
+            // No receipt is not "not sent": the transfer was broadcast and may still land, so it is never offered again.
             if (ok === true) setPhase(row, "confirmed", L.formatEth(step.amount) + " " + t.chain.symbol);
-            else setPhase(row, "failed", ok === false ? "included but reverted, nothing arrived" : "no receipt yet; check " + t.chain.explorerName + " before sending again");
+            else if (ok === false) setPhase(row, "failed", "included but reverted, nothing arrived");
+            else setPhase(row, "unknown", "check " + t.chain.explorerName + " before sending anything again");
             row.querySelector(".fp-state").appendChild(a);
             return "next";
           });
@@ -1677,11 +1681,24 @@ export function opsClientScript(nonce: string): string {
         var phases = [];
         for (var i = 0; i < plan.length; i++) phases.push(rowOf(plan[i].id).getAttribute("data-phase"));
         var s = P.summary(phases);
-        setLine(s.text + (s.tone === "good" || s.tone === "warn" ? " The balances above refresh in a moment." : ""), s.tone);
-        sendBtn.disabled = false;
-        sendBtn.textContent = "Send again";
+        // What went out (arrived or not yet confirmed) is unticked, so a second run never repeats it.
+        var unknown = false, anySent = false;
+        for (var j = 0; j < plan.length; j++) {
+          var row = rowOf(plan[j].id), ph = row.getAttribute("data-phase");
+          if (ph === "confirmed" || ph === "unknown") { row.querySelector('input[type="checkbox"]').checked = false; anySent = true; }
+          if (ph === "unknown") unknown = true;
+        }
         main.removeAttribute("data-busy");
-        if (s.tone === "good" || s.tone === "warn") timers.push(setTimeout(function () { if (alive) Shell.refresh("/ops/infra?fresh=1"); }, 3500));
+        if (unknown) {
+          // Nothing more from this page until a fresh reading shows where the pending transfer landed.
+          setLine(s.text + " Refresh the page once the explorer shows it, before sending anything else.", s.tone);
+          sendBtn.disabled = true;
+          sendBtn.textContent = "Send";
+          return;
+        }
+        setLine(s.text + (anySent ? " The balances above refresh in a moment." : ""), s.tone);
+        paint();
+        if (anySent) timers.push(setTimeout(function () { if (alive) Shell.refresh("/ops/infra?fresh=1"); }, 3500));
       }
       function run() {
         var plan = planned();
