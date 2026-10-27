@@ -1,6 +1,6 @@
 /** Builds the /ops overview model from the Infra snapshot plus D1 history. The build step is pure. */
 
-import { buildFundsMap, type FundsMap } from "./funds-map";
+import { buildFundsMap, type FundsMap, outsideRowsOf } from "./funds-map";
 import { type OutsideSummary, summarizeOutside } from "./outside-base";
 import { type AccountFilter, DEFAULT_FILTER, type GroupBy, usesLegacyHistory } from "./account-filter";
 import type { RelayerStatus } from "./cost";
@@ -244,7 +244,7 @@ export function buildOverview(snapshot: InfraSnapshot, inputs: OverviewInputs, n
     tvl,
     idle,
     lp,
-    outside: summarizeOutside(rows),
+    outside: summarizeOutside(outsideRowsOf(rows)),
     funds: buildFundsMap(snapshot, rows),
     firstSignup: growth[0]?.day ?? null,
     changes: {

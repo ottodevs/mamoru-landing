@@ -60,7 +60,7 @@ export const MONAD_ID = 143;
 /** Only these chains enter the map. Testnets (10143, 84532, 11155111) and unknown ids are counted apart, never mapped. */
 const MAPPED = new Set([BASE_ID, ETHEREUM_ID, MONAD_ID]);
 
-type Row = Pick<AccountView, "chainId" | "usdcIdle" | "lpUsd" | "ethBalance" | "positions" | "outside"> & { unread?: boolean; address?: string };
+export type Row = Pick<AccountView, "chainId" | "usdcIdle" | "lpUsd" | "ethBalance" | "positions" | "outside" | "unread" | "address">;
 
 const chainName = (id: number): string => (id === BASE_ID ? "Base" : id === ETHEREUM_ID ? "Ethereum" : id === MONAD_ID ? "Monad" : `Chain ${id}`);
 const canonical = (id: number): number => id;
@@ -79,6 +79,34 @@ function wei(snapshot: Pick<InfraSnapshot, "funding">, id: string): number | nul
 
 function fmtNative(n: number, symbol: string): string {
   return `${n.toFixed(n < 0.001 ? 6 : n < 100 ? 4 : 2)} ${symbol}`;
+}
+
+/**
+ * The rows whose Ethereum balance counts as "outside Base, not working", used by the map AND the headline figure
+ * so they can never disagree. Safes share one address across chains: a row at an address that also has a chain-1
+ * row is already working money on Ethereum, and several rows at one address are one L1 balance, counted once.
+ * Only mapped chains (Base, Ethereum, Monad) take part: testnet and unknown-chain rows are left out.
+ */
+export function outsideRowsOf<T extends Pick<Row, "chainId" | "address" | "outside">>(all: readonly T[]): T[] {
+  const rows = all.filter((r) => MAPPED.has(r.chainId));
+  const l1Addresses = new Set(rows.filter((r) => r.chainId === ETHEREUM_ID && r.address).map((r) => r.address.toLowerCase()));
+  const outsideRows: T[] = [];
+  const seen = new Map<string, number>();
+  for (const r of rows) {
+    if (r.chainId === ETHEREUM_ID) continue;
+    const a = r.address?.toLowerCase();
+    if (!a) {
+      outsideRows.push(r);
+      continue;
+    }
+    if (l1Addresses.has(a)) continue;
+    const at = seen.get(a);
+    if (at === undefined) {
+      seen.set(a, outsideRows.length);
+      outsideRows.push(r);
+    } else if (!outsideRows[at].outside && r.outside) outsideRows[at] = r;
+  }
+  return outsideRows;
 }
 
 export function buildFundsMap(
@@ -129,31 +157,13 @@ export function buildFundsMap(
       usd: priced ? gasEth * ethUsd : gasEth === 0 ? 0 : null,
       accounts: rs.filter((r) => positive(r.ethBalance)).length,
       note: gasEth > 0 ? fmtNative(gasEth, symbol) + (priced ? "" : ", not priced") : "",
-      atLeast: false,
+      atLeast: rs.some((r) => r.unread === true),
     });
   }
 
   // Outside: Ethereum balances at the account addresses.
   // Accounts that live on Ethereum are working money there; their own address is not "outside" (no double count).
-  // Safes share one address across chains, so an L1 balance read for a Base row is the same money as a chain-1 row
-  // at that address (already counted as working), and several rows at one address are one L1 balance, counted once.
-  const l1Addresses = new Set(rows.filter((r) => r.chainId === ETHEREUM_ID && r.address).map((r) => r.address!.toLowerCase()));
-  const outsideRows: Row[] = [];
-  const seen = new Map<string, number>();
-  for (const r of rows) {
-    if (r.chainId === ETHEREUM_ID) continue;
-    const a = r.address?.toLowerCase();
-    if (!a) {
-      outsideRows.push(r);
-      continue;
-    }
-    if (l1Addresses.has(a)) continue;
-    const at = seen.get(a);
-    if (at === undefined) {
-      seen.set(a, outsideRows.length);
-      outsideRows.push(r);
-    } else if (!outsideRows[at].outside && r.outside) outsideRows[at] = r;
-  }
+  const outsideRows = outsideRowsOf(allRows);
   const out = summarizeOutside(outsideRows);
   put(ETHEREUM_ID, {
     id: "outside",
@@ -372,7 +382,7 @@ export function renderFundsMap(f: FundsMap): string {
     <dl class="fm-sum">
       ${sum("fm-w", "Working (Value held)", aggregate(f, ["working"], "Positions and idle USDC"))}
       ${sum("fm-r", "Gas in the Safes", aggregate(f, ["reserve"], "Not part of Value held"))}
-      ${sum("fm-o", "Operator relayers (team gas)", f.operator, "Team money, not in any total")}
+      ${sum("fm-o", "Operator relayers (team gas)", aggregate(f, ["operator"], "Team money, not in any total"))}
       ${sum("fm-x", "Not working", aggregate(f, ["outside"], "Outside Base, never in Value held"))}
       ${sum("fm-t", "Total including not working", f.partial ? { text: `≥ ${fmtUsd(rest)}`, sub: "User money only. A floor: some figures are unread or unpriced" } : { text: fmtUsd(rest), sub: "User money only: working + Safe gas + not working" })}
     </dl>
