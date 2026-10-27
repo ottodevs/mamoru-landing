@@ -3,6 +3,7 @@
 import { filterQuery } from "./account-filter";
 import { renderBars, renderFunnel, renderTally, renderTimeChart } from "./metrics-charts";
 import { dauSlots, fmtInt, fmtUsd, shortDay } from "./metrics-math";
+import { FUNDS_ANCHOR, renderFundsMap } from "./funds-map";
 import { outsideLine } from "./outside-base";
 import { DAU_DAYS, type Change, type Overview } from "./metrics-overview";
 import { accountFilterBar, pageHead, renderDocument, type SectionView } from "./ops";
@@ -31,8 +32,11 @@ function count(value: number, format: "usd" | "int" | "dec1" = "int"): string {
   return `<span data-n="${value}" data-f="${format}">${esc(text)}</span>`;
 }
 
-function figure(opts: { col: number; lead?: boolean; label: string; value: string; lines: string[] }): string {
-  const lines = opts.lines.filter(Boolean).map((line) => `<span>${esc(line)}</span>`).join("");
+function figure(opts: { col: number; lead?: boolean; label: string; value: string; lines: (string | { html: string })[] }): string {
+  const lines = opts.lines
+    .filter(Boolean)
+    .map((line) => `<span>${typeof line === "string" ? esc(line) : line.html}</span>`)
+    .join("");
   return `<div class="fig${opts.lead ? " lead" : ""}" style="--c:${opts.col};--m:${opts.col - 1}">
     <dt>${esc(opts.label)}</dt>
     <dd class="fig-n">${opts.value}</dd>
@@ -56,7 +60,7 @@ function figures(o: Overview): string {
         ? [
             `${fmtUsd(o.lp)} in positions · ${fmtUsd(o.idle)} idle USDC`,
             changeLine(o.changes.tvl, "usd") || "History starts today",
-            `Outside Base (not working): ${outsideLine(o.outside, fmtUsd)}`,
+            { html: `<a href="#${FUNDS_ANCHOR}">Outside Base (not working): ${esc(outsideLine(o.outside, fmtUsd))}</a>` },
             o.outside.usd !== null && o.outside.unread === 0 && o.outside.read > 0
               ? `Including outside Base: ${fmtUsd(o.tvl + o.outside.usd)}`
               : "",
@@ -254,6 +258,7 @@ export function overviewSection(o: Overview, csrf: string): SectionView {
     ${accountFilterBar({ filter: o.filter, action: "/ops", extra: groupByField(o.filter) })}
     ${notes}
     ${figures(o)}
+    ${o.chainOk ? renderFundsMap(o.funds) : ""}
     <div class="cols">
       ${valueSection(o)}
       ${funnelSection(o)}
