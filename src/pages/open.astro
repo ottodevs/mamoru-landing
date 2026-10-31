@@ -79,7 +79,7 @@ const emailHref = `mailto:${copy.footer.email}`;
   <dialog class="film" id="mamoru-film" aria-label="Video">
     <div class="film-card">
       <button type="button" class="film-close js-film-close" aria-label="Close">Close</button>
-      <video class="js-film-video" controls playsinline preload="none" width="1280" height="720"></video>
+      <video class="js-film-video" autofocus controls playsinline preload="none" width="1280" height="720"></video>
     </div>
   </dialog>
 
@@ -211,37 +211,58 @@ const emailHref = `mailto:${copy.footer.email}`;
   </script>
   <script is:inline>
     // FAQ "Watch" links open the film in a dialog; nothing loads before the click, closing stops it.
+    // mamoru.lol/#watch-<id> (linked from the app) opens the same dialog on arrival; closing it lands on that question.
     (() => {
       const dialog = document.getElementById("mamoru-film");
       const video = dialog && dialog.querySelector(".js-film-video");
       if (!dialog || !video || typeof dialog.showModal !== "function") return;
+      let fromHash = null;
       const stop = () => {
         video.pause();
         video.removeAttribute("src");
         video.textContent = "";
         video.load();
       };
-      document.querySelectorAll(".js-watch").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const id = btn.dataset.film;
-          dialog.setAttribute("aria-label", btn.dataset.title || "Video");
-          video.poster = `/guides/${id}.webp`;
-          video.src = `/guides/${id}.mp4`;
-          const track = document.createElement("track");
-          track.kind = "captions";
-          track.srclang = "en";
-          track.label = "English";
-          track.src = `/guides/${id}.en.vtt`;
-          video.appendChild(track);
-          dialog.showModal();
-          video.play().catch(() => {});
-        });
-      });
+      const open = (btn) => {
+        const id = btn.dataset.film;
+        dialog.setAttribute("aria-label", btn.dataset.title || "Video");
+        video.poster = `/guides/${id}.webp`;
+        video.src = `/guides/${id}.mp4`;
+        const track = document.createElement("track");
+        track.kind = "captions";
+        track.srclang = "en";
+        track.label = "English";
+        track.src = `/guides/${id}.en.vtt`;
+        video.appendChild(track);
+        if (!dialog.open) dialog.showModal();
+        video.play().catch(() => {});
+      };
+      const buttons = [...document.querySelectorAll(".js-watch")];
+      buttons.forEach((btn) => btn.addEventListener("click", () => open(btn)));
+      const fromLocation = () => {
+        const m = /^#watch-([a-z-]+)$/.exec(location.hash);
+        const btn = m && buttons.find((b) => b.dataset.film === m[1]);
+        if (!btn) return;
+        fromHash = btn;
+        open(btn);
+      };
       dialog.querySelector(".js-film-close").addEventListener("click", () => dialog.close());
       dialog.addEventListener("click", (e) => {
         if (e.target === dialog) dialog.close();
       });
-      dialog.addEventListener("close", stop);
+      dialog.addEventListener("close", () => {
+        stop();
+        if (!fromHash) return;
+        const qa = fromHash.closest("details");
+        fromHash = null;
+        history.replaceState(null, "", location.pathname + location.search);
+        if (qa) {
+          qa.open = true;
+          qa.scrollIntoView({ block: "center" });
+        }
+      });
+      window.addEventListener("hashchange", fromLocation);
+      fromLocation();
     })();
   </script>
 </Base>
