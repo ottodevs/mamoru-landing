@@ -151,6 +151,14 @@ export const OPEN_COPY = {
       },
     ],
   },
+  // Help for whoever wants it, under the FAQs: two short films, played on a click, nothing loads before.
+  guides: {
+    eyebrow: "Guides",
+    items: [
+      { id: "walkthrough", title: "From sign-up to your first deposit", length: "1:18" },
+      { id: "passkey", title: "Your passkey, and getting back in", length: "1:02" },
+    ],
+  },
   footer: {
     name: "Mamoru",
     line: "Non-custodial. No token.",
