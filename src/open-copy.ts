@@ -113,6 +113,11 @@ export const OPEN_COPY = {
     heading: "FAQs",
     items: [
       {
+        q: "How do I start?",
+        a: ["Approve two signatures with your passkey, then add USDC on Base. Mamoru starts on its own."],
+        watch: { id: "walkthrough", label: "Watch the walkthrough", length: "1:18" },
+      },
+      {
         q: "Who holds the money?",
         a: ["You do. It sits in a smart account under your control. Mamoru does not take custody."],
       },
@@ -133,6 +138,13 @@ export const OPEN_COPY = {
         ],
       },
       {
+        q: "What if I lose my phone?",
+        a: [
+          "Your passkey syncs with your Apple or Google account, so a new phone opens the same account. Back it up as soon as you create your account.",
+        ],
+        watch: { id: "passkey", label: "Watch: your passkey", length: "1:02" },
+      },
+      {
         q: "How much does Mamoru cost?",
         a: [
           "Nothing upfront. We take 10% of the yield you harvest to cover account maintenance and gas. No yield, no fee.",
@@ -149,14 +161,6 @@ export const OPEN_COPY = {
           "It stays with us. We do not rent the list, and we do not send anything else.",
         ],
       },
-    ],
-  },
-  // Help for whoever wants it, under the FAQs: two short films, played on a click, nothing loads before.
-  guides: {
-    eyebrow: "Guides",
-    items: [
-      { id: "walkthrough", title: "From sign-up to your first deposit", length: "1:18" },
-      { id: "passkey", title: "Your passkey, and getting back in", length: "1:02" },
     ],
   },
   footer: {
