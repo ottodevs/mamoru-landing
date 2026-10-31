@@ -126,10 +126,8 @@ export const OPEN_COPY = {
         a: ["On Uniswap. Mamoru quotes, opens, and adjusts positions there transparently."],
       },
       {
-        q: "When do funds leave?",
-        a: [
-          "When you transfer. Part or all of the funds leave the allocations and go to your account. Until then, yield is reinvested.",
-        ],
+        q: "Who can withdraw funds?",
+        a: ["Only you, with your passkey."],
       },
       {
         q: "Can I withdraw my funds at any time?",
@@ -138,7 +136,7 @@ export const OPEN_COPY = {
         ],
       },
       {
-        q: "What if I lose my phone?",
+        q: "What if I lose the device with my passkey?",
         a: [
           "Your passkey syncs with your Apple or Google account, so a new phone opens the same account. Back it up as soon as you create your account.",
         ],
@@ -153,13 +151,6 @@ export const OPEN_COPY = {
       {
         q: "Is there a token?",
         a: ["No."],
-      },
-      {
-        q: "What happens to the email I used to log in?",
-        a: [
-          "It stays strictly with us for account access. We never rent or sell lists, and we hate spam as much as you do.",
-          "It stays with us. We do not rent the list, and we do not send anything else.",
-        ],
       },
     ],
   },
