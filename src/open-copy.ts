@@ -114,7 +114,7 @@ export const OPEN_COPY = {
     items: [
       {
         q: "How do I start?",
-        a: ["Approve two signatures with your passkey, then add USDC on Base. Mamoru starts on its own."],
+        a: ["Two passkey signatures, then add USDC on Base."],
         watch: { id: "walkthrough", label: "Watch the walkthrough", length: "1:18" },
       },
       {
@@ -123,7 +123,7 @@ export const OPEN_COPY = {
       },
       {
         q: "Where does a position live?",
-        a: ["On Uniswap. Mamoru quotes, opens, and adjusts positions there transparently."],
+        a: ["On Uniswap. Every move is on-chain."],
       },
       {
         q: "Who can withdraw funds?",
@@ -135,16 +135,12 @@ export const OPEN_COPY = {
       },
       {
         q: "What if I lose the device with my passkey?",
-        a: [
-          "Your passkey syncs with your Apple or Google account. Back it up as soon as you create your account, so a new device opens the same account.",
-        ],
+        a: ["It syncs with your Apple or Google account. Back it up so you can recover your account from any device."],
         watch: { id: "passkey", label: "Watch: your passkey", length: "1:02" },
       },
       {
         q: "How much does Mamoru cost?",
-        a: [
-          "Nothing upfront. We take 10% of the yield you harvest to cover account maintenance. No yield, no fee.",
-        ],
+        a: ["10% of the yield you harvest. No yield, no fee."],
       },
       {
         q: "Is there a token?",
