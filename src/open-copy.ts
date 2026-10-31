@@ -119,7 +119,7 @@ export const OPEN_COPY = {
       },
       {
         q: "Who holds the money?",
-        a: ["You do. It sits in a smart account under your control. Mamoru does not take custody."],
+        a: ["You do. It's a smart account under your control. Mamoru is non-custodial."],
       },
       {
         q: "Where does a position live?",
@@ -131,21 +131,19 @@ export const OPEN_COPY = {
       },
       {
         q: "Can I withdraw my funds at any time?",
-        a: [
-          "Yes. There is no lockup. Transfer part or all of it to your account whenever you want.",
-        ],
+        a: ["Yes. There is no lockup."],
       },
       {
         q: "What if I lose the device with my passkey?",
         a: [
-          "Your passkey syncs with your Apple or Google account, so a new phone opens the same account. Back it up as soon as you create your account.",
+          "Your passkey syncs with your Apple or Google account. Back it up as soon as you create your account, so a new device opens the same account.",
         ],
         watch: { id: "passkey", label: "Watch: your passkey", length: "1:02" },
       },
       {
         q: "How much does Mamoru cost?",
         a: [
-          "Nothing upfront. We take 10% of the yield you harvest to cover account maintenance and gas. No yield, no fee.",
+          "Nothing upfront. We take 10% of the yield you harvest to cover account maintenance. No yield, no fee.",
         ],
       },
       {
