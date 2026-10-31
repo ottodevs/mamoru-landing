@@ -114,7 +114,7 @@ export const OPEN_COPY = {
     items: [
       {
         q: "How do I start?",
-        a: ["Two passkey signatures, then add USDC on Base."],
+        a: ["Open the app, create your account, and add USDC on Base. Mamoru does the rest."],
         watch: { id: "walkthrough", label: "Watch the walkthrough", length: "1:18" },
       },
       {
