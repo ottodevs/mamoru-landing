@@ -7,7 +7,7 @@
  */
 
 import { decodeFunctionResult, encodeFunctionData, parseAbi } from "viem";
-import { hourRotation, ownRpcs, PUBLIC_RPCS, publicPool, RunHealth } from "./rpc-pool";
+import { hourRotation, ownRpcs, PUBLIC_RPCS, publicPool, readPooled, RunHealth } from "./rpc-pool";
 
 export const ETHEREUM_USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 export const ETHEREUM_MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11";
@@ -19,11 +19,14 @@ const CHUNK = 100;
 const TIMEOUT_MS = 3_000;
 /** The whole Ethereum read gives up after this, so it can never hold the Base snapshot back (waitUntil is capped at 30 s). */
 export const OUTSIDE_DEADLINE_MS = 12_000;
-/** The configured tier's share of it (half per phase): past this, the public tier is asked for whatever it has not answered. */
-const TIER_MS = 5_000;
-/** otto/mamoru-astro#42: public RPCs asked at once; the next ones are asked only for what these left unanswered. */
+/**
+ * One phase: every RPC of the configured tier, or of a public wave, gets this long. One ask is aggregate3 and, only
+ * when that gave nothing, a plain batch, each within TIMEOUT_MS, so a slow-but-answering RPC is never cut off.
+ */
+const PHASE_MS = 2 * TIMEOUT_MS + 250;
+/** otto/mamoru-astro#42: public RPCs asked at once; the next ones only for what these left without two agreeing hosts. */
 const WAVE = 3;
-/** Public RPCs one run may ask at most (the rest of the pool is reached on later runs, by rotation). */
+/** Public hosts one run may ask at most, across every chunk (the rest of the pool is reached on later runs, by rotation). */
 const PUBLIC_PER_RUN = 9;
 
 const abi = parseAbi([
@@ -155,36 +158,6 @@ export const whyFailed = (url: string, e: unknown): string => {
 };
 
 /**
- * Resolves with every answer so far as soon as each address has one, or when all have settled: one hung RPC never
- * holds back answers the others already gave.
- */
-function untilAnswered(count: number, asks: Promise<(OutsideRaw | null)[]>[], waitAll = false, budgetMs?: number): Promise<(OutsideRaw | null)[][]> {
-  return new Promise((resolve) => {
-    // Kept by the RPC's position in the list, not by arrival, so a merge can prefer the earlier one. On the budget,
-    // every answer already in is kept; only the RPCs still pending are given up on.
-    const got: (OutsideRaw | null)[][] = asks.map(() => []);
-    let settled = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = () => {
-      clearTimeout(timer);
-      resolve(got.map((g) => [...g]));
-    };
-    const done = () => {
-      const all = Array.from({ length: count }, (_, i) => got.some((g) => g[i] != null)).every(Boolean);
-      if ((all && !waitAll) || settled === asks.length) finish();
-    };
-    if (asks.length === 0) return finish();
-    if (budgetMs !== undefined) timer = setTimeout(finish, budgetMs);
-    asks.forEach((a, k) => {
-      a.then((r) => void (got[k] = r)).catch(() => undefined).finally(() => {
-        settled += 1;
-        done();
-      });
-    });
-  });
-}
-
-/**
  * The same balances as one JSON-RPC batch of plain eth_getBalance and USDC balanceOf calls, no Multicall3
  * (otto/mamoru-astro#40: from Cloudflare a plain eth_getBalance answered where the aggregate3 call did not).
  */
@@ -207,78 +180,19 @@ async function readChunkBatch(addresses: readonly string[], url: string, fetchFn
   });
 }
 
-/** Per address, the first non-null answer among several. */
-function mergeAnswers(addresses: readonly string[], answers: readonly (OutsideRaw | null)[][]): (OutsideRaw | null)[] {
-  return addresses.map((_, i) => answers.find((a) => a[i] != null)?.[i] ?? null);
-}
-
 /**
- * One chunk (otto/mamoru-astro#40, #41). RPCs come in tiers: the configured ETHEREUM_RPC_URLS first, the public ones
- * only for the addresses that tier left unanswered, so a healthy private RPC is the only one that sees the addresses
- * and no public answer can overrule it. Within a tier every RPC is asked at once (aggregate3, then a plain batch for
- * what is still missing) and answers are merged per address in list order. null when no address was answered.
+ * One RPC's balances for a chunk: aggregate3, and the plain batch when aggregate3 refused with a JSON-RPC error or gave
+ * no balance (otto/mamoru-astro#40: from Cloudflare a plain eth_getBalance answered where aggregate3 did not). Throws
+ * when the RPC itself failed (HTTP status, timeout, network) or both ways failed.
  */
-async function readChunk(addresses: readonly string[], tiers: readonly (readonly string[])[], fetchFn: OutsideFetch, onError: ReadError | undefined, health: RunHealth, publicLeft: { n: number }): Promise<(OutsideRaw | null)[] | null> {
-  let merged: (OutsideRaw | null)[] = addresses.map(() => null);
-  const take = (got: (OutsideRaw | null)[], missing: readonly string[]) => {
-    const byAddress = new Map(missing.map((a, k) => [a, got[k]]));
-    merged = merged.map((r, i) => r ?? byAddress.get(addresses[i]) ?? null);
-  };
-  for (const [t, urls] of tiers.entries()) {
-    // The configured tier waits for every one of its RPCs (list order decides) within its budget, keeping every answer
-    // that came in; the last tier (the public pool) goes in waves of a few healthy RPCs, the first answer per address,
-    // until every address has one or the run's public budget is spent.
-    const last = t === tiers.length - 1;
-    if (!last) {
-      const missing = addresses.filter((_, i) => merged[i] === null);
-      if (!urls.length || !missing.length) continue;
-      take(await readTier(missing, urls, fetchFn, onError, health, TIER_MS / 2), missing);
-      continue;
-    }
-    let next = 0;
-    for (;;) {
-      const missing = addresses.filter((_, i) => merged[i] === null);
-      if (!missing.length) break;
-      const wave: string[] = [];
-      while (wave.length < WAVE && next < urls.length && publicLeft.n > 0) {
-        const u = urls[next++];
-        if (!health.ok(u)) continue;
-        wave.push(u);
-        publicLeft.n -= 1;
-      }
-      if (!wave.length) break;
-      take(await readTier(missing, wave, fetchFn, onError, health), missing);
-    }
+async function askEthereum(url: string, addresses: readonly string[], fetchFn: OutsideFetch): Promise<(OutsideRaw | null)[]> {
+  try {
+    const got = parseAggregate(addresses, await rpcCall(url, ETHEREUM_MULTICALL3, callData(addresses), fetchFn));
+    if (got.some((r) => r !== null)) return got;
+  } catch (e) {
+    if (!(e instanceof Error && /^rpc error /.test(e.message))) throw e;
   }
-  return merged.some((r) => r !== null) ? merged : null;
-}
-
-/** One tier. With `phaseMs` (the configured tier) each phase waits for all its RPCs up to that long; without it, the first answer per address. */
-async function readTier(addresses: readonly string[], urls: readonly string[], fetchFn: OutsideFetch, onError: ReadError | undefined, health: RunHealth, phaseMs?: number): Promise<(OutsideRaw | null)[]> {
-  const waitAll = phaseMs !== undefined;
-  const data = callData(addresses);
-  const ask = async (url: string, how: "aggregate" | "batch", which: readonly string[]): Promise<(OutsideRaw | null)[]> => {
-    try {
-      const out = how === "aggregate" ? parseAggregate(which, await rpcCall(url, ETHEREUM_MULTICALL3, data, fetchFn)) : await readChunkBatch(which, url, fetchFn);
-      if (out.every((r) => r === null)) onError?.(whyFailed(url, new Error(`${how}: no balance answered`)));
-      return out;
-    } catch (e) {
-      // An RPC that refused (HTTP status), timed out or was unreachable is left out of the rest of this run. One that
-      // answered with a JSON-RPC error is still asked the plain batch: from Cloudflare a plain eth_getBalance answered
-      // where aggregate3 did not (#40).
-      if (!(e instanceof Error && /^rpc error /.test(e.message))) health.fail(url);
-      onError?.(whyFailed(url, e));
-      return which.map(() => null);
-    }
-  };
-  let merged = mergeAnswers(addresses, await untilAnswered(addresses.length, urls.map((u) => ask(u, "aggregate", addresses)), waitAll, phaseMs));
-  const missing = addresses.filter((_, i) => merged[i] === null);
-  if (missing.length) {
-    const again = mergeAnswers(missing, await untilAnswered(missing.length, health.healthy(urls).map((u) => ask(u, "batch", missing)), waitAll, phaseMs));
-    const byAddress = new Map(missing.map((a, k) => [a, again[k]]));
-    merged = merged.map((r, i) => r ?? byAddress.get(addresses[i]) ?? null);
-  }
-  return merged;
+  return readChunkBatch(addresses, url, fetchFn);
 }
 
 /** ETH/USD from Coinbase spot; null on any failure or a non-positive number. */
@@ -314,29 +228,23 @@ export async function readOutsideBase(
   const fetchFn = opts.fetchFn ?? fetch;
   const unique = [...new Set(addresses.map((a) => a.toLowerCase()))].filter((a) => /^0x[0-9a-f]{40}$/.test(a));
   if (unique.length === 0) return out;
-  const tiers = ethereumRpcTiers(opts.rpcUrls, opts.rotation ?? hourRotation());
-  const health = new RunHealth();
-  const publicLeft = { n: PUBLIC_PER_RUN };
+  const [own, pub] = ethereumRpcTiers(opts.rpcUrls, opts.rotation ?? hourRotation());
   const raws = new Map<string, OutsideRaw>();
   const chunks: string[][] = [];
   for (let i = 0; i < unique.length; i += CHUNK) chunks.push(unique.slice(i, i + CHUNK));
-  // Chunks run in parallel; a chunk that fails stays "not read" and does not affect the others.
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, opts.deadlineMs ?? OUTSIDE_DEADLINE_MS);
   });
-  // On the deadline, chunks already read are kept; the rest stay "not read".
-  await Promise.race([deadline, Promise.all(
-    chunks.map(async (chunk) => {
-      try {
-        (await readChunk(chunk, tiers, fetchFn, opts.onError, health, publicLeft))?.forEach((r, k) => {
-          if (r) raws.set(chunk[k], r);
-        });
-      } catch {
-        // Not read.
-      }
-    }),
-  )]);
+  // On the deadline, every balance already settled is kept; the rest stay "not read".
+  const read = readPooled(
+    chunks,
+    { own, public: pub, phaseMs: PHASE_MS, wave: WAVE, publicHosts: PUBLIC_PER_RUN },
+    { ask: (url, which) => askEthereum(url, which, fetchFn), key: (r) => `${r.ethWei}:${r.usdcRaw}`, failed: (url, e) => opts.onError?.(whyFailed(url, e)) },
+    new RunHealth(own),
+    raws,
+  ).catch(() => undefined);
+  await Promise.race([deadline, read]);
   clearTimeout(timer);
   if (raws.size < unique.length) opts.onError?.(`${unique.length - raws.size} of ${unique.length} addresses not read`);
   let ethUsd = opts.baseEthUsd;
