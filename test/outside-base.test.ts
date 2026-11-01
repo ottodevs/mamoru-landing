@@ -106,7 +106,19 @@ describe("readOutsideBase", () => {
     expect(m.get(USER.toLowerCase())).toEqual({ eth: 0.05537835, usdc: 0, usd: 0.05537835 * 2000 });
     expect(notes.length).toBeGreaterThan(0);
     expect(notes.join(" ")).not.toContain("key123");
-    expect(notes[0]).toStartWith("secret.example: rpc error");
+    expect(notes[0]).toBe("secret.example: JSON-RPC error -32000");
+  });
+
+  test("notes are host and category only: no error text, so a key echoed in any form never gets in", async () => {
+    const notes: string[] = [];
+    const fetchFn = async (url: string) => {
+      if (url.includes("secret")) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32001, message: "invalid apiKey=abc" } }));
+      throw new Error("invalid apiKey=abc");
+    };
+    await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://secret.example/?apiKey=abc", fetchFn, onError: (x) => notes.push(x) });
+    expect(notes.join(" ")).not.toContain("abc");
+    expect(notes).toContain("secret.example: JSON-RPC error -32001");
+    expect(notes).toContain("eth.drpc.org: network error");
   });
 
   test("an error text that repeats the secret URL, with or without its scheme, keeps only the host", async () => {

@@ -125,23 +125,28 @@ export const hostOf = (url: string): string => {
 
 /** Receives why a read failed, short and without secrets: "host: message". */
 export type ReadError = (msg: string) => void;
-/** The message text with any URL cut down to its host, so a secret path or query can never reach KV or a page. */
-const scrub = (text: string): string => text.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, (u) => hostOf(u)).replace(/[^\x20-\x7e]/g, "").slice(0, 140);
-/** The path and query parts of every configured URL: cut from any error text, whichever host's error repeats them. */
-const secretParts = (urls: readonly string[]): string[] =>
-  urls.flatMap((url) => {
-    try {
-      const u = new URL(url);
-      return [u.pathname + u.search, u.pathname, u.search].filter((p) => p.length > 1);
-    } catch {
-      return [];
-    }
-  }).sort((a, b) => b.length - a.length);
-
-export const whyFailed = (url: string, e: unknown, urls: readonly string[] = [url]): string => {
-  let text = e instanceof Error ? e.message : String(e);
-  for (const part of secretParts(urls)) text = text.split(part).join("");
-  return `${hostOf(url)}: ${scrub(text)}`;
+/**
+ * Why a read failed, as "host: kind", where kind is only a category: an HTTP status, a JSON-RPC error code, a
+ * timeout, a network error or no answer. No free text from the error ever goes in, so a key in a configured URL
+ * (path, query, or echoed back by the RPC in any form) can never reach KV or a page.
+ */
+export const whyFailed = (url: string, e: unknown): string => {
+  const name = e instanceof Error ? e.name : "";
+  const text = e instanceof Error ? e.message : String(e);
+  const status = /^(rpc|batch) (\d{3})$/.exec(text);
+  const code = /^rpc error \{"code":(-?\d{1,6})\b/.exec(text);
+  const kind = status
+    ? `HTTP ${status[2]}`
+    : code
+      ? `JSON-RPC error ${code[1]}`
+      : name === "TimeoutError" || name === "AbortError"
+        ? "timeout"
+        : /no balance answered$/.test(text)
+          ? "no balance answered"
+          : /not a list$/.test(text)
+            ? "batch not supported"
+            : "network error";
+  return `${hostOf(url)}: ${kind}`;
 };
 
 /**
@@ -204,10 +209,10 @@ async function readChunk(addresses: readonly string[], urls: readonly string[], 
   const ask = async (url: string, how: "aggregate" | "batch", which: readonly string[]): Promise<(OutsideRaw | null)[]> => {
     try {
       const out = how === "aggregate" ? parseAggregate(which, await rpcCall(url, ETHEREUM_MULTICALL3, data, fetchFn)) : await readChunkBatch(which, url, fetchFn);
-      if (out.every((r) => r === null)) onError?.(whyFailed(url, new Error(`${how}: no balance answered`), urls));
+      if (out.every((r) => r === null)) onError?.(whyFailed(url, new Error(`${how}: no balance answered`)));
       return out;
     } catch (e) {
-      onError?.(whyFailed(url, e, urls));
+      onError?.(whyFailed(url, e));
       return which.map(() => null);
     }
   };
