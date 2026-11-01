@@ -62,11 +62,16 @@ export interface OutsideRaw {
 }
 
 export function ethereumRpcList(secret?: string): string[] {
+  return ethereumRpcTiers(secret).flat();
+}
+
+/** [the configured https RPCs, the public ones]: the second tier is asked only for what the first left unanswered. */
+export function ethereumRpcTiers(secret?: string): string[][] {
   const own = (secret ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter((s) => /^https:\/\//.test(s));
-  return [...own, ...ETHEREUM_PUBLIC_RPCS];
+  return [own, [...ETHEREUM_PUBLIC_RPCS]];
 }
 
 function callData(addresses: readonly string[]): `0x${string}` {
@@ -155,19 +160,20 @@ export const whyFailed = (url: string, e: unknown): string => {
  */
 function untilAnswered(count: number, asks: Promise<(OutsideRaw | null)[]>[]): Promise<(OutsideRaw | null)[][]> {
   return new Promise((resolve) => {
-    const got: (OutsideRaw | null)[][] = [];
+    // Kept by the RPC's position in the list, not by arrival, so a merge can prefer the earlier one.
+    const got: (OutsideRaw | null)[][] = asks.map(() => []);
     let settled = 0;
     const done = () => {
       const all = Array.from({ length: count }, (_, i) => got.some((g) => g[i] != null)).every(Boolean);
       if (all || settled === asks.length) resolve(got);
     };
     if (asks.length === 0) resolve(got);
-    for (const a of asks) {
-      a.then((r) => void got.push(r)).catch(() => undefined).finally(() => {
+    asks.forEach((a, k) => {
+      a.then((r) => void (got[k] = r)).catch(() => undefined).finally(() => {
         settled += 1;
         done();
       });
-    }
+    });
   });
 }
 
@@ -200,11 +206,24 @@ function mergeAnswers(addresses: readonly string[], answers: readonly (OutsideRa
 }
 
 /**
- * One chunk (otto/mamoru-astro#40). Every RPC is asked at once, so one slow host never eats the time of the others:
- * first aggregate3 on all of them, then, for the addresses still unanswered, a plain batch on all of them. Answers
- * are merged address by address. null when no address was answered.
+ * One chunk (otto/mamoru-astro#40, #41). RPCs come in tiers: the configured ETHEREUM_RPC_URLS first, the public ones
+ * only for the addresses that tier left unanswered, so a healthy private RPC is the only one that sees the addresses
+ * and no public answer can overrule it. Within a tier every RPC is asked at once (aggregate3, then a plain batch for
+ * what is still missing) and answers are merged per address in list order. null when no address was answered.
  */
-async function readChunk(addresses: readonly string[], urls: readonly string[], fetchFn: OutsideFetch, onError?: ReadError): Promise<(OutsideRaw | null)[] | null> {
+async function readChunk(addresses: readonly string[], tiers: readonly (readonly string[])[], fetchFn: OutsideFetch, onError?: ReadError): Promise<(OutsideRaw | null)[] | null> {
+  let merged: (OutsideRaw | null)[] = addresses.map(() => null);
+  for (const urls of tiers) {
+    const missing = addresses.filter((_, i) => merged[i] === null);
+    if (!urls.length || !missing.length) continue;
+    const got = await readTier(missing, urls, fetchFn, onError);
+    const byAddress = new Map(missing.map((a, k) => [a, got[k]]));
+    merged = merged.map((r, i) => r ?? byAddress.get(addresses[i]) ?? null);
+  }
+  return merged.some((r) => r !== null) ? merged : null;
+}
+
+async function readTier(addresses: readonly string[], urls: readonly string[], fetchFn: OutsideFetch, onError?: ReadError): Promise<(OutsideRaw | null)[]> {
   const data = callData(addresses);
   const ask = async (url: string, how: "aggregate" | "batch", which: readonly string[]): Promise<(OutsideRaw | null)[]> => {
     try {
@@ -223,7 +242,7 @@ async function readChunk(addresses: readonly string[], urls: readonly string[], 
     const byAddress = new Map(missing.map((a, k) => [a, again[k]]));
     merged = merged.map((r, i) => r ?? byAddress.get(addresses[i]) ?? null);
   }
-  return merged.some((r) => r !== null) ? merged : null;
+  return merged;
 }
 
 /** ETH/USD from Coinbase spot; null on any failure or a non-positive number. */
@@ -259,7 +278,7 @@ export async function readOutsideBase(
   const fetchFn = opts.fetchFn ?? fetch;
   const unique = [...new Set(addresses.map((a) => a.toLowerCase()))].filter((a) => /^0x[0-9a-f]{40}$/.test(a));
   if (unique.length === 0) return out;
-  const urls = ethereumRpcList(opts.rpcUrls);
+  const tiers = ethereumRpcTiers(opts.rpcUrls);
   const raws = new Map<string, OutsideRaw>();
   const chunks: string[][] = [];
   for (let i = 0; i < unique.length; i += CHUNK) chunks.push(unique.slice(i, i + CHUNK));
@@ -272,7 +291,7 @@ export async function readOutsideBase(
   await Promise.race([deadline, Promise.all(
     chunks.map(async (chunk) => {
       try {
-        (await readChunk(chunk, urls, fetchFn, opts.onError))?.forEach((r, k) => {
+        (await readChunk(chunk, tiers, fetchFn, opts.onError))?.forEach((r, k) => {
           if (r) raws.set(chunk[k], r);
         });
       } catch {
