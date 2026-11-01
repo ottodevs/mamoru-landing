@@ -401,12 +401,14 @@ export function labLogic() {
   var resolveRefTokens = function (md: string, claims: { value: number; metric: string }[]): string {
     // The model often writes the unit after the token ("{{c0}} USDC"). It is dropped only when the formatted
     // value already ends with that same unit; otherwise it is kept as written.
-    var withClaims = md.replace(/\{\{c(\d+)\}\}(?:([ \t]*)(USDC|%|d[ií]as?|operaci[oó]n(?:es)?)(?![\p{L}\p{N}]))?/giu, function (whole: string, n: string, sp?: string, unit?: string) {
+    // Only USDC and % (the money and percentage metrics the agent cites); a token is matched exactly as
+    // stripRefTokens matches it (lowercase c, no case folding).
+    var withClaims = md.replace(/\{\{c(\d+)\}\}(?:([ \t]*)(USDC|%)(?![\p{L}\p{N}]))?/gu, function (whole: string, n: string, sp?: string, unit?: string) {
       var c = claims[Number(n)];
       if (!c) return "";
       var v = fmtClaimValue(c.value, c.metric);
       if (!unit) return v;
-      return v.toLowerCase().endsWith(unit.toLowerCase()) ? v : v + (sp || "") + unit;
+      return v.endsWith(unit) ? v : v + (sp || "") + unit;
     });
     return stripRefTokens(withClaims);
   };
