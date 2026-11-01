@@ -148,29 +148,37 @@ export function heldElsewhere(
     if (ethUsd === null) floor = true;
     else usdSum += gas * ethUsd;
   }
-  const ethDone = addrs.every((a) => credited.eth.has(a));
-  const eth = ethDone ? undefined : rows.find((r) => r.outside)?.outside;
-  if (ethDone) {
-    // Counted on an earlier account.
-  } else if (!eth) floor = true;
-  else if ((addrs.forEach((a) => credited.eth.add(a)), eth.eth > 0 || eth.usdc > 0)) {
-    if (eth.usd === null) floor = true;
-    else usdSum += eth.usd;
-    away.push([eth.eth > 0 ? `${fmtNum(eth.eth)} ETH` : "", eth.usdc > 0 ? `${eth.usdc.toFixed(2)} USDC` : ""].filter(Boolean).join(" + ") + " on Ethereum");
-  }
-  const monDone = addrs.every((a) => credited.monad.has(a));
-  const mon = monDone ? undefined : rows.find((r) => r.monad)?.monad;
-  if (monDone) {
-    // Counted on an earlier account.
-  } else if (!mon) floor = true;
-  else if ((addrs.forEach((a) => credited.monad.add(a)), mon.mon > 0 || mon.usdc > 0 || mon.positions > 0)) {
-    if (mon.monUnpriced || mon.positions > 0) floor = true;
-    usdSum += mon.usd;
-    away.push(
-      [mon.mon > 0 ? `${fmtNum(mon.mon)} MON` : "", mon.usdc > 0 ? `${mon.usdc.toFixed(2)} USDC` : "", mon.positions > 0 ? `${mon.positions} ${mon.positions === 1 ? "position" : "positions"}` : ""]
-        .filter(Boolean)
-        .join(" + ") + " on Monad",
-    );
+  // Per address: each one is credited by the first account whose read of it succeeded, and only by that read.
+  for (const a of addrs) {
+    const at = rows.filter((r) => r.address.toLowerCase() === a);
+    if (!credited.eth.has(a)) {
+      const eth = at.find((r) => r.outside)?.outside;
+      if (!eth) floor = true;
+      else {
+        credited.eth.add(a);
+        if (eth.eth > 0 || eth.usdc > 0) {
+          if (eth.usd === null) floor = true;
+          else usdSum += eth.usd;
+          away.push([eth.eth > 0 ? `${fmtNum(eth.eth)} ETH` : "", eth.usdc > 0 ? `${eth.usdc.toFixed(2)} USDC` : ""].filter(Boolean).join(" + ") + " on Ethereum");
+        }
+      }
+    }
+    if (!credited.monad.has(a)) {
+      const mon = at.find((r) => r.monad)?.monad;
+      if (!mon) floor = true;
+      else {
+        credited.monad.add(a);
+        if (mon.mon > 0 || mon.usdc > 0 || mon.positions > 0) {
+          if (mon.monUnpriced || mon.positions > 0) floor = true;
+          usdSum += mon.usd;
+          away.push(
+            [mon.mon > 0 ? `${fmtNum(mon.mon)} MON` : "", mon.usdc > 0 ? `${mon.usdc.toFixed(2)} USDC` : "", mon.positions > 0 ? `${mon.positions} ${mon.positions === 1 ? "position" : "positions"}` : ""]
+              .filter(Boolean)
+              .join(" + ") + " on Monad",
+          );
+        }
+      }
+    }
   }
   return { usd: usdSum, floor, away };
 }
