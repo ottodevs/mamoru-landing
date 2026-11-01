@@ -87,7 +87,7 @@ export function publicPool(chain: PoolChain, rotation: number, exclude: readonly
 
 /**
  * RPCs that failed during one run: skipped for the rest of it, so one dead host costs one timeout, not one per chunk or
- * request. A configured (keyed) RPC passed as `lenient` is skipped only after a second failure: one 429 from the
+ * request. A configured (keyed) RPC passed as `lenient` is skipped only after two failures in a row: one 429 from the
  * provider the run trusts most should not hand the rest of the run to the public pool.
  */
 export class RunHealth {
@@ -98,6 +98,10 @@ export class RunHealth {
   }
   fail(url: string): void {
     this.fails.set(url, (this.fails.get(url) ?? 0) + 1);
+  }
+  /** An answer clears the strikes: only failures in a row, not scattered ones, drop a configured RPC. */
+  succeed(url: string): void {
+    this.fails.delete(url);
   }
   ok(url: string): boolean {
     return (this.fails.get(url) ?? 0) < (this.lenient.has(url) ? 2 : 1);
@@ -194,6 +198,7 @@ export async function readPooled<T>(chunks: readonly (readonly string[])[], plan
   const asked = (url: string, addresses: readonly string[]): Promise<(T | null)[]> =>
     r.ask(url, addresses).then(
       (got) => {
+        if (got.some((x) => x != null)) health.succeed(url);
         if (got.every((x) => x == null)) {
           health.fail(url);
           r.failed?.(url, new Error("no balance answered"));

@@ -16,14 +16,40 @@ const isChainAnswer = (code: unknown, message: unknown): boolean =>
 
 /**
  * A read client over the secret RPCs (if set) then a rotated slice of the public pool, in order
- * (otto/mamoru-astro#42). An RPC that fails (HTTP status, timeout, network, a JSON-RPC error that is not the chain's
+ * (otto/mamoru-astro#42). A public host is used only after it answered eth_chainId 8453; as before this PR, one
+ * public host's answer is taken alone when every configured RPC failed (Base reads are many calls at "latest", where
+ * two hosts a block apart legitimately differ, so they are not cross-checked like the Ethereum and Monad balances). An RPC that fails (HTTP status, timeout, network, a JSON-RPC error that is not the chain's
  * answer) is skipped for the rest of this client's life, so it costs one timeout per run, not one per request.
  * The URLs never leave this function: nothing here is logged or rendered.
  */
 export function buildClient(secretRpcUrl?: string, fetchFn: typeof fetch = fetch): BaseClient {
   const urls = rpcUrls(secretRpcUrl);
-  const health = new RunHealth(ownRpcs(secretRpcUrl));
+  const own = ownRpcs(secretRpcUrl);
+  const health = new RunHealth(own);
+  // A public host is used only once it said it serves Base (asked once per client). Configured ones are trusted.
+  const onBase = new Map<string, Promise<boolean>>();
   let id = 0;
+  const post = async (url: string, method: string, params: unknown, ms: number): Promise<{ result?: unknown; error?: { code?: unknown; message?: unknown } }> => {
+    const res = await fetchFn(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params: params ?? [] }),
+      signal: AbortSignal.timeout(ms),
+    });
+    if (!res.ok) throw new Error(`rpc ${res.status}`);
+    const body = (await res.json()) as unknown;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) throw new Error("rpc answer is not an object");
+    return body as { result?: unknown; error?: { code?: unknown; message?: unknown } };
+  };
+  const servesBase = (url: string): Promise<boolean> => {
+    if (own.includes(url)) return Promise.resolve(true);
+    let p = onBase.get(url);
+    if (!p) {
+      p = post(url, "eth_chainId", [], BASE_TIMEOUT_MS).then((b) => b.result === "0x2105", () => false);
+      onBase.set(url, p);
+    }
+    return p;
+  };
   const request = async ({ method, params }: { method: string; params?: unknown }): Promise<unknown> => {
     const until = Date.now() + BASE_REQUEST_MS;
     let last: unknown = new Error("no Base RPC answered");
@@ -32,14 +58,8 @@ export function buildClient(secretRpcUrl?: string, fetchFn: typeof fetch = fetch
       if (left <= 0) break;
       let body: { result?: unknown; error?: { code?: unknown; message?: unknown } };
       try {
-        const res = await fetchFn(url, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params: params ?? [] }),
-          signal: AbortSignal.timeout(Math.min(BASE_TIMEOUT_MS, left)),
-        });
-        if (!res.ok) throw new Error(`rpc ${res.status}`);
-        body = (await res.json()) as typeof body;
+        if (!(await servesBase(url))) throw new Error("not Base");
+        body = await post(url, method, params, Math.min(BASE_TIMEOUT_MS, until - Date.now()));
       } catch (e) {
         health.fail(url);
         last = e;
@@ -53,8 +73,10 @@ export function buildClient(secretRpcUrl?: string, fetchFn: typeof fetch = fetch
       }
       if (!("result" in body)) {
         health.fail(url);
+        last = new Error("rpc answer without a result");
         continue;
       }
+      health.succeed(url);
       return body.result;
     }
     throw last;
