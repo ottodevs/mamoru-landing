@@ -195,7 +195,7 @@ describe("pages", () => {
     expect(html).toContain("0.0200 ETH · $46.00");
     expect(html).toContain('<td class="unread">not read</td>');
     expect(html).toContain("<td>acc3</td>");
-    expect(html).toContain("Not working, and not in any Base figure");
+    expect(html).toContain("Counted in Value held; it earns nothing until it moves to Base");
     // Funding no longer carries the per-account table.
     expect(renderInfra({ reading: { snapshot: snap(rows) }, csrf: "c", nonce: "n" })).not.toContain("On Ethereum");
   });

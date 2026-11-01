@@ -132,6 +132,7 @@ export interface Env {
   MAMORU_DB?: D1Db;
   BASE_RPC_URL?: string;
   ETHEREUM_RPC_URLS?: string;
+  MONAD_RPC_URLS?: string;
   EXP_VISITOR_SECRET?: string;
   // Staging preview channel (/ops/preview). See src/staging-preview.ts.
   DEPLOY_CHANNEL?: string;
@@ -631,7 +632,7 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
   }
 
   const fragment = wantsFragment(request);
-  const sources = { rpcUrl: env.BASE_RPC_URL, ethRpcUrls: env.ETHEREUM_RPC_URLS, db: env.MAMORU_DB, kv: env.WAITLIST };
+  const sources = { rpcUrl: env.BASE_RPC_URL, ethRpcUrls: env.ETHEREUM_RPC_URLS, monadRpcUrls: env.MONAD_RPC_URLS, db: env.MAMORU_DB, kv: env.WAITLIST };
   // With ctx, an aged reading is served at once and recomputed behind the response.
   const behind = ctx ? { waitUntil: (work: Promise<unknown>) => ctx.waitUntil(work) } : {};
 
@@ -1306,7 +1307,7 @@ export default {
 
   /** Cron: upserts today's metrics_daily row. The 00:05 UTC run also settles yesterday's DAU. */
   async scheduled(event: { cron: string }, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<void> {
-    const sources = { rpcUrl: env.BASE_RPC_URL, ethRpcUrls: env.ETHEREUM_RPC_URLS, db: env.MAMORU_DB, kv: env.WAITLIST };
+    const sources = { rpcUrl: env.BASE_RPC_URL, ethRpcUrls: env.ETHEREUM_RPC_URLS, monadRpcUrls: env.MONAD_RPC_URLS, db: env.MAMORU_DB, kv: env.WAITLIST };
     ctx.waitUntil(
       captureDaily(sources, { settleYesterday: event.cron === "5 0 * * *" }).then((outcome) => {
         if (!outcome.ok && outcome.reason !== "no-db") console.error("metrics_capture_failed", outcome.reason);

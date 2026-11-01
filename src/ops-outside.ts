@@ -47,7 +47,7 @@ export function outsideSheet(snapshot: InfraSnapshot | null | undefined): string
     folded ? `<p class="c-foot">${fmtInt(folded)} more ${folded === 1 ? "account holds" : "accounts hold"} ETH or USDC on Ethereum.</p>` : "",
     unreadRows.length ? `<p class="c-foot">Accounts marked "not read" could not be read on Ethereum. None counted as zero.</p>` : "",
   ].join("");
-  return `<section class="c-sheet"><header class="c-sheet-h"><h2>Held on Ethereum</h2><p>${esc(outsideLine(summarizeOutside(a.rows), fmtUsd))}. Not working, and not in any Base figure.</p></header>${table}${notes}</section>`;
+  return `<section class="c-sheet"><header class="c-sheet-h"><h2>Held on Ethereum</h2><p>${esc(outsideLine(summarizeOutside(a.rows), fmtUsd))}. Counted in Value held; it earns nothing until it moves to Base.</p></header>${table}${notes}</section>`;
 }
 
 /** Puts the sheet before the account drawers (templates) of the Accounts view, or at the end of its wrapper. */

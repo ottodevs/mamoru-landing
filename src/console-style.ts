@@ -3,6 +3,8 @@
 // data). "Paper" is the default; "Night" is the same palette inverted to sumi ink, not a generic dark theme.
 // Appended after OPS_STYLE, so the older sections (Mails, Experiments, Settings, Functions, Archive, Infra) keep
 // their rules and pick up the theme through the shared tokens.
+import { FUNDS_STYLE, SR_STYLE } from "./funds-map";
+
 export const CONSOLE_STYLE = `
 @font-face { font-family: "IBM Plex Mono"; src: url("/fonts/plex-mono-400.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
 @font-face { font-family: "IBM Plex Mono"; src: url("/fonts/plex-mono-700.woff2") format("woff2"); font-weight: 700; font-style: normal; font-display: swap; }
@@ -101,6 +103,10 @@ html, body { overflow-x: clip; }
 /* figures */
 .c-figs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--hair); border-radius: 4px; background: var(--sheet); }
 .c-figs.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Pulse (otto/mamoru-astro#39): Value held leads the row; under 1180px it takes the full width, the other four sit 2 by 2. */
+.c-figs.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.c-funds { padding-top: 0; }
+.c-funds .fm { border-top: 0; margin-top: 0; }
 .c-fig { display: grid; gap: 0.3rem; align-content: start; padding: 1rem 1.15rem 1.1rem; min-width: 0; }
 .c-fig + .c-fig { border-left: 1px solid var(--hair); }
 .c-fig .c-k { margin-bottom: 0.15rem; }
@@ -249,7 +255,7 @@ html, body { overflow-x: clip; }
 @media (max-width: 480px) { .c-owncaps li { grid-template-columns: auto minmax(0, 1fr); } .c-owncaps li > .c-chip { grid-column: 2; justify-self: start; } .c-capform { grid-template-columns: minmax(0, 1fr); } .c-capform button { grid-column: 1; } .c-grants li { grid-template-columns: minmax(0, 1fr) 4.2rem; } .c-grants li .c-meter { grid-column: 1 / -1; grid-row: 2; } }
 
 @media (prefers-reduced-motion: reduce) { .c-drawer, .c-scrim, .c-tip { transition: none; } }
-@media (max-width: 1180px) { .c-figs { grid-template-columns: repeat(2, minmax(0, 1fr)); } .c-figs .c-fig:nth-child(3) { border-left: 0; } .c-figs .c-fig:nth-child(n + 3) { border-top: 1px solid var(--hair); } .c-grid.hero { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 1180px) { .c-figs { grid-template-columns: repeat(2, minmax(0, 1fr)); } .c-figs .c-fig:nth-child(3) { border-left: 0; } .c-figs .c-fig:nth-child(n + 3) { border-top: 1px solid var(--hair); } .c-figs.five { grid-template-columns: repeat(2, minmax(0, 1fr)); } .c-figs.five .c-fig:first-child { grid-column: 1 / -1; } .c-figs.five .c-fig:nth-child(3) { border-left: 1px solid var(--hair); } .c-figs.five .c-fig:nth-child(2n) { border-left: 0; } .c-figs.five .c-fig:nth-child(n + 2) { border-top: 1px solid var(--hair); } .c-grid.hero { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 860px) {
   .c-app { grid-template-columns: minmax(0, 1fr); }
   .c-rail { display: none; }
@@ -267,4 +273,6 @@ html, body { overflow-x: clip; }
   .c-head h1 { flex-basis: 100%; }
 }
 @media (max-width: 480px) { .c-v { font-size: 1.5rem; } .c-fig { padding: 0.85rem 0.9rem 0.95rem; } .c-legend li { grid-template-columns: auto minmax(0, 1fr) auto auto; } .c-legend li span:not(.n) { display: none; } .c-legend li span.n { min-width: 2.8rem; } }
+${FUNDS_STYLE}
+${SR_STYLE}
 `;

@@ -83,7 +83,7 @@ export function parseAggregate(addresses: readonly string[], returnData: `0x${st
   });
 }
 
-async function rpcCall(url: string, to: string, data: string, fetchFn: OutsideFetch): Promise<`0x${string}`> {
+export async function rpcCall(url: string, to: string, data: string, fetchFn: OutsideFetch): Promise<`0x${string}`> {
   const res = await fetchFn(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
