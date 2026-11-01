@@ -123,16 +123,21 @@ export interface ConsoleModel {
 
 const fmtNum = (n: number) => n.toFixed(n < 0.001 ? 6 : 4);
 
-/** What one Safe holds besides the ledger's Base total, from its infra rows (same address on every chain). */
-export function heldElsewhere(rows: readonly AccountView[], ethUsd: number | null): { usd: number; floor: boolean; away: string[] } {
+/**
+ * What one Safe holds besides the ledger's Base total, from its infra rows. Safe gas is per row; Ethereum and Monad
+ * are per address, so `addressCounted` (an earlier key already credited this address) leaves them out: one balance,
+ * one account. An unread row, a missing reading or an unpriced part makes the result a floor.
+ */
+export function heldElsewhere(rows: readonly AccountView[], ethUsd: number | null, addressCounted = false): { usd: number; floor: boolean; away: string[] } {
   let usdSum = 0;
-  let floor = false;
+  let floor = rows.some((r) => r.unread === true);
   const away: string[] = [];
   const gas = rows.reduce((x, r) => x + r.ethBalance, 0);
   if (gas > 0) {
     if (ethUsd === null) floor = true;
     else usdSum += gas * ethUsd;
   }
+  if (addressCounted) return { usd: usdSum, floor, away };
   const eth = rows.find((r) => r.outside)?.outside;
   if (!eth) floor = true;
   else if (eth.eth > 0 || eth.usdc > 0) {
@@ -143,8 +148,8 @@ export function heldElsewhere(rows: readonly AccountView[], ethUsd: number | nul
   const mon = rows.find((r) => r.monad)?.monad;
   if (!mon) floor = true;
   else if (mon.mon > 0 || mon.usdc > 0 || mon.positions > 0) {
-    if (mon.usd === null) floor = true;
-    else usdSum += mon.usd;
+    if (mon.usd === null || mon.positions > 0) floor = true;
+    usdSum += mon.usd ?? 0;
     away.push(
       [mon.mon > 0 ? `${fmtNum(mon.mon)} MON` : "", mon.usdc > 0 ? `${mon.usdc.toFixed(2)} USDC` : "", mon.positions > 0 ? `${mon.positions} ${mon.positions === 1 ? "position" : "positions"}` : ""]
         .filter(Boolean)
@@ -360,21 +365,37 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     const k = r.key.slice(0, 8);
     infraByKey.set(k, [...(infraByKey.get(k) ?? []), r]);
   }
+  // One address is one Ethereum and one Monad balance: only the first account at an address is credited with them.
+  const credited = new Set<string>();
+  const elsewhere = (rs: AccountView[]) => {
+    const addrs = [...new Set(rs.map((r) => r.address.toLowerCase()))];
+    const counted = addrs.every((a) => credited.has(a));
+    for (const a of addrs) credited.add(a);
+    return heldElsewhere(rs, infra?.ethUsd ?? null, counted);
+  };
   for (const y of yields) {
     const rs = infraByKey.get(y.key);
-    if (!rs) continue;
-    const e = heldElsewhere(rs, infra?.ethUsd ?? null);
+    // No on-chain reading of this Safe: its gas, Ethereum and Monad balances are unknown, so the figure is a floor.
+    if (!rs) {
+      y.floor = true;
+      continue;
+    }
+    const e = elsewhere(rs);
     y.held += e.usd;
     y.floor = e.floor;
     y.away = e.away;
   }
-  // A Safe the ledger has not written yet still counts when it holds something elsewhere.
+  // A Safe the ledger has not written yet still counts with everything the on-chain read saw, Base included.
   const ledgerKeys = new Set(yields.map((y) => y.key));
   for (const [k, rs] of infraByKey) {
     if (ledgerKeys.has(k)) continue;
-    const e = heldElsewhere(rs, infra?.ethUsd ?? null);
-    if (e.usd < 0.01 && e.away.length === 0) continue;
-    yields.push({ key: k, env: rs[0].isTest ? "test" : rs[0].env, total: 0, lp: 0, idle: 0, fees: 0, since: null, days: null, apr: null, positions: [], readAt: infra?.asOf ?? now.toISOString(), held: e.usd, floor: e.floor, away: e.away });
+    const e = elsewhere(rs);
+    const idle = rs.reduce((x, r) => x + r.usdcIdle, 0);
+    const lp = rs.reduce((x, r) => x + r.lpUsd, 0);
+    const held = idle + lp + e.usd;
+    // An unread Base read could hide money: such a Safe stays listed, as a floor.
+    if (held < 0.01 && e.away.length === 0 && !rs.some((r) => r.unread === true)) continue;
+    yields.push({ key: k, env: rs[0].isTest ? "test" : rs[0].env, total: idle + lp, lp, idle, fees: 0, since: null, days: null, apr: null, positions: [], readAt: infra?.asOf ?? now.toISOString(), held, floor: e.floor, away: e.away });
   }
   yields.sort((a, b) => b.fees - a.fees || b.lp - a.lp);
 

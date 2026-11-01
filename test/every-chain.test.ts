@@ -52,11 +52,12 @@ describe("Monad reader", () => {
     expect(out[1]).toBeNull();
   });
 
-  test("a held position or unpriced MON is never a number; plain USDC is", () => {
+  test("unpriced MON is never a number; USDC is, positions or not", () => {
     expect(toMonadHolding({ monWei: 0n, usdcRaw: 7_500_000n, wmonWei: 0n, nfts: 0n }, null).usd).toBe(7.5);
     expect(toMonadHolding({ monWei: 10n ** 18n, usdcRaw: 0n, wmonWei: 0n, nfts: 0n }, null).usd).toBeNull();
     expect(toMonadHolding({ monWei: 10n ** 18n, usdcRaw: 0n, wmonWei: 10n ** 18n, nfts: 0n }, 0.05)).toEqual({ mon: 2, usdc: 0, positions: 0, usd: 0.1 });
-    expect(toMonadHolding({ monWei: 0n, usdcRaw: 1n, wmonWei: 0n, nfts: 2n }, 0.05)).toMatchObject({ positions: 2, usd: null });
+    // A position keeps the known USDC standing; the position itself is flagged, not priced.
+    expect(toMonadHolding({ monWei: 0n, usdcRaw: 1_000_000_000n, wmonWei: 0n, nfts: 2n }, 0.05)).toEqual({ mon: 0, usdc: 1000, positions: 2, usd: 1000 });
   });
 
   test("MON price from the pool's sqrtPriceX96 (WMON 18 decimals, USDC 6)", () => {
@@ -128,6 +129,38 @@ function db(): D1Db {
   return { prepare: (sql: string) => stmt(sql) } as unknown as D1Db;
 }
 
+describe("review findings (otto/mamoru-astro#39 r1)", () => {
+  test("a Monad position does not hide that Safe's known USDC from Value held", () => {
+    const f = buildFundsMap(snapOf([]), [view({ monad: { mon: 0, usdc: 1000, positions: 1, usd: 1000 } })]);
+    expect(f.total).toBeCloseTo(1000, 6);
+    expect(f.partial).toBe(true);
+  });
+
+  test("one unpriced MON Safe leaves the others' known balances in, as a floor", () => {
+    const f = buildFundsMap(snapOf([]), [
+      view({ monad: { mon: 5, usdc: 0, positions: 0, usd: null } }),
+      view({ key: "k2", address: "0x2222222222222222222222222222222222222222", monad: { mon: 0, usdc: 40, positions: 0, usd: 40 } }),
+    ]);
+    const b = f.chains.find((c) => c.name === "Monad")!.buckets.find((x) => x.id === "monad-held")!;
+    expect(b.usd).toBe(40);
+    expect(b.atLeast).toBe(true);
+  });
+
+  test("a testnet row's address still counts its Monad balance", () => {
+    const f = buildFundsMap(snapOf([]), [view({ chainId: 10143, monad: { mon: 0, usdc: 100, positions: 0, usd: 100 } })]);
+    expect(f.total).toBeCloseTo(100, 6);
+  });
+
+  test("an unread Base row makes the account a floor", () => {
+    expect(heldElsewhere([view({ unread: true })], 2000).floor).toBe(true);
+  });
+
+  test("an address already credited adds only its own gas", () => {
+    const r = view({ ethBalance: 0.001, outside: { eth: 0, usdc: 100, usd: 100 } });
+    expect(heldElsewhere([r], 2000, true)).toEqual({ usd: 2, floor: false, away: [] });
+  });
+});
+
 describe("console views", () => {
   const rows = [
     view({ outside: { eth: 0.05537835, usdc: 0, usd: 125.42 } }),
@@ -152,5 +185,23 @@ describe("console views", () => {
     expect(html).toContain("0.0554 ETH on Ethereum");
     expect(html).toContain("$125");
     expect(html.indexOf("c9d4179b")).toBeLessThan(html.indexOf("aaaa1111"));
+  });
+
+  test("two accounts at one address: its Ethereum balance is credited once", async () => {
+    const twin = view({ key: "bbbb2222-0000-0000-0000-000000000000", accountKey: "bbbb2222…", outside: { eth: 0.05537835, usdc: 0, usd: 125.42 } });
+    const m = await loadConsole(db(), "prod", now, snapOf([...rows, twin]));
+    const withEth = m.accounts.filter((a) => a.away.length > 0);
+    expect(withEth).toHaveLength(1);
+  });
+
+  test("a Safe the ledger has not written yet counts its Base money too", async () => {
+    const fresh = view({ key: "cccc3333-0000-0000-0000-000000000000", accountKey: "cccc3333…", address: "0x3333333333333333333333333333333333333333", usdcIdle: 10000 });
+    const m = await loadConsole(db(), "prod", now, snapOf([...rows, fresh]));
+    expect(m.accounts.find((a) => a.key === "cccc3333")!.held).toBeCloseTo(10000, 6);
+  });
+
+  test("a ledger account without an on-chain reading is a floor, never exact", async () => {
+    const m = await loadConsole(db(), "prod", now, snapOf([rows[0]!]));
+    expect(m.accounts.find((a) => a.key === "aaaa1111")!.floor).toBe(true);
   });
 });

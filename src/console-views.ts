@@ -339,7 +339,8 @@ export function accountsView(m: ConsoleModel, now: Date, opts: AccountsOpts = {}
   const steps: [string, number][] = [["Signed up", l.total], ["Deposited", l.earning + l.waiting], ["Earning", l.earning]];
   const funnel = `<ul class="c-funnel">${steps.map(([n, c]) => `<li><span>${esc(n)}</span><span class="c-meter"><i style="width:${((c / Math.max(1, l.total)) * 100).toFixed(1)}%"></i></span><span class="n">${c}</span><span class="n dim">${l.total ? pct((c / l.total) * 100, 0) : ""}</span></li>`).join("")}</ul>`;
   // otto/mamoru-astro#39: a Safe counts by everything it holds on every chain, so money outside Base is never hidden.
-  const shown = m.accounts.filter((a) => a.held >= 0.01 || a.away.length > 0).sort((x, y) => y.held - x.held);
+  // A floor (some part not read) stays listed too: hiding it would read as "nothing there".
+  const shown = m.accounts.filter((a) => a.held >= 0.01 || a.away.length > 0 || a.floor).sort((x, y) => y.held - x.held);
   const folded = m.accounts.length - shown.length;
   const list = m.accounts.length
     ? `<ul class="c-lb plain">${shown
