@@ -3,7 +3,7 @@
 // own /metrics as the app Worker stores it in operator_metrics_latest (ottodevs/mamoru migration 0013). Every
 // figure says where it comes from, and a source that is not there yet is null, never a guessed zero.
 import type { D1Db } from "./d1-infra";
-import { buildFundsMap, type FundsMap } from "./funds-map";
+import { buildFundsMap, type FundsMap, isMapped } from "./funds-map";
 import type { AccountView, InfraSnapshot } from "./infra-snapshot";
 import { CAP_SOURCES, DEFAULT_CAP_USDC, type CapSource } from "./account-cap-model";
 import { newestOverrides, type CapOverrideRow } from "./account-caps-store";
@@ -123,33 +123,49 @@ export interface ConsoleModel {
 
 const fmtNum = (n: number) => n.toFixed(n < 0.001 ? 6 : 4);
 
+/** Addresses whose Ethereum / Monad balance an earlier account already counted: one balance, one account. */
+export interface Credited {
+  eth: Set<string>;
+  monad: Set<string>;
+}
+
 /**
  * What one Safe holds besides the ledger's Base total, from its infra rows. Safe gas is per row; Ethereum and Monad
- * are per address, so `addressCounted` (an earlier key already credited this address) leaves them out: one balance,
- * one account. An unread row, a missing reading or an unpriced part makes the result a floor.
+ * are per address and go to the first account whose read of that address succeeded (`credited`). An unread row,
+ * a missing reading or an unpriced part makes the result a floor.
  */
-export function heldElsewhere(rows: readonly AccountView[], ethUsd: number | null, addressCounted = false): { usd: number; floor: boolean; away: string[] } {
+export function heldElsewhere(
+  rows: readonly AccountView[],
+  ethUsd: number | null,
+  credited: Credited = { eth: new Set(), monad: new Set() },
+): { usd: number; floor: boolean; away: string[] } {
   let usdSum = 0;
   let floor = rows.some((r) => r.unread === true);
   const away: string[] = [];
-  const gas = rows.reduce((x, r) => x + r.ethBalance, 0);
+  const addrs = [...new Set(rows.map((r) => r.address.toLowerCase()))];
+  const gas = rows.filter((r) => isMapped(r.chainId)).reduce((x, r) => x + r.ethBalance, 0);
   if (gas > 0) {
     if (ethUsd === null) floor = true;
     else usdSum += gas * ethUsd;
   }
-  if (addressCounted) return { usd: usdSum, floor, away };
-  const eth = rows.find((r) => r.outside)?.outside;
-  if (!eth) floor = true;
-  else if (eth.eth > 0 || eth.usdc > 0) {
+  const ethDone = addrs.every((a) => credited.eth.has(a));
+  const eth = ethDone ? undefined : rows.find((r) => r.outside)?.outside;
+  if (ethDone) {
+    // Counted on an earlier account.
+  } else if (!eth) floor = true;
+  else if ((addrs.forEach((a) => credited.eth.add(a)), eth.eth > 0 || eth.usdc > 0)) {
     if (eth.usd === null) floor = true;
     else usdSum += eth.usd;
     away.push([eth.eth > 0 ? `${fmtNum(eth.eth)} ETH` : "", eth.usdc > 0 ? `${eth.usdc.toFixed(2)} USDC` : ""].filter(Boolean).join(" + ") + " on Ethereum");
   }
-  const mon = rows.find((r) => r.monad)?.monad;
-  if (!mon) floor = true;
-  else if (mon.mon > 0 || mon.usdc > 0 || mon.positions > 0) {
-    if (mon.usd === null || mon.positions > 0) floor = true;
-    usdSum += mon.usd ?? 0;
+  const monDone = addrs.every((a) => credited.monad.has(a));
+  const mon = monDone ? undefined : rows.find((r) => r.monad)?.monad;
+  if (monDone) {
+    // Counted on an earlier account.
+  } else if (!mon) floor = true;
+  else if ((addrs.forEach((a) => credited.monad.add(a)), mon.mon > 0 || mon.usdc > 0 || mon.positions > 0)) {
+    if (mon.monUnpriced || mon.positions > 0) floor = true;
+    usdSum += mon.usd;
     away.push(
       [mon.mon > 0 ? `${fmtNum(mon.mon)} MON` : "", mon.usdc > 0 ? `${mon.usdc.toFixed(2)} USDC` : "", mon.positions > 0 ? `${mon.positions} ${mon.positions === 1 ? "position" : "positions"}` : ""]
         .filter(Boolean)
@@ -366,13 +382,8 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     infraByKey.set(k, [...(infraByKey.get(k) ?? []), r]);
   }
   // One address is one Ethereum and one Monad balance: only the first account at an address is credited with them.
-  const credited = new Set<string>();
-  const elsewhere = (rs: AccountView[]) => {
-    const addrs = [...new Set(rs.map((r) => r.address.toLowerCase()))];
-    const counted = addrs.every((a) => credited.has(a));
-    for (const a of addrs) credited.add(a);
-    return heldElsewhere(rs, infra?.ethUsd ?? null, counted);
-  };
+  const credited: Credited = { eth: new Set(), monad: new Set() };
+  const elsewhere = (rs: AccountView[]) => heldElsewhere(rs, infra?.ethUsd ?? null, credited);
   for (const y of yields) {
     const rs = infraByKey.get(y.key);
     // No on-chain reading of this Safe: its gas, Ethereum and Monad balances are unknown, so the figure is a floor.
@@ -390,8 +401,10 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
   for (const [k, rs] of infraByKey) {
     if (ledgerKeys.has(k)) continue;
     const e = elsewhere(rs);
-    const idle = rs.reduce((x, r) => x + r.usdcIdle, 0);
-    const lp = rs.reduce((x, r) => x + r.lpUsd, 0);
+    // Testnet rows' Base-side figures are testnet tokens, never money.
+    const real = rs.filter((r) => isMapped(r.chainId));
+    const idle = real.reduce((x, r) => x + r.usdcIdle, 0);
+    const lp = real.reduce((x, r) => x + r.lpUsd, 0);
     const held = idle + lp + e.usd;
     // An unread Base read could hide money: such a Safe stays listed, as a floor.
     if (held < 0.01 && e.away.length === 0 && !rs.some((r) => r.unread === true)) continue;
