@@ -34,8 +34,10 @@ export interface MonadHolding {
   usdc: number;
   /** Uniswap v3 position NFTs held on Monad. Their value is not read here: any position makes the Safe's figure a floor. */
   positions: number;
-  /** MON + USDC in dollars, positions excluded; null only when there is MON and no price: never a zero standing in for it. */
-  usd: number | null;
+  /** The priced part in dollars: USDC, plus MON when it has a price. Positions are never in it. */
+  usd: number;
+  /** True when MON is held and no price was read: `usd` is then a floor (the USDC still counts). */
+  monUnpriced: boolean;
 }
 
 export interface MonadRaw {
@@ -108,8 +110,8 @@ export function toMonadHolding(raw: MonadRaw, monUsd: number | null): MonadHoldi
   const mon = Number(raw.monWei + raw.wmonWei) / 1e18;
   const usdc = Number(raw.usdcRaw) / 1e6;
   const positions = Number(raw.nfts);
-  const usd = mon === 0 ? usdc : monUsd === null ? null : mon * monUsd + usdc;
-  return { mon, usdc, positions, usd };
+  const monUnpriced = mon > 0 && monUsd === null;
+  return { mon, usdc, positions, usd: usdc + (monUsd === null ? 0 : mon * monUsd), monUnpriced };
 }
 
 /** Reads every address on Monad. Map keyed by lowercase address of the accounts that were read; absent = not read. Never throws. */

@@ -25,7 +25,7 @@ const view = (o: Partial<AccountView> = {}): AccountView => ({
   positions: 0,
   inRange: 0,
   outside: { eth: 0, usdc: 0, usd: 0 },
-  monad: { mon: 0, usdc: 0, positions: 0, usd: 0 },
+  monad: { mon: 0, usdc: 0, positions: 0, usd: 0, monUnpriced: false },
   ...o,
 });
 
@@ -53,11 +53,12 @@ describe("Monad reader", () => {
   });
 
   test("unpriced MON is never a number; USDC is, positions or not", () => {
-    expect(toMonadHolding({ monWei: 0n, usdcRaw: 7_500_000n, wmonWei: 0n, nfts: 0n }, null).usd).toBe(7.5);
-    expect(toMonadHolding({ monWei: 10n ** 18n, usdcRaw: 0n, wmonWei: 0n, nfts: 0n }, null).usd).toBeNull();
-    expect(toMonadHolding({ monWei: 10n ** 18n, usdcRaw: 0n, wmonWei: 10n ** 18n, nfts: 0n }, 0.05)).toEqual({ mon: 2, usdc: 0, positions: 0, usd: 0.1 });
+    expect(toMonadHolding({ monWei: 0n, usdcRaw: 7_500_000n, wmonWei: 0n, nfts: 0n }, null)).toMatchObject({ usd: 7.5, monUnpriced: false });
+    // Unpriced MON: the USDC beside it still counts, and the figure is flagged as a floor.
+    expect(toMonadHolding({ monWei: 10n ** 18n, usdcRaw: 1_000_000_000n, wmonWei: 0n, nfts: 0n }, null)).toMatchObject({ usd: 1000, monUnpriced: true });
+    expect(toMonadHolding({ monWei: 10n ** 18n, usdcRaw: 0n, wmonWei: 10n ** 18n, nfts: 0n }, 0.05)).toEqual({ mon: 2, usdc: 0, positions: 0, usd: 0.1, monUnpriced: false });
     // A position keeps the known USDC standing; the position itself is flagged, not priced.
-    expect(toMonadHolding({ monWei: 0n, usdcRaw: 1_000_000_000n, wmonWei: 0n, nfts: 2n }, 0.05)).toEqual({ mon: 0, usdc: 1000, positions: 2, usd: 1000 });
+    expect(toMonadHolding({ monWei: 0n, usdcRaw: 1_000_000_000n, wmonWei: 0n, nfts: 2n }, 0.05)).toEqual({ mon: 0, usdc: 1000, positions: 2, usd: 1000, monUnpriced: false });
   });
 
   test("MON price from the pool's sqrtPriceX96 (WMON 18 decimals, USDC 6)", () => {
@@ -88,7 +89,7 @@ describe("every Safe balance counts", () => {
   test("Value held on the map is working + Safe gas + Ethereum + Monad", () => {
     const f = buildFundsMap(snapOf([]), [
       view({ lpUsd: 68, usdcIdle: 0.69, ethBalance: 0.001 }),
-      view({ key: "k2", address: "0x2222222222222222222222222222222222222222", outside: { eth: 0.05537835, usdc: 0, usd: 125.42 }, monad: { mon: 0, usdc: 3, positions: 0, usd: 3 } }),
+      view({ key: "k2", address: "0x2222222222222222222222222222222222222222", outside: { eth: 0.05537835, usdc: 0, usd: 125.42 }, monad: { mon: 0, usdc: 3, positions: 0, usd: 3, monUnpriced: false } }),
     ]);
     expect(f.partial).toBe(false);
     expect(f.total).toBeCloseTo(68.69 + 2.265 + 125.42 + 3, 6);
@@ -96,7 +97,7 @@ describe("every Safe balance counts", () => {
   });
 
   test("a position on Monad is shown and makes the total a floor until it is priced", () => {
-    const f = buildFundsMap(snapOf([]), [view({ monad: { mon: 0, usdc: 0, positions: 1, usd: null } })]);
+    const f = buildFundsMap(snapOf([]), [view({ monad: { mon: 0, usdc: 0, positions: 1, usd: 0, monUnpriced: true } })]);
     expect(f.partial).toBe(true);
     expect(f.chains.find((c) => c.name === "Monad")!.buckets.map((b) => b.id)).toContain("monad-positions");
   });
@@ -131,15 +132,15 @@ function db(): D1Db {
 
 describe("review findings (otto/mamoru-astro#39 r1)", () => {
   test("a Monad position does not hide that Safe's known USDC from Value held", () => {
-    const f = buildFundsMap(snapOf([]), [view({ monad: { mon: 0, usdc: 1000, positions: 1, usd: 1000 } })]);
+    const f = buildFundsMap(snapOf([]), [view({ monad: { mon: 0, usdc: 1000, positions: 1, usd: 1000, monUnpriced: false } })]);
     expect(f.total).toBeCloseTo(1000, 6);
     expect(f.partial).toBe(true);
   });
 
   test("one unpriced MON Safe leaves the others' known balances in, as a floor", () => {
     const f = buildFundsMap(snapOf([]), [
-      view({ monad: { mon: 5, usdc: 0, positions: 0, usd: null } }),
-      view({ key: "k2", address: "0x2222222222222222222222222222222222222222", monad: { mon: 0, usdc: 40, positions: 0, usd: 40 } }),
+      view({ monad: { mon: 5, usdc: 0, positions: 0, usd: 0, monUnpriced: true } }),
+      view({ key: "k2", address: "0x2222222222222222222222222222222222222222", monad: { mon: 0, usdc: 40, positions: 0, usd: 40, monUnpriced: false } }),
     ]);
     const b = f.chains.find((c) => c.name === "Monad")!.buckets.find((x) => x.id === "monad-held")!;
     expect(b.usd).toBe(40);
@@ -147,7 +148,7 @@ describe("review findings (otto/mamoru-astro#39 r1)", () => {
   });
 
   test("a testnet row's address still counts its Monad balance", () => {
-    const f = buildFundsMap(snapOf([]), [view({ chainId: 10143, monad: { mon: 0, usdc: 100, positions: 0, usd: 100 } })]);
+    const f = buildFundsMap(snapOf([]), [view({ chainId: 10143, monad: { mon: 0, usdc: 100, positions: 0, usd: 100, monUnpriced: false } })]);
     expect(f.total).toBeCloseTo(100, 6);
   });
 
@@ -157,7 +158,28 @@ describe("review findings (otto/mamoru-astro#39 r1)", () => {
 
   test("an address already credited adds only its own gas", () => {
     const r = view({ ethBalance: 0.001, outside: { eth: 0, usdc: 100, usd: 100 } });
-    expect(heldElsewhere([r], 2000, true)).toEqual({ usd: 2, floor: false, away: [] });
+    const a = r.address.toLowerCase();
+    expect(heldElsewhere([r], 2000, { eth: new Set([a]), monad: new Set([a]) })).toEqual({ usd: 2, floor: false, away: [] });
+  });
+
+  test("an account whose read failed does not claim the address: a later account with a read is credited", () => {
+    const credited = { eth: new Set<string>(), monad: new Set<string>() };
+    const first = heldElsewhere([view({ outside: undefined })], 2000, credited);
+    const second = heldElsewhere([view({ key: "k2", outside: { eth: 0, usdc: 100, usd: 100 } })], 2000, credited);
+    expect(first.floor).toBe(true);
+    expect(second.usd).toBe(100);
+  });
+
+  test("unpriced MON beside known USDC: the USDC counts in Value held, as a floor", () => {
+    const f = buildFundsMap(snapOf([]), [view({ monad: { mon: 5, usdc: 1000, positions: 0, usd: 1000, monUnpriced: true } })]);
+    expect(f.total).toBeCloseTo(1000, 6);
+    expect(f.partial).toBe(true);
+    expect(heldElsewhere([view({ monad: { mon: 5, usdc: 1000, positions: 0, usd: 1000, monUnpriced: true } })], 2000)).toMatchObject({ usd: 1000, floor: true });
+  });
+
+  test("a testnet row's Base-side tokens are never money", async () => {
+    const m = await loadConsole(db(), "all", new Date("2026-11-01T06:00:00Z"), snapOf([view({ key: "dddd4444-0000-0000-0000-000000000000", accountKey: "dddd4444…", address: "0x4444444444444444444444444444444444444444", chainId: 84532, isTest: true, usdcIdle: 10000, ethBalance: 1 })]));
+    expect(m.accounts.find((a) => a.key === "dddd4444")).toBeUndefined();
   });
 });
 

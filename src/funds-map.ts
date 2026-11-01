@@ -58,6 +58,8 @@ export interface FundsMap {
 }
 
 export const BASE_ID = 8453;
+/** True for the mainnets the map counts; testnet tokens are never money. */
+export const isMapped = (chainId: number): boolean => chainId === 8453 || chainId === 1 || chainId === 143;
 export const ETHEREUM_ID = 1;
 export const MONAD_ID = 143;
 /** Only these chains enter the map. Testnets (10143, 84532, 11155111) and unknown ids are counted apart, never mapped. */
@@ -211,9 +213,10 @@ export function buildFundsMap(
   const monUsdc = monadRead.reduce((s, r) => s + (r.monad?.usdc ?? 0), 0);
   const monPositions = monadRead.reduce((s, r) => s + (r.monad?.positions ?? 0), 0);
   // MON and USDC count for every read Safe, positions or not; an unpriced Safe leaves the known part standing as a floor.
-  const unpricedMon = monadRead.filter((r) => r.monad?.usd === null);
+  const unpricedMon = monadRead.filter((r) => r.monad?.monUnpriced === true);
   const pricedUsd = monadRead.reduce((s, r) => s + (r.monad?.usd ?? 0), 0);
-  const looseUsd = unpricedMon.length === monadRead.length && mon > 0 ? null : pricedUsd;
+  // Known USDC always counts; only when nothing at all is priced is the bucket "not priced".
+  const looseUsd = unpricedMon.length > 0 && pricedUsd === 0 ? null : pricedUsd;
   if (monadRows.length > 0) {
     put(MONAD_ID, {
       id: "monad-held",

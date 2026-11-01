@@ -21,7 +21,7 @@ const row = (o: Partial<AccountView> = {}): AccountView => {
     ethBalance: 0,
     positions: 0,
     inRange: 0,
-    monad: { mon: 0, usdc: 0, positions: 0, usd: 0 },
+    monad: { mon: 0, usdc: 0, positions: 0, usd: 0, monUnpriced: false },
     ...o,
   };
 };
