@@ -21,6 +21,7 @@ const row = (o: Partial<AccountView> = {}): AccountView => {
     ethBalance: 0,
     positions: 0,
     inRange: 0,
+    monad: { mon: 0, usdc: 0, positions: 0, usd: 0 },
     ...o,
   };
 };
@@ -180,7 +181,7 @@ describe("buildFundsMap", () => {
   test("render escapes, links buckets, marks not working", () => {
     const html = renderFundsMap(buildFundsMap(snap(), [row({ outside: { eth: 1, usdc: 0, usd: 2000 } })]));
     expect(html).toContain('id="funds-map"');
-    expect(html).toContain("Total including not working");
+    expect(html).toContain("Value held, every chain");
     expect(html).toContain('href="/ops/accounts"');
     expect(html).toContain("Not working</span>");
   });

@@ -50,6 +50,7 @@ export interface InfraSources {
   rpcUrl?: string;
   /** Optional secret ETHEREUM_RPC_URLS (otto/mamoru-astro#31). */
   ethRpcUrls?: string;
+  monadRpcUrls?: string;
   db?: D1Db;
   kv?: WaitlistKv;
 }
@@ -88,7 +89,7 @@ async function writeJson(kv: WaitlistKv, key: string, value: unknown, ttl: numbe
 
 type Compute = (sources: InfraSources) => Promise<InfraSnapshot>;
 
-const defaultCompute: Compute = (s) => computeInfraSnapshot({ BASE_RPC_URL: s.rpcUrl, ETHEREUM_RPC_URLS: s.ethRpcUrls, MAMORU_DB: s.db });
+const defaultCompute: Compute = (s) => computeInfraSnapshot({ BASE_RPC_URL: s.rpcUrl, ETHEREUM_RPC_URLS: s.ethRpcUrls, MONAD_RPC_URLS: s.monadRpcUrls, MAMORU_DB: s.db });
 
 /** Computes now and stores the outcome: a complete reading in both keys, anything else only as current. */
 async function computeAndStore(sources: InfraSources, compute: Compute, now: number): Promise<InfraReading> {
