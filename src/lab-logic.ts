@@ -399,12 +399,27 @@ export function labLogic() {
     return md.replace(/\{\{[cv]\d+\}\}/g, "").replace(/\s{2,}/g, " ").trim();
   };
 
-  type RunLite = VerdictRunLike & { resultHash: string; windowId: string };
+  /** The thread API serves `LabRunSummary`, whose window is `window.id` -- there is no top-level `windowId` on
+   * a served run (the chart button read one and always got undefined); `windowId` stays for callers that have it. */
+  type RunLite = VerdictRunLike & { resultHash: string; windowId?: string; window?: { id: string } };
+  var runWindowId = function (run?: RunLite): string {
+    if (!run) return "";
+    return run.windowId || (run.window && run.window.id) || "";
+  };
+
+  /** Which run a figure belongs to (window id · variant): without it a chip or verdict sentence reads as a bare
+   * number, and a sweep's fourteen figures, or a partial answer whose prose was dropped, can't be told apart. */
+  var runContextText = function (run?: RunLite): string {
+    if (!run) return "";
+    var w = runWindowId(run);
+    return w ? w + " · " + run.variantLabel : run.variantLabel;
+  };
 
   var claimChipHtml = function (b: { runId: string; value: number; metric: string }, run?: RunLite): string {
-    var title = run ? "Resultado: " + run.variantLabel : "";
+    var ctx = runContextText(run);
     return (
-      '<span class="lab-ask-chip" data-run-id="' + escHtml(b.runId) + '"' + (title ? ' title="' + escHtml(title) + '"' : "") + ">" +
+      '<span class="lab-ask-chip" data-run-id="' + escHtml(b.runId) + '">' +
+      (ctx ? '<i class="lab-ask-ctx">' + escHtml(ctx) + "</i>" : "") +
       "<b>" + escHtml(fmtClaimValue(b.value, b.metric)) + "</b><small>" + escHtml(metricLabel(b.metric)) + "</small></span>"
     );
   };
@@ -416,10 +431,15 @@ export function labLogic() {
     return verdictSentence(run, b.against, other);
   };
 
+  var verdictHtml = function (b: { runId: string; against: string }, runsByHash: Record<string, RunLite>): string {
+    var ctx = runContextText(runsByHash[b.runId]);
+    return '<p class="lab-verdict">' + (ctx ? '<i class="lab-ask-ctx">' + escHtml(ctx) + "</i>" : "") + escHtml(verdictText(b, runsByHash)) + "</p>";
+  };
+
   var chartButtonHtml = function (b: { kind: string; runIds: string[] }, runsByHash: Record<string, RunLite>): string {
     var first = b.runIds[0];
     var run = first ? runsByHash[first] : undefined;
-    var windowId = run ? run.windowId : "";
+    var windowId = runWindowId(run);
     var compare = b.runIds.length > 1 || b.kind === "decomposition" ? "1" : "0";
     return (
       '<button type="button" class="lab-ask-openbench" data-run-id="' + escHtml(first || "") + '" data-window-id="' + escHtml(windowId) + '" data-compare="' + compare + '">' +
@@ -444,7 +464,7 @@ export function labLogic() {
       // for the implementing session"), ported into lab-style.ts at the B-07 shell pass and left unused until
       // this ticket -- reused here rather than inventing a parallel set of class names for the same thing.
       out += headline.type === "verdict"
-        ? '<p class="lab-verdict">' + escHtml(verdictText(headline, runsByHash)) + "</p>"
+        ? verdictHtml(headline, runsByHash)
         : '<div class="lab-verdict lab-verdict-claim">' + claimChipHtml(headline, runsByHash[(headline as { runId: string }).runId]) + "</div>";
     }
     if (partial) out += '<p class="lab-ask-partial">Respuesta parcial: solo se muestra lo verificado.</p>';
@@ -456,7 +476,7 @@ export function labLogic() {
       var b = blocks[i];
       if (b === headline) continue;
       if (b.type === "claim") chips += claimChipHtml(b, runsByHash[b.runId]);
-      else if (b.type === "verdict") sentences += '<p class="lab-verdict">' + escHtml(verdictText(b, runsByHash)) + "</p>";
+      else if (b.type === "verdict") sentences += verdictHtml(b, runsByHash);
       else if (b.type === "chart") charts += chartButtonHtml(b, runsByHash);
       else prose += "<p>" + escHtml(stripRefTokens(b.md)) + "</p>";
     }
