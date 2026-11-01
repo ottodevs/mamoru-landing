@@ -170,6 +170,18 @@ describe("review findings (otto/mamoru-astro#39 r1)", () => {
     expect(second.usd).toBe(100);
   });
 
+  test("an account with two addresses credits only the one it read; another account reading the second is credited", () => {
+    const credited = { eth: new Set<string>(), monad: new Set<string>() };
+    const B = "0x5555555555555555555555555555555555555555";
+    const first = heldElsewhere([view({ outside: { eth: 0, usdc: 10, usd: 10 } }), view({ address: B, outside: undefined })], 2000, credited);
+    const second = heldElsewhere([view({ key: "k2", address: B, outside: { eth: 0, usdc: 100, usd: 100 } })], 2000, credited);
+    expect(first).toMatchObject({ usd: 10, floor: true });
+    expect(second.usd).toBe(100);
+    // And an already credited address is never counted again beside a new one.
+    const third = heldElsewhere([view({ key: "k3", outside: { eth: 0, usdc: 10, usd: 10 } }), view({ key: "k3", address: "0x6666666666666666666666666666666666666666", outside: { eth: 0, usdc: 1, usd: 1 } })], 2000, credited);
+    expect(third.usd).toBe(1);
+  });
+
   test("unpriced MON beside known USDC: the USDC counts in Value held, as a floor", () => {
     const f = buildFundsMap(snapOf([]), [view({ monad: { mon: 5, usdc: 1000, positions: 0, usd: 1000, monUnpriced: true } })]);
     expect(f.total).toBeCloseTo(1000, 6);
