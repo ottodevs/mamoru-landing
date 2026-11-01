@@ -254,6 +254,14 @@ describe("a failed read never hides money seen before (otto/mamoru-astro#40)", (
     expect(fresh.accounts!.rows[0]!.outside).toEqual({ eth: 0.01, usdc: 0, usd: 20 });
   });
 
+  test("a newer reading without the address does not hide an older one that has it", () => {
+    const current = snapOf([view({ outside: undefined, monad: undefined })]);
+    const good = snapOf([view({ outside: { eth: 0.05537835, usdc: 0, usd: 125.42 } })]);
+    const now = snapOf([view({ outside: undefined })]);
+    carryForward(now, current, good);
+    expect(now.accounts!.rows[0]!.outside?.usd).toBe(125.42);
+  });
+
   test("a carried figure keeps its first time across later failed reads", () => {
     const first = snapOf([view({ outside: { eth: 1, usdc: 0, usd: 2000, at: "2026-11-01T05:00:41Z" } })]);
     const next = snapOf([view({ outside: undefined })]);

@@ -613,15 +613,18 @@ export async function computeInfraSnapshot(
  * that had it, stamped with that reading's time (`at`), so money once seen never drops out of /ops on a failed read.
  * Only rows still without a figure are filled; a fresh read always wins. Mutates and returns `computed`.
  */
-export function carryForward(computed: InfraSnapshot, previous: InfraSnapshot | null): InfraSnapshot {
+export function carryForward(computed: InfraSnapshot, ...previous: (InfraSnapshot | null | undefined)[]): InfraSnapshot {
   const rows = computed.accounts?.rows;
-  if (!rows?.length || !previous?.accounts?.rows?.length) return computed;
+  if (!rows?.length) return computed;
+  // Per address, the first earlier reading (in the order given: newest first) that has a figure for it.
   const eth = new Map<string, OutsideHolding>();
   const mon = new Map<string, MonadHolding>();
-  for (const r of previous.accounts.rows) {
-    const a = r.address.toLowerCase();
-    if (r.outside && !eth.has(a)) eth.set(a, { ...r.outside, at: r.outside.at ?? previous.asOf });
-    if (r.monad && !mon.has(a)) mon.set(a, { ...r.monad, at: r.monad.at ?? previous.asOf });
+  for (const p of previous) {
+    for (const r of p?.accounts?.rows ?? []) {
+      const a = r.address.toLowerCase();
+      if (r.outside && !eth.has(a)) eth.set(a, { ...r.outside, at: r.outside.at ?? p!.asOf });
+      if (r.monad && !mon.has(a)) mon.set(a, { ...r.monad, at: r.monad.at ?? p!.asOf });
+    }
   }
   for (const r of rows) {
     const a = r.address.toLowerCase();
