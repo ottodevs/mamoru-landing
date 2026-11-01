@@ -211,6 +211,8 @@ export const LAB_STYLE = `
 .lab-ask-chip { display: inline-grid; gap: 1px; border: 1px solid var(--wash); background: var(--rice); border-radius: var(--r); padding: 5px 9px; }
 .lab-ask-chip b { font-size: .86rem; font-weight: 600; }
 .lab-ask-chip small { font-size: .68rem; color: var(--stone); }
+.lab-ask-ctx { display: block; font-style: normal; font-size: .66rem; color: var(--stone); letter-spacing: .01em; }
+.lab-verdict .lab-ask-ctx { margin-bottom: 2px; }
 .lab-ask-chip:hover { border-color: var(--mamoru); }
 .lab-ask-openbench { justify-self: start; border: 1px solid var(--mamoru); background: none; color: var(--mamoru); border-radius: var(--r); padding: 5px 10px; font-size: .8rem; cursor: pointer; }
 .lab-ask-openbench:hover { background: var(--mamoru); color: var(--paper); }

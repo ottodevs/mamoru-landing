@@ -338,6 +338,26 @@ describe("lab-logic.ts: \"Preguntar al Lab\" (otto/mamoru-astro#30, spec 008 pha
     expect(LAB.answerBlocksHtml([], {}, false)).toBe("");
   });
 
+  test("answerBlocksHtml: every chip and verdict names its run (window · variant), escaped -- a partial answer's bare figures stay legible", () => {
+    const blocks = [
+      { type: "claim" as const, metric: "vsHodl", runId: "hash-a", value: -16.44 },
+      { type: "claim" as const, metric: "vsHodl", runId: "hash-b", value: -3.26 },
+      { type: "verdict" as const, runId: "hash-b", against: "hold" },
+    ];
+    const html = LAB.answerBlocksHtml(blocks, { "hash-a": runA, "hash-b": runB }, true);
+    expect(html).toContain('<i class="lab-ask-ctx">feb2025 · Política actual</i><b>−16,44 USDC</b>');
+    expect(html).toContain('<p class="lab-verdict"><i class="lab-ask-ctx">feb2025 · Rango ×2</i>Terminó 3,26 USDC por debajo');
+    const hostile = { ...runA, variantLabel: "<img onerror=x>" };
+    expect(LAB.answerBlocksHtml([blocks[0]!], { "hash-a": hostile }, false)).toContain("feb2025 · &lt;img onerror=x&gt;");
+    expect(LAB.answerBlocksHtml([blocks[0]!], {}, false)).not.toContain("lab-ask-ctx");
+    // what the thread API actually serves: LabRunSummary, window under `window.id`, no top-level windowId
+    const served = { resultHash: "hash-s", window: { id: "mar2025" }, variantLabel: "Rango 1.000 ticks", metrics: { end: 991.54, vsHodl: -8.46 }, deposit: 1000 };
+    const servedHtml = LAB.answerBlocksHtml([{ type: "claim" as const, metric: "vsHodl", runId: "hash-s", value: -8.46 }, { type: "chart" as const, kind: "equity", runIds: ["hash-s"] }], { "hash-s": served }, false);
+    expect(servedHtml).toContain("mar2025 · Rango 1.000 ticks");
+    expect(servedHtml).toContain('data-window-id="mar2025"');
+    expect(servedHtml).not.toContain("undefined");
+  });
+
   test("answerBlocksHtml: a verdict citing a run the caller never resolved fails safe, never throws", () => {
     const blocks = [{ type: "verdict" as const, runId: "hash-unknown", against: "hold" }];
     expect(() => LAB.answerBlocksHtml(blocks, {}, false)).not.toThrow();
