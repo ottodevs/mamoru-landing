@@ -109,6 +109,35 @@ describe("readOutsideBase", () => {
     expect(notes[0]).toBe("secret.example: JSON-RPC error -32000");
   });
 
+  test("a healthy configured RPC is the only one asked: public hosts never see the addresses (otto/mamoru-astro#41)", async () => {
+    const seen: string[] = [];
+    const fast = ethFetch({ [USER.toLowerCase()]: [1n, 0n] }, { seen });
+    const m = await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://own.example/k", fetchFn: fast });
+    expect(m.size).toBe(1);
+    expect(seen).toEqual(["https://own.example/k"]);
+  });
+
+  test("a public answer never overrules the configured RPC, whatever arrives first; public hosts get only what it missed", async () => {
+    const OTHER = "0x00000000000000000000000000000000000000e2";
+    const asked: string[] = [];
+    const own = ethFetch({ [USER.toLowerCase()]: [7n, 0n] });
+    const pub = ethFetch({ [USER.toLowerCase()]: [999n, 0n], [OTHER]: [5n, 0n] });
+    const fetchFn = async (u: string, i?: RequestInit) => {
+      asked.push(`${u} ${String(i?.body).toLowerCase().includes(USER.toLowerCase().slice(2)) ? "user" : ""}`);
+      if (u.includes("own.example")) {
+        await new Promise((r) => setTimeout(r, 30));
+        // The configured RPC answers USER only.
+        const res = await own(u, i);
+        return res;
+      }
+      return pub(u, i);
+    };
+    const m = await readOutsideBase([USER, OTHER], { baseEthUsd: 1, rpcUrls: "https://own.example/k", fetchFn });
+    expect(m.get(USER.toLowerCase())?.eth).toBe(7 / 1e18);
+    expect(m.get(OTHER)?.eth).toBe(5 / 1e18);
+    expect(asked.filter((x) => !x.startsWith("https://own.example")).every((x) => !x.endsWith("user"))).toBe(true);
+  });
+
   test("notes are host and category only: no error text, so a key echoed in any form never gets in", async () => {
     const notes: string[] = [];
     const fetchFn = async (url: string) => {
