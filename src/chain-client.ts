@@ -7,11 +7,12 @@ import { MULTICALL3_ADDRESS, rpcUrls } from "./chain-addresses";
 export type BaseClient = PublicClient<ReturnType<typeof fallback>, Chain>;
 
 /**
- * A read client that tries the secret RPC (if set) then the public fallbacks in order.
+ * A read client that tries the secret RPCs (if set) then a rotated slice of the public pool, in order. A shorter
+ * timeout than viem's default, so a hung host costs little before the next one is tried.
  * The URLs never leave this function: nothing here is logged or rendered.
  */
 export function buildClient(secretRpcUrl?: string): BaseClient {
-  const transports = rpcUrls(secretRpcUrl).map((url) => http(url, { timeout: 8_000 }));
+  const transports = rpcUrls(secretRpcUrl).map((url) => http(url, { timeout: 5_000 }));
   return createPublicClient({
     chain: base as Chain,
     transport: fallback(transports, { rank: false }),

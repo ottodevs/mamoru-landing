@@ -9,6 +9,7 @@ import { outsideSheet } from "../src/ops-outside";
 import { renderInfra } from "../src/ops-infra";
 import {
   ETHEREUM_MULTICALL3,
+  ETHEREUM_PUBLIC_RPCS,
   ETHEREUM_USDC,
   ethereumRpcList,
   outsideLine,
@@ -60,6 +61,7 @@ describe("readOutsideBase", () => {
     const m = await readOutsideBase([USER, EMPTY], {
       baseEthUsd: 2300,
       fetchFn: ethFetch({ [USER.toLowerCase()]: [55378350000000000n, 1_500_000n], [EMPTY]: [0n, 0n] }, { seen }),
+      rotation: 0,
     });
     const h = m.get(USER.toLowerCase())!;
     expect(h.eth).toBeCloseTo(0.05537835, 10);
@@ -67,7 +69,7 @@ describe("readOutsideBase", () => {
     expect(h.usd).toBeCloseTo(0.05537835 * 2300 + 1.5, 6);
     expect(m.get(EMPTY)).toEqual({ eth: 0, usdc: 0, usd: 0 });
     expect(seen.some((u) => u.includes("coinbase"))).toBe(false);
-    expect(seen[0]).toBe("https://ethereum-rpc.publicnode.com");
+    expect(seen[0]).toBe(ETHEREUM_PUBLIC_RPCS[0]);
   });
 
   test("falls back to Coinbase spot when there is no Base price, and not at all when no one holds ETH", async () => {
@@ -86,12 +88,14 @@ describe("readOutsideBase", () => {
 
   test("a failing RPC is skipped for the next one; all failing leaves the map empty (never zero)", async () => {
     const seen: string[] = [];
-    const m = await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://secret.example/key, http://insecure.example", fetchFn: ethFetch({}, { fail: true, seen }) });
+    const m = await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://secret.example/key, http://insecure.example", fetchFn: ethFetch({}, { fail: true, seen }), rotation: 0 });
     expect(m.size).toBe(0);
     expect(seen[0]).toBe("https://secret.example/key");
     expect(seen).not.toContain("http://insecure.example");
-    // otto/mamoru-astro#40: the secret plus four public RPCs, each tried with aggregate3 and then with a plain batch.
+    // otto/mamoru-astro#42: an RPC that answers 503 is not asked again this run (no plain batch either): the secret
+    // once, then the run's public budget of nine, in waves of three.
     expect(seen.length).toBe(10);
+    expect(seen.slice(1)).toEqual(ETHEREUM_PUBLIC_RPCS.slice(0, 9));
   });
 
   test("aggregate3 refused everywhere: the plain batch reads the balances; errors name hosts, never URL paths", async () => {
@@ -182,10 +186,10 @@ describe("readOutsideBase", () => {
       if (url.includes("secret")) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32001, message: "invalid apiKey=abc" } }));
       throw new Error("invalid apiKey=abc");
     };
-    await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://secret.example/?apiKey=abc", fetchFn, onError: (x) => notes.push(x) });
+    await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://secret.example/?apiKey=abc", fetchFn, onError: (x) => notes.push(x), rotation: 0 });
     expect(notes.join(" ")).not.toContain("abc");
     expect(notes).toContain("secret.example: JSON-RPC error -32001");
-    expect(notes).toContain("eth.drpc.org: network error");
+    expect(notes).toContain("rpc.mevblocker.io: network error");
   });
 
   test("an error text that repeats the secret URL, with or without its scheme, keeps only the host", async () => {
@@ -259,7 +263,9 @@ describe("readOutsideBase", () => {
   });
 
   test("ethereumRpcList puts the secret first and keeps the public fallbacks", () => {
-    expect(ethereumRpcList()[0]).toBe("https://ethereum-rpc.publicnode.com");
+    expect(ethereumRpcList()[0]).toBe(ETHEREUM_PUBLIC_RPCS[0]);
+    expect(ethereumRpcList(undefined, 1)[0]).toBe(ETHEREUM_PUBLIC_RPCS[1]);
+    expect(ethereumRpcList("https://a.example").length).toBe(ETHEREUM_PUBLIC_RPCS.length + 1);
     expect(ethereumRpcList("https://a.example")[0]).toBe("https://a.example");
   });
 });
