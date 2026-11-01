@@ -88,10 +88,11 @@ function fmtNative(n: number, symbol: string): string {
  * The rows whose Ethereum balance counts as "outside Base, not working", used by the map AND the headline figure
  * so they can never disagree. Safes share one address across chains: a row at an address that also has a chain-1
  * row is already working money on Ethereum, and several rows at one address are one L1 balance, counted once.
- * Only mapped chains (Base, Ethereum, Monad) take part: testnet and unknown-chain rows are left out.
+ * Every row takes part, whatever chain its D1 row names (otto/mamoru-astro#39): the read is per address, so a
+ * testnet row's address still holds real Ethereum money in an "all" view.
  */
 export function outsideRowsOf<T extends Pick<Row, "chainId" | "address" | "outside">>(all: readonly T[]): T[] {
-  const rows = all.filter((r) => MAPPED.has(r.chainId));
+  const rows = all;
   const l1Addresses = new Set(rows.filter((r) => r.chainId === ETHEREUM_ID && r.address).map((r) => r.address.toLowerCase()));
   const outsideRows: T[] = [];
   const seen = new Map<string, number>();
@@ -112,11 +113,15 @@ export function outsideRowsOf<T extends Pick<Row, "chainId" | "address" | "outsi
   return outsideRows;
 }
 
-/** One row per address for the Monad read (the same Safe address on every chain is one Monad balance). */
+/**
+ * One row per address for the Monad read (the same Safe address on every chain is one Monad balance). Every row
+ * takes part, whatever chain its D1 row names: the read is per address, so a testnet row's address still holds real
+ * Monad money in an "all" view.
+ */
 export function monadRowsOf<T extends Pick<Row, "chainId" | "address" | "monad">>(all: readonly T[]): T[] {
   const byAddress = new Map<string, T>();
   const loose: T[] = [];
-  for (const r of all.filter((x) => MAPPED.has(x.chainId))) {
+  for (const r of all) {
     const a = r.address?.toLowerCase();
     if (!a) loose.push(r);
     else if (!byAddress.has(a) || (!byAddress.get(a)?.monad && r.monad)) byAddress.set(a, r);
@@ -205,25 +210,27 @@ export function buildFundsMap(
   const mon = monadRead.reduce((s, r) => s + (r.monad?.mon ?? 0), 0);
   const monUsdc = monadRead.reduce((s, r) => s + (r.monad?.usdc ?? 0), 0);
   const monPositions = monadRead.reduce((s, r) => s + (r.monad?.positions ?? 0), 0);
-  const loose = monadRead.filter((r) => (r.monad?.positions ?? 0) === 0);
-  const looseUsd = loose.some((r) => r.monad?.usd === null) ? null : loose.reduce((s, r) => s + (r.monad?.usd ?? 0), 0);
+  // MON and USDC count for every read Safe, positions or not; an unpriced Safe leaves the known part standing as a floor.
+  const unpricedMon = monadRead.filter((r) => r.monad?.usd === null);
+  const pricedUsd = monadRead.reduce((s, r) => s + (r.monad?.usd ?? 0), 0);
+  const looseUsd = unpricedMon.length === monadRead.length && mon > 0 ? null : pricedUsd;
   if (monadRows.length > 0) {
     put(MONAD_ID, {
       id: "monad-held",
       label: "MON and USDC at the Safes",
       kind: "outside",
       usd: monadRead.length === 0 ? null : looseUsd,
-      accounts: loose.filter((r) => (r.monad?.mon ?? 0) > 0 || (r.monad?.usdc ?? 0) > 0).length,
+      accounts: monadRead.filter((r) => (r.monad?.mon ?? 0) > 0 || (r.monad?.usdc ?? 0) > 0).length,
       note:
         monadRead.length === 0
           ? "not read"
           : [
               mon > 0 ? fmtNative(mon, "MON") : "",
               monUsdc > 0 ? `${monUsdc.toFixed(2)} USDC` : "",
-              looseUsd === null ? "not priced" : "",
+              unpricedMon.length > 0 ? "MON not priced" : "",
               monadUnread > 0 ? `${monadUnread} not read` : "",
             ].filter(Boolean).join(", "),
-      atLeast: monadRead.length > 0 && monadUnread > 0,
+      atLeast: monadRead.length > 0 && (monadUnread > 0 || (unpricedMon.length > 0 && looseUsd !== null)),
     });
   }
   if (monPositions > 0) {

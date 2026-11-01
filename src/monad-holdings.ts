@@ -32,9 +32,9 @@ export interface MonadHolding {
   /** Native MON plus WMON. */
   mon: number;
   usdc: number;
-  /** Uniswap v3 position NFTs held on Monad. Their value is not read here. */
+  /** Uniswap v3 position NFTs held on Monad. Their value is not read here: any position makes the Safe's figure a floor. */
   positions: number;
-  /** null when MON is unpriced or any position is held (value unknown): never a zero standing in for it. */
+  /** MON + USDC in dollars, positions excluded; null only when there is MON and no price: never a zero standing in for it. */
   usd: number | null;
 }
 
@@ -108,7 +108,7 @@ export function toMonadHolding(raw: MonadRaw, monUsd: number | null): MonadHoldi
   const mon = Number(raw.monWei + raw.wmonWei) / 1e18;
   const usdc = Number(raw.usdcRaw) / 1e6;
   const positions = Number(raw.nfts);
-  const usd = positions > 0 ? null : mon === 0 ? usdc : monUsd === null ? null : mon * monUsd + usdc;
+  const usd = mon === 0 ? usdc : monUsd === null ? null : mon * monUsd + usdc;
   return { mon, usdc, positions, usd };
 }
 
