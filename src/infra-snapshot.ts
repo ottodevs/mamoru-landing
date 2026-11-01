@@ -50,6 +50,11 @@ import type { AccountFilter } from "./account-filter";
 import { type MonadHolding, readMonadHoldings } from "./monad-holdings";
 import { type OutsideHolding, readOutsideBase } from "./outside-base";
 
+/** otto/mamoru-astro#40: why the last Ethereum read of the account addresses fell short (hosts only, never URLs). */
+export interface ReadNotes {
+  ethereum?: string[];
+}
+
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 function isZeroAddress(address: string): boolean {
@@ -166,6 +171,8 @@ export interface InfraSnapshot {
   accounts: AccountsView | null;
   /** Balance of each funding target (src/funding.ts), wei as a decimal string; null when that chain did not answer. */
   funding?: { id: string; balanceWei: string | null }[];
+  /** otto/mamoru-astro#40: what went wrong in the last per-address read of other chains, for diagnosis. */
+  readNotes?: ReadNotes;
 }
 
 export interface InfraEnv {
@@ -491,12 +498,13 @@ async function attachOutsideBase(
   env: InfraEnv,
   baseEthUsd: number | null,
   fetchFn: (input: string, init?: RequestInit) => Promise<Response>,
+  notes: string[] = [],
 ): Promise<void> {
   if (!accounts || accounts.rows.length === 0) return;
   try {
     const held = await readOutsideBase(
       accounts.rows.map((r) => r.address),
-      { rpcUrls: env.ETHEREUM_RPC_URLS, baseEthUsd, fetchFn },
+      { rpcUrls: env.ETHEREUM_RPC_URLS, baseEthUsd, fetchFn, onError: (m) => void (notes.length < 12 && notes.push(m)) },
     );
     for (const row of accounts.rows) {
       const o = held.get(row.address.toLowerCase());
@@ -587,7 +595,8 @@ export async function computeInfraSnapshot(
   };
 
   const [accounts, funding] = await Promise.all([buildAccountsView(env, client, prices), fundingOf(relayerBalanceWei)]);
-  await Promise.all([attachOutsideBase(accounts, env, prices.ethUsd, fetchFn), attachMonad(accounts, env, fetchFn)]);
+  const ethNotes: string[] = [];
+  await Promise.all([attachOutsideBase(accounts, env, prices.ethUsd, fetchFn, ethNotes), attachMonad(accounts, env, fetchFn)]);
 
   // A missing ETH price leaves every USD figure blank; unread accounts leave totals short.
   const parts = new Set<UnreadPart>(accounts?.unreadParts ?? []);
@@ -596,5 +605,28 @@ export async function computeInfraSnapshot(
     ? { unreadAccounts: accounts?.unreadAccounts ?? 0, parts: [...parts] }
     : undefined;
 
-  return { asOf, ...(partial ? { partial } : {}), ethUsd: prices.ethUsd, btcUsd: prices.btcUsd, relayer, cost, accounts, funding };
+  return { asOf, ...(partial ? { partial } : {}), ethUsd: prices.ethUsd, btcUsd: prices.btcUsd, relayer, cost, accounts, funding, ...(ethNotes.length ? { readNotes: { ethereum: ethNotes } } : {}) };
+}
+
+/**
+ * otto/mamoru-astro#40: an address whose Ethereum or Monad read failed this time keeps the figure of the last reading
+ * that had it, stamped with that reading's time (`at`), so money once seen never drops out of /ops on a failed read.
+ * Only rows still without a figure are filled; a fresh read always wins. Mutates and returns `computed`.
+ */
+export function carryForward(computed: InfraSnapshot, previous: InfraSnapshot | null): InfraSnapshot {
+  const rows = computed.accounts?.rows;
+  if (!rows?.length || !previous?.accounts?.rows?.length) return computed;
+  const eth = new Map<string, OutsideHolding>();
+  const mon = new Map<string, MonadHolding>();
+  for (const r of previous.accounts.rows) {
+    const a = r.address.toLowerCase();
+    if (r.outside && !eth.has(a)) eth.set(a, { ...r.outside, at: r.outside.at ?? previous.asOf });
+    if (r.monad && !mon.has(a)) mon.set(a, { ...r.monad, at: r.monad.at ?? previous.asOf });
+  }
+  for (const r of rows) {
+    const a = r.address.toLowerCase();
+    if (!r.outside && eth.has(a)) r.outside = eth.get(a);
+    if (!r.monad && mon.has(a)) r.monad = mon.get(a);
+  }
+  return computed;
 }

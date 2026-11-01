@@ -4,6 +4,7 @@
 // figure says where it comes from, and a source that is not there yet is null, never a guessed zero.
 import type { D1Db } from "./d1-infra";
 import { buildFundsMap, type FundsMap, isMapped } from "./funds-map";
+import { readAtNote } from "./outside-base";
 import type { AccountView, InfraSnapshot } from "./infra-snapshot";
 import { CAP_SOURCES, DEFAULT_CAP_USDC, type CapSource } from "./account-cap-model";
 import { newestOverrides, type CapOverrideRow } from "./account-caps-store";
@@ -159,7 +160,7 @@ export function heldElsewhere(
         if (eth.eth > 0 || eth.usdc > 0) {
           if (eth.usd === null) floor = true;
           else usdSum += eth.usd;
-          away.push([eth.eth > 0 ? `${fmtNum(eth.eth)} ETH` : "", eth.usdc > 0 ? `${eth.usdc.toFixed(2)} USDC` : ""].filter(Boolean).join(" + ") + " on Ethereum");
+          away.push([eth.eth > 0 ? `${fmtNum(eth.eth)} ETH` : "", eth.usdc > 0 ? `${eth.usdc.toFixed(2)} USDC` : ""].filter(Boolean).join(" + ") + " on Ethereum" + readAtNote(eth.at));
         }
       }
     }
@@ -174,7 +175,7 @@ export function heldElsewhere(
           away.push(
             [mon.mon > 0 ? `${fmtNum(mon.mon)} MON` : "", mon.usdc > 0 ? `${mon.usdc.toFixed(2)} USDC` : "", mon.positions > 0 ? `${mon.positions} ${mon.positions === 1 ? "position" : "positions"}` : ""]
               .filter(Boolean)
-              .join(" + ") + " on Monad",
+              .join(" + ") + " on Monad" + readAtNote(mon.at),
           );
         }
       }

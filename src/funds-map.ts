@@ -14,7 +14,7 @@
 
 import type { AccountView, InfraSnapshot } from "./infra-snapshot";
 import { fmtInt, fmtUsd } from "./metrics-math";
-import { summarizeOutside } from "./outside-base";
+import { summarizeOutside, readAtNote } from "./outside-base";
 import { esc } from "./text";
 
 export type FundsKind = "working" | "reserve" | "operator" | "outside";
@@ -131,6 +131,12 @@ export function monadRowsOf<T extends Pick<Row, "chainId" | "address" | "monad">
   return [...byAddress.values(), ...loose];
 }
 
+/** "from the 1 Nov 05:00 UTC reading" when some figures were carried from an earlier read (otto/mamoru-astro#40). */
+function carriedNote(ats: (string | undefined)[]): string {
+  const old = ats.filter((x): x is string => Boolean(x)).sort()[0];
+  return old ? `some from an earlier reading${readAtNote(old).replace(" · read", ",")}` : "";
+}
+
 export function buildFundsMap(
   snapshot: Pick<InfraSnapshot, "ethUsd" | "relayer" | "funding">,
   allRows: readonly Row[],
@@ -201,6 +207,7 @@ export function buildFundsMap(
             out.usdc > 0 ? `${out.usdc.toFixed(2)} USDC` : "",
             out.usd === null ? "not priced" : "",
             out.unread > 0 ? `${out.unread} not read` : "",
+            carriedNote(outsideRows.map((r) => r.outside?.at)),
           ].filter(Boolean).join(", "),
     atLeast: out.read > 0 && out.unread > 0,
   });
@@ -232,6 +239,7 @@ export function buildFundsMap(
               monUsdc > 0 ? `${monUsdc.toFixed(2)} USDC` : "",
               unpricedMon.length > 0 ? "MON not priced" : "",
               monadUnread > 0 ? `${monadUnread} not read` : "",
+              carriedNote(monadRead.map((r) => r.monad?.at)),
             ].filter(Boolean).join(", "),
       atLeast: monadRead.length > 0 && (monadUnread > 0 || (unpricedMon.length > 0 && looseUsd !== null)),
     });

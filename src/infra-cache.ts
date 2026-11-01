@@ -5,7 +5,7 @@
  */
 
 import type { D1Db } from "./d1-infra";
-import { computeInfraSnapshot, type InfraSnapshot } from "./infra-snapshot";
+import { carryForward, computeInfraSnapshot, type InfraSnapshot } from "./infra-snapshot";
 import type { WaitlistKv } from "./list";
 
 const CURRENT_KEY = "ops:infra:v2";
@@ -96,6 +96,9 @@ async function computeAndStore(sources: InfraSources, compute: Compute, now: num
   const kv = sources.kv;
   const computed = await compute(sources);
   if (!kv) return { snapshot: computed, computed };
+  // A failed Ethereum or Monad read keeps the last figure seen for that address (otto/mamoru-astro#40).
+  const previous = (await readJson<StoredReading>(kv, CURRENT_KEY))?.snapshot ?? (await readJson<InfraSnapshot>(kv, GOOD_KEY));
+  carryForward(computed, previous);
   if (isComplete(computed)) {
     await Promise.all([
       writeJson(kv, CURRENT_KEY, { snapshot: computed, storedAt: now } satisfies StoredReading, CURRENT_TTL_SECONDS),
