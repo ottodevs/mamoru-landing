@@ -7,7 +7,7 @@
 
 import { decodeFunctionResult, encodeFunctionData, parseAbi } from "viem";
 import { type OutsideFetch, rpcCall } from "./outside-base";
-import { hourRotation, ownRpcs, PUBLIC_RPCS, publicPool, RunHealth } from "./rpc-pool";
+import { hourRotation, ownRpcs, PUBLIC_RPCS, publicPool, readPooled, RunHealth, settleWithin } from "./rpc-pool";
 
 export const MONAD_USDC = "0x754704Bc059F8C67012fEd69BC8A327a5aafb603";
 export const MONAD_WMON = "0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A";
@@ -17,10 +17,12 @@ export const MONAD_WMON_USDC_POOL = "0x659bD0BC4167BA25c62E05656F78043E7eD4a9da"
 export const MONAD_MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11";
 /** Public pool (otto/mamoru-astro#42, see rpc-pool.ts), after any `MONAD_RPC_URLS`. */
 export const MONAD_PUBLIC_RPCS: readonly string[] = PUBLIC_RPCS.monad;
-/** RPCs asked at once per chunk; the next wave only when all of these failed. */
+/** Public RPCs asked at once; the next ones only for what these left without two agreeing hosts. */
 const WAVE = 3;
-/** Public RPCs one run may ask at most; later runs start elsewhere in the pool. */
+/** Public hosts one run may ask at most, across every chunk; later runs start elsewhere in the pool. */
 const PUBLIC_PER_RUN = 6;
+/** One phase: each configured RPC, or each RPC of a public wave, gets this long (one call within its 3 s timeout). */
+const PHASE_MS = 3_250;
 const CHUNK = 100;
 const PER = 4;
 export const MONAD_DEADLINE_MS = 6_000;
@@ -58,7 +60,7 @@ export interface MonadRaw {
 /** [the configured RPCs in their order, the public pool rotated for this run and capped]. */
 export function monadRpcTiers(secret?: string, rotation = 0): string[][] {
   const own = ownRpcs(secret);
-  return [own, publicPool("monad", rotation, own).slice(0, PUBLIC_PER_RUN)];
+  return [own, publicPool("monad", rotation, own)];
 }
 
 export function monadRpcList(secret?: string, rotation = 0): string[] {
@@ -103,16 +105,26 @@ export function monUsdFromSqrt(sqrtPriceX96: bigint): number | null {
   return Number.isFinite(p) && p > 0 ? p : null;
 }
 
-async function readMonUsd(urls: readonly string[], fetchFn: OutsideFetch, health: RunHealth): Promise<number | null> {
+/**
+ * MON in USDC from the pool's slot0, within `ms`: the configured RPCs first (list order), else the public hosts that
+ * already answered this run, and then only a price two of them agree on within 1 %. null when none could be had.
+ */
+async function readMonUsd(own: readonly string[], answered: readonly string[], fetchFn: OutsideFetch, ms: number): Promise<number | null> {
   const data = encodeFunctionData({ abi, functionName: "slot0" });
-  for (const url of health.healthy(urls)) {
-    try {
-      const out = decodeFunctionResult({ abi, functionName: "slot0", data: await rpcCall(url, MONAD_WMON_USDC_POOL, data, fetchFn) }) as readonly [bigint, ...unknown[]];
-      return monUsdFromSqrt(out[0]);
-    } catch {
-      health.fail(url);
-    }
+  const price = async (url: string): Promise<number | null> => {
+    const out = decodeFunctionResult({ abi, functionName: "slot0", data: await rpcCall(url, MONAD_WMON_USDC_POOL, data, fetchFn) }) as readonly [bigint, ...unknown[]];
+    return monUsdFromSqrt(out[0]);
+  };
+  const started = Date.now();
+  if (own.length) {
+    const got = await settleWithin(own.map(price), ms);
+    const hit = got.find((p) => p != null);
+    if (hit != null) return hit;
   }
+  const left = ms - (Date.now() - started);
+  if (left <= 0 || answered.length < 2) return null;
+  const got = (await settleWithin(answered.slice(0, WAVE).map(price), left)).filter((p): p is number => p != null);
+  for (const p of got) if (got.some((q) => q !== p && Math.abs(q - p) <= p * 0.01) || got.filter((q) => q === p).length >= 2) return p;
   return null;
 }
 
@@ -133,48 +145,39 @@ export async function readMonadHoldings(
   const fetchFn = opts.fetchFn ?? fetch;
   const unique = [...new Set(addresses.map((a) => a.toLowerCase()))].filter((a) => /^0x[0-9a-f]{40}$/.test(a));
   if (unique.length === 0) return out;
-  const tiers = monadRpcTiers(opts.rpcUrls, opts.rotation ?? hourRotation());
-  const urls = tiers.flat();
-  const health = new RunHealth();
+  const [own, pub] = monadRpcTiers(opts.rpcUrls, opts.rotation ?? hourRotation());
   const raws = new Map<string, MonadRaw>();
   const chunks: string[][] = [];
   for (let i = 0; i < unique.length; i += CHUNK) chunks.push(unique.slice(i, i + CHUNK));
+  const health = new RunHealth(own);
+  const answered = new Set<string>();
+  const deadlineMs = opts.deadlineMs ?? MONAD_DEADLINE_MS;
+  const started = Date.now();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<void>((resolve) => {
-    timer = setTimeout(resolve, opts.deadlineMs ?? MONAD_DEADLINE_MS);
+    timer = setTimeout(resolve, deadlineMs);
   });
-  await Promise.race([deadline, Promise.all(
-    chunks.map(async (chunk) => {
-      const data = callData(chunk);
-      // A few RPCs at once, the first full answer wins; the next wave only when all of them failed, and an RPC that
-      // failed is left out of later waves and chunks this run. A wave never mixes tiers, so a public RPC is asked only
-      // after every configured one failed and can never answer ahead of a healthy one.
-      const waves: string[][] = [];
-      for (const tier of tiers) for (let i = 0; i < tier.length; i += WAVE) waves.push(tier.slice(i, i + WAVE));
-      for (const all of waves) {
-        const wave = health.healthy(all);
-        if (!wave.length) continue;
-        try {
-          const got = await Promise.any(wave.map(async (url) => {
-            try {
-              return parseMonadAggregate(chunk, await rpcCall(url, MONAD_MULTICALL3, data, fetchFn));
-            } catch (e) {
-              health.fail(url);
-              throw e;
-            }
-          }));
-          got.forEach((r, k) => {
-            if (r) raws.set(chunk[k], r);
-          });
-          return;
-        } catch {
-          // Every RPC in the wave failed: next wave.
-        }
-      }
-    }),
-  )]);
+  const read = readPooled(
+    chunks,
+    { own, public: pub, phaseMs: PHASE_MS, wave: WAVE, publicHosts: PUBLIC_PER_RUN },
+    {
+      ask: async (url, which) => {
+        const got = parseMonadAggregate(which, await rpcCall(url, MONAD_MULTICALL3, callData(which), fetchFn));
+        if (got.some((r) => r !== null)) answered.add(url);
+        return got;
+      },
+      key: (r) => `${r.monWei}:${r.usdcRaw}:${r.wmonWei}:${r.nfts}`,
+    },
+    health,
+    raws,
+  ).catch(() => undefined);
+  await Promise.race([deadline, read]);
   clearTimeout(timer);
-  const monUsd = [...raws.values()].some((r) => r.monWei + r.wmonWei > 0n) ? await readMonUsd(urls, fetchFn, health) : null;
+  // The price is read within what is left of the same deadline, never after it.
+  const left = deadlineMs - (Date.now() - started);
+  const holdsMon = [...raws.values()].some((r) => r.monWei + r.wmonWei > 0n);
+  const publicAnswered = pub.filter((u) => answered.has(u));
+  const monUsd = holdsMon && left > 0 ? await readMonUsd(health.healthy(own), publicAnswered, fetchFn, left) : null;
   for (const [address, raw] of raws) out.set(address, toMonadHolding(raw, monUsd));
   return out;
 }

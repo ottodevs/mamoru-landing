@@ -108,9 +108,8 @@ describe("readOutsideBase", () => {
     };
     const m = await readOutsideBase([USER], { baseEthUsd: 2000, rpcUrls: "https://secret.example/key123", fetchFn, onError: (x) => notes.push(x) });
     expect(m.get(USER.toLowerCase())).toEqual({ eth: 0.05537835, usdc: 0, usd: 0.05537835 * 2000 });
-    expect(notes.length).toBeGreaterThan(0);
+    // The configured RPC answered the plain batch: nothing failed, so nothing is noted (and no URL path ever is).
     expect(notes.join(" ")).not.toContain("key123");
-    expect(notes[0]).toBe("secret.example: JSON-RPC error -32000");
   });
 
   test("a healthy configured RPC is the only one asked: public hosts never see the addresses (otto/mamoru-astro#41)", async () => {
@@ -188,7 +187,7 @@ describe("readOutsideBase", () => {
     };
     await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://secret.example/?apiKey=abc", fetchFn, onError: (x) => notes.push(x), rotation: 0 });
     expect(notes.join(" ")).not.toContain("abc");
-    expect(notes).toContain("secret.example: JSON-RPC error -32001");
+    expect(notes).toContain("secret.example: batch not supported");
     expect(notes).toContain("rpc.mevblocker.io: network error");
   });
 
@@ -204,7 +203,7 @@ describe("readOutsideBase", () => {
     expect(all).toContain("secret.example");
   });
 
-  test("a decoded aggregate where every sub-call failed falls through to the batch; one RPC per address is enough", async () => {
+  test("a decoded aggregate where every sub-call failed falls through to the batch; two public hosts must agree (#42)", async () => {
     const fetchFn = async (url: string, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
       if (!Array.isArray(body)) {
@@ -213,13 +212,30 @@ describe("readOutsideBase", () => {
         const abi = parseAbi(["struct Result { bool success; bytes returnData; }", "function aggregate3((address,bool,bytes)[] calls) returns (Result[] returnData)"]);
         return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: encodeFunctionResult({ abi, functionName: "aggregate3", result: [{ success: false, returnData: "0x" }, { success: false, returnData: "0x" }, { success: false, returnData: "0x" }, { success: false, returnData: "0x" }] }) }));
       }
-      // Only one host answers the batch, and only for EMPTY.
-      if (!url.includes("blastapi")) return new Response("[]");
+      // Only two hosts answer the batch, and only for EMPTY.
+      if (!url.includes("publicnode") && !url.includes("1rpc")) return new Response("[]");
       return new Response(JSON.stringify(body.map((c: { id: number; params: unknown[] }) => ({ jsonrpc: "2.0", id: c.id, result: JSON.stringify(c.params).toLowerCase().includes(EMPTY.toLowerCase().slice(2)) ? "0x0" : null }))));
     };
-    const m = await readOutsideBase([USER, EMPTY], { baseEthUsd: 1, fetchFn });
+    const m = await readOutsideBase([USER, EMPTY], { baseEthUsd: 1, fetchFn, rotation: 0 });
     expect(m.has(EMPTY.toLowerCase())).toBe(true);
     expect(m.has(USER.toLowerCase())).toBe(false);
+  });
+
+  test("one public host alone never sets a balance; a second that disagrees does not either (#42)", async () => {
+    const answer = (wei: bigint) => async (_u: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (!Array.isArray(body)) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32601, message: "no" } }));
+      return new Response(JSON.stringify(body.map((c: { id: number; method: string }) => ({ jsonrpc: "2.0", id: c.id, result: c.method === "eth_getBalance" ? `0x${wei.toString(16)}` : "0x0" }))));
+    };
+    const liar = answer(10n ** 24n);
+    const honest = answer(55_378_350_000_000_000n);
+    const pool = ETHEREUM_PUBLIC_RPCS;
+    const one = await readOutsideBase([USER], { baseEthUsd: 1, rotation: 0, fetchFn: (u, i) => (u === pool[0] ? liar(u, i) : Promise.resolve(new Response("down", { status: 503 }))) });
+    expect(one.size).toBe(0);
+    const split = await readOutsideBase([USER], { baseEthUsd: 1, rotation: 0, fetchFn: (u, i) => (u === pool[0] ? liar(u, i) : u === pool[1] ? honest(u, i) : Promise.resolve(new Response("down", { status: 503 }))) });
+    expect(split.size).toBe(0);
+    const two = await readOutsideBase([USER], { baseEthUsd: 1, rotation: 0, fetchFn: (u, i) => (u === pool[0] ? liar(u, i) : honest(u, i)) });
+    expect(two.get(USER.toLowerCase())!.eth).toBeCloseTo(0.05537835, 10);
   });
 
   test("an address whose sub-call failed is not read; the others are", async () => {

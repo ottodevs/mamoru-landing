@@ -1,21 +1,67 @@
-import { type Address, type Chain, createPublicClient, fallback, http, type PublicClient } from "viem";
+import { type Address, type Chain, createPublicClient, custom, type PublicClient } from "viem";
 import { base } from "viem/chains";
 import { MULTICALL3_ADDRESS, rpcUrls } from "./chain-addresses";
+import { ownRpcs, RunHealth } from "./rpc-pool";
 
-// Widened to the generic `Chain`: pinning this to `typeof base`'s literal formatter
-// types makes some viem action return types blow up for tsc (known upstream issue).
-export type BaseClient = PublicClient<ReturnType<typeof fallback>, Chain>;
+export type BaseClient = PublicClient<ReturnType<typeof custom>, Chain>;
+
+/** Per RPC: a hung host costs this much once, then is skipped for the rest of the client's life (one snapshot run). */
+const BASE_TIMEOUT_MS = 4_000;
+/** One request gives up after this, whatever is left in the list, so a read never eats the run's 30 s. */
+const BASE_REQUEST_MS = 10_000;
+
+/** A JSON-RPC error that is the chain's answer (a revert, bad params), not the RPC's failure: never retried elsewhere. */
+const isChainAnswer = (code: unknown, message: unknown): boolean =>
+  code === 3 || code === -32602 || (typeof message === "string" && /revert/i.test(message));
 
 /**
- * A read client that tries the secret RPCs (if set) then a rotated slice of the public pool, in order. A shorter
- * timeout than viem's default, so a hung host costs little before the next one is tried.
+ * A read client over the secret RPCs (if set) then a rotated slice of the public pool, in order
+ * (otto/mamoru-astro#42). An RPC that fails (HTTP status, timeout, network, a JSON-RPC error that is not the chain's
+ * answer) is skipped for the rest of this client's life, so it costs one timeout per run, not one per request.
  * The URLs never leave this function: nothing here is logged or rendered.
  */
-export function buildClient(secretRpcUrl?: string): BaseClient {
-  const transports = rpcUrls(secretRpcUrl).map((url) => http(url, { timeout: 5_000 }));
+export function buildClient(secretRpcUrl?: string, fetchFn: typeof fetch = fetch): BaseClient {
+  const urls = rpcUrls(secretRpcUrl);
+  const health = new RunHealth(ownRpcs(secretRpcUrl));
+  let id = 0;
+  const request = async ({ method, params }: { method: string; params?: unknown }): Promise<unknown> => {
+    const until = Date.now() + BASE_REQUEST_MS;
+    let last: unknown = new Error("no Base RPC answered");
+    for (const url of health.healthy(urls)) {
+      const left = until - Date.now();
+      if (left <= 0) break;
+      let body: { result?: unknown; error?: { code?: unknown; message?: unknown } };
+      try {
+        const res = await fetchFn(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params: params ?? [] }),
+          signal: AbortSignal.timeout(Math.min(BASE_TIMEOUT_MS, left)),
+        });
+        if (!res.ok) throw new Error(`rpc ${res.status}`);
+        body = (await res.json()) as typeof body;
+      } catch (e) {
+        health.fail(url);
+        last = e;
+        continue;
+      }
+      if (body.error) {
+        if (isChainAnswer(body.error.code, body.error.message)) throw Object.assign(new Error(String(body.error.message ?? "rpc error")), { code: body.error.code });
+        health.fail(url);
+        last = new Error("rpc error");
+        continue;
+      }
+      if (!("result" in body)) {
+        health.fail(url);
+        continue;
+      }
+      return body.result;
+    }
+    throw last;
+  };
   return createPublicClient({
     chain: base as Chain,
-    transport: fallback(transports, { rank: false }),
+    transport: custom({ request }, { retryCount: 0 }),
   });
 }
 
