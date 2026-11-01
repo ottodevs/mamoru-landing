@@ -299,6 +299,11 @@ describe("lab-logic.ts: \"Preguntar al Lab\" (otto/mamoru-astro#30, spec 008 pha
     expect(LAB.answerHeadlineBlock([])).toBe(null);
   });
 
+  test("resolveRefTokens: {{cN}} becomes the n-th claim's formatted value; {{vN}} and unknown refs drop", () => {
+    const claims = [{ metric: "vsHodl", value: -8.46 }, { metric: "fees", value: 1.5 }];
+    expect(LAB.resolveRefTokens("La mejor es mar2025: {{c0}}. Comisiones {{c1}}; {{v0}} y {{c9}}.", claims)).toBe("La mejor es mar2025: −8,46 USDC. Comisiones 1,50 USDC; y .");
+  });
+
   test("stripRefTokens (AL-20): {{cN}}/{{vN}} reference tokens are removed, not resolved, extra whitespace collapsed", () => {
     expect(LAB.stripRefTokens("Con {{c0}} de comisiones y {{v0}} frente a mantener.")).toBe("Con de comisiones y frente a mantener.");
     expect(LAB.stripRefTokens("sin tokens")).toBe("sin tokens");

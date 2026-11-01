@@ -395,6 +395,17 @@ export function labLogic() {
 
   /** AL-20: text/caveat prose references a claim as `{{c0}}` and a verdict as `{{v0}}` -- the screen already
    * shows that figure as a chip or sentence above, so the token is dropped rather than resolved a second time. */
+  /** `{{cN}}` becomes the n-th claim's value, formatted like its chip: prose such as "mar2025: {{c0}}" otherwise
+   * reads "mar2025: ." once the token is stripped. The value is the server-verified claim's own, so this adds no
+   * unverified figure. `{{vN}}` is still dropped -- the verdict sentence is shown above, in full. */
+  var resolveRefTokens = function (md: string, claims: { value: number; metric: string }[]): string {
+    var withClaims = md.replace(/\{\{c(\d+)\}\}/g, function (whole: string, n: string) {
+      var c = claims[Number(n)];
+      return c ? fmtClaimValue(c.value, c.metric) : "";
+    });
+    return stripRefTokens(withClaims);
+  };
+
   var stripRefTokens = function (md: string): string {
     return md.replace(/\{\{[cv]\d+\}\}/g, "").replace(/\s{2,}/g, " ").trim();
   };
@@ -458,6 +469,7 @@ export function labLogic() {
   var answerBlocksHtml = function (blocks: AnswerBlock[], runsByHash: Record<string, RunLite>, partial: boolean): string {
     if (!blocks || !blocks.length) return "";
     var headline = answerHeadlineBlock(blocks);
+    var claimBlocks = blocks.filter(function (x) { return x.type === "claim"; }) as { value: number; metric: string }[];
     var out = "";
     if (headline) {
       // `.lab-verdict`/`.lab-prose` are the PoC-1 prototype's own class names (AL-53: "the visual reference
@@ -478,7 +490,7 @@ export function labLogic() {
       if (b.type === "claim") chips += claimChipHtml(b, runsByHash[b.runId]);
       else if (b.type === "verdict") sentences += verdictHtml(b, runsByHash);
       else if (b.type === "chart") charts += chartButtonHtml(b, runsByHash);
-      else prose += "<p>" + escHtml(stripRefTokens(b.md)) + "</p>";
+      else prose += "<p>" + escHtml(resolveRefTokens(b.md, claimBlocks)) + "</p>";
     }
     if (chips) out += '<div class="lab-ask-chips">' + chips + "</div>";
     out += sentences + charts;
@@ -557,6 +569,7 @@ export function labLogic() {
     isVerdictBaseline: isVerdictBaseline,
     answerHeadlineBlock: answerHeadlineBlock,
     stripRefTokens: stripRefTokens,
+    resolveRefTokens: resolveRefTokens,
     answerBlocksHtml: answerBlocksHtml,
     answerFooterText: answerFooterText,
     askStatusHeadline: askStatusHeadline,
