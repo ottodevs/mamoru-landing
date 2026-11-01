@@ -107,7 +107,8 @@ export function monUsdFromSqrt(sqrtPriceX96: bigint): number | null {
 
 /**
  * MON in USDC from the pool's slot0, within `ms`: the configured RPCs first (list order), else the public hosts that
- * already answered this run, and then only a price two of them agree on within 1 %. null when none could be had.
+ * already answered this run, and then only a price two different hosts agree on within 1 % (the lower one). null
+ * when none could be had.
  */
 async function readMonUsd(own: readonly string[], answered: readonly string[], fetchFn: OutsideFetch, ms: number): Promise<number | null> {
   const data = encodeFunctionData({ abi, functionName: "slot0" });
@@ -123,9 +124,13 @@ async function readMonUsd(own: readonly string[], answered: readonly string[], f
   }
   const left = ms - (Date.now() - started);
   if (left <= 0 || answered.length < 2) return null;
+  // One answer per host (the list holds distinct URLs of distinct hosts); a pair within 1 % gives the lower of the two.
   const got = (await settleWithin(answered.slice(0, WAVE).map(price), left)).filter((p): p is number => p != null);
-  for (const p of got) if (got.some((q) => q !== p && Math.abs(q - p) <= p * 0.01) || got.filter((q) => q === p).length >= 2) return p;
-  return null;
+  let best: number | null = null;
+  for (let a = 0; a < got.length; a++)
+    for (let b = a + 1; b < got.length; b++)
+      if (Math.abs(got[a] - got[b]) <= Math.min(got[a], got[b]) * 0.01) best = Math.min(best ?? Infinity, got[a], got[b]);
+  return best;
 }
 
 export function toMonadHolding(raw: MonadRaw, monUsd: number | null): MonadHolding {

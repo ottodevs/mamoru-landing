@@ -1,7 +1,7 @@
 import { type Address, type Chain, createPublicClient, custom, type PublicClient } from "viem";
 import { base } from "viem/chains";
 import { MULTICALL3_ADDRESS, rpcUrls } from "./chain-addresses";
-import { ownRpcs, RunHealth } from "./rpc-pool";
+import { isHardFailure, ownRpcs, RunHealth } from "./rpc-pool";
 
 export type BaseClient = PublicClient<ReturnType<typeof custom>, Chain>;
 
@@ -22,6 +22,12 @@ const isChainAnswer = (code: unknown, message: unknown): boolean =>
  * answer) is skipped for the rest of this client's life, so it costs one timeout per run, not one per request.
  * The URLs never leave this function: nothing here is logged or rendered.
  */
+/** Hosts (never paths) of public RPCs that answered for a client, when every configured one had failed. */
+const publicHosts = new WeakMap<object, Set<string>>();
+export function publicHostsUsed(client: object): string[] {
+  return [...(publicHosts.get(client) ?? [])];
+}
+
 export function buildClient(secretRpcUrl?: string, fetchFn: typeof fetch = fetch): BaseClient {
   const urls = rpcUrls(secretRpcUrl);
   const own = ownRpcs(secretRpcUrl);
@@ -50,6 +56,7 @@ export function buildClient(secretRpcUrl?: string, fetchFn: typeof fetch = fetch
     }
     return p;
   };
+  const used = new Set<string>();
   const request = async ({ method, params }: { method: string; params?: unknown }): Promise<unknown> => {
     const until = Date.now() + BASE_REQUEST_MS;
     let last: unknown = new Error("no Base RPC answered");
@@ -58,10 +65,15 @@ export function buildClient(secretRpcUrl?: string, fetchFn: typeof fetch = fetch
       if (left <= 0) break;
       let body: { result?: unknown; error?: { code?: unknown; message?: unknown } };
       try {
-        if (!(await servesBase(url))) throw new Error("not Base");
-        body = await post(url, method, params, Math.min(BASE_TIMEOUT_MS, until - Date.now()));
+        // The chain check is cached per host but still bounded by this request's budget; running out is not the host's fault.
+        const onChain = await Promise.race([servesBase(url), new Promise<null>((r) => setTimeout(() => r(null), left))]);
+        if (onChain === null) break;
+        if (!onChain) throw new Error("not Base");
+        const rest = until - Date.now();
+        if (rest <= 0) break;
+        body = await post(url, method, params, Math.min(BASE_TIMEOUT_MS, rest));
       } catch (e) {
-        health.fail(url);
+        health.fail(url, isHardFailure(e));
         last = e;
         continue;
       }
@@ -77,14 +89,17 @@ export function buildClient(secretRpcUrl?: string, fetchFn: typeof fetch = fetch
         continue;
       }
       health.succeed(url);
+      if (!own.includes(url)) used.add(new URL(url).host);
       return body.result;
     }
     throw last;
   };
-  return createPublicClient({
+  const client = createPublicClient({
     chain: base as Chain,
     transport: custom({ request }, { retryCount: 0 }),
   });
+  publicHosts.set(client, used);
+  return client;
 }
 
 export type ContractCall = {

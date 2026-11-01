@@ -11,6 +11,7 @@ import {
   type BaseClient,
   type ContractCall,
   buildClient,
+  publicHostsUsed,
   multi,
 } from "./chain-client";
 import {
@@ -53,6 +54,8 @@ import { type OutsideHolding, readOutsideBase } from "./outside-base";
 /** otto/mamoru-astro#40: why the last Ethereum read of the account addresses fell short (hosts only, never URLs). */
 export interface ReadNotes {
   ethereum?: string[];
+  /** otto/mamoru-astro#42: public hosts that answered Base reads because every configured RPC failed (one host, no cross-check). */
+  base?: string[];
 }
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -605,7 +608,9 @@ export async function computeInfraSnapshot(
     ? { unreadAccounts: accounts?.unreadAccounts ?? 0, parts: [...parts] }
     : undefined;
 
-  return { asOf, ...(partial ? { partial } : {}), ethUsd: prices.ethUsd, btcUsd: prices.btcUsd, relayer, cost, accounts, funding, ...(ethNotes.length ? { readNotes: { ethereum: ethNotes } } : {}) };
+  const baseNotes = publicHostsUsed(client).map((h) => `${h}: answered alone (configured RPC failed)`);
+  const readNotes: ReadNotes = { ...(ethNotes.length ? { ethereum: ethNotes } : {}), ...(baseNotes.length ? { base: baseNotes } : {}) };
+  return { asOf, ...(partial ? { partial } : {}), ethUsd: prices.ethUsd, btcUsd: prices.btcUsd, relayer, cost, accounts, funding, ...(Object.keys(readNotes).length ? { readNotes } : {}) };
 }
 
 /**
