@@ -305,6 +305,11 @@ describe("lab-logic.ts: \"Preguntar al Lab\" (otto/mamoru-astro#30, spec 008 pha
     // the model's own unit after the token is not repeated; a word that merely starts like a unit is kept
     expect(LAB.resolveRefTokens("mar2025, con {{c0}} USDC, y fees de {{c1}}USDC.", claims)).toBe("mar2025, con −8,46 USDC, y fees de 1,50 USDC.");
     expect(LAB.resolveRefTokens("{{c0}} USDCs", claims)).toBe("−8,46 USDC USDCs");
+    // a unit is dropped only when the formatted value already ends with it, in any case
+    const more = [{ metric: "timeInRange", value: 90 }, { metric: "days", value: 7 }, { metric: "operations.rerange", value: 1 }, { metric: "operations.rerange", value: 3 }];
+    expect(LAB.resolveRefTokens("{{c0}} % en rango, {{c1}} días, {{c2}} operación y {{c3}} operaciones; {{c1}} Días", more)).toBe("90,0 % en rango, 7 días, 1 operación y 3 operaciones; 7 días");
+    // a unit that does not match the metric's own is kept as written
+    expect(LAB.resolveRefTokens("{{c0}} USDC", more)).toBe("90,0 % USDC");
   });
 
   test("answerBlocksHtml: prose resolves {{cN}} on a whole answer, only strips it on a partial one", () => {
