@@ -177,14 +177,17 @@ describe("review r1 of #42", () => {
     expect(m.get(A.toLowerCase())?.eth).toBe(1);
   });
 
-  test("Base: a dead RPC costs one try per client, and a revert is the chain's answer, not retried elsewhere", async () => {
+  test("Base: a dead RPC costs one try per client, a host on another chain is never used, a revert is not retried elsewhere", async () => {
     const { buildClient } = await import("../src/chain-client");
     const seen: string[] = [];
-    const fetchFn = (async (u: string | URL | Request) => {
+    const fetchFn = (async (u: string | URL | Request, init?: RequestInit) => {
       const url = String(u);
       seen.push(url);
       if (url.startsWith("https://own")) return new Response("down", { status: 502 });
-      return Response.json({ jsonrpc: "2.0", id: 1, result: "0x10" });
+      const { method } = JSON.parse(String(init?.body));
+      // The first public host serves another chain: it is never used.
+      if (method === "eth_chainId") return Response.json({ jsonrpc: "2.0", id: 1, result: url === publicPool("base", 0)[0] ? "0x1" : "0x2105" });
+      return Response.json({ jsonrpc: "2.0", id: 1, result: url === publicPool("base", 0)[0] ? "0x99" : "0x10" });
     }) as typeof fetch;
     const c = buildClient("https://own.example/k", fetchFn);
     expect(await c.getBlockNumber({ cacheTime: 0 })).toBe(16n);
@@ -192,9 +195,14 @@ describe("review r1 of #42", () => {
     expect(await c.getBlockNumber({ cacheTime: 0 })).toBe(16n);
     // The configured one gets two strikes, then the run goes on without it.
     expect(seen.filter((u) => u.startsWith("https://own")).length).toBe(2);
-    const reverts = buildClient(undefined, (async (u: string | URL | Request) => (seen.push(String(u)), Response.json({ jsonrpc: "2.0", id: 1, error: { code: 3, message: "execution reverted" } }))) as typeof fetch);
-    const before = seen.length;
+    const calls: string[] = [];
+    const reverts = buildClient(undefined, (async (u: string | URL | Request, init?: RequestInit) => {
+      const { method } = JSON.parse(String(init?.body));
+      if (method === "eth_chainId") return Response.json({ jsonrpc: "2.0", id: 1, result: "0x2105" });
+      calls.push(String(u));
+      return Response.json({ jsonrpc: "2.0", id: 1, error: { code: 3, message: "execution reverted" } });
+    }) as typeof fetch);
     await expect(reverts.request({ method: "eth_call", params: [{ to: A, data: "0x" }, "latest"] } as never)).rejects.toThrow();
-    expect(seen.length - before).toBe(1);
+    expect(calls.length).toBe(1);
   });
 });
