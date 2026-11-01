@@ -490,7 +490,10 @@ export function labLogic() {
       if (b.type === "claim") chips += claimChipHtml(b, runsByHash[b.runId]);
       else if (b.type === "verdict") sentences += verdictHtml(b, runsByHash);
       else if (b.type === "chart") charts += chartButtonHtml(b, runsByHash);
-      else prose += "<p>" + escHtml(resolveRefTokens(b.md, claimBlocks)) + "</p>";
+      // A partial answer (AL-22) may have dropped claims, which would shift {{cN}} onto the wrong value: there
+      // the tokens are only stripped. (The server's fallback never keeps prose next to kept claims, so this is
+      // belt-and-braces; ok/repaired answers passed the verifier whole, so every index resolves as written.)
+      else prose += "<p>" + escHtml(partial ? stripRefTokens(b.md) : resolveRefTokens(b.md, claimBlocks)) + "</p>";
     }
     if (chips) out += '<div class="lab-ask-chips">' + chips + "</div>";
     out += sentences + charts;

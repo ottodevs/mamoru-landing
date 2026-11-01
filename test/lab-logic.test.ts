@@ -304,6 +304,17 @@ describe("lab-logic.ts: \"Preguntar al Lab\" (otto/mamoru-astro#30, spec 008 pha
     expect(LAB.resolveRefTokens("La mejor es mar2025: {{c0}}. Comisiones {{c1}}; {{v0}} y {{c9}}.", claims)).toBe("La mejor es mar2025: −8,46 USDC. Comisiones 1,50 USDC; y .");
   });
 
+  test("answerBlocksHtml: prose resolves {{cN}} on a whole answer, only strips it on a partial one", () => {
+    const blocks = [
+      { type: "claim" as const, metric: "vsHodl", runId: "hash-a", value: -16.44 },
+      { type: "text" as const, md: "La ventana feb2025 terminó en {{c0}}." },
+    ];
+    expect(LAB.answerBlocksHtml(blocks, { "hash-a": runA }, false)).toContain("La ventana feb2025 terminó en −16,44 USDC.");
+    const partial = LAB.answerBlocksHtml(blocks, { "hash-a": runA }, true);
+    expect(partial).toContain("La ventana feb2025 terminó en .");
+    expect(partial).not.toContain("terminó en −16,44");
+  });
+
   test("stripRefTokens (AL-20): {{cN}}/{{vN}} reference tokens are removed, not resolved, extra whitespace collapsed", () => {
     expect(LAB.stripRefTokens("Con {{c0}} de comisiones y {{v0}} frente a mantener.")).toBe("Con de comisiones y frente a mantener.");
     expect(LAB.stripRefTokens("sin tokens")).toBe("sin tokens");
