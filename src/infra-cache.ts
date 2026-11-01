@@ -97,8 +97,8 @@ async function computeAndStore(sources: InfraSources, compute: Compute, now: num
   const computed = await compute(sources);
   if (!kv) return { snapshot: computed, computed };
   // A failed Ethereum or Monad read keeps the last figure seen for that address (otto/mamoru-astro#40).
-  const previous = (await readJson<StoredReading>(kv, CURRENT_KEY))?.snapshot ?? (await readJson<InfraSnapshot>(kv, GOOD_KEY));
-  carryForward(computed, previous);
+  const [current, good] = await Promise.all([readJson<StoredReading>(kv, CURRENT_KEY), readJson<InfraSnapshot>(kv, GOOD_KEY)]);
+  carryForward(computed, current?.snapshot, good);
   if (isComplete(computed)) {
     await Promise.all([
       writeJson(kv, CURRENT_KEY, { snapshot: computed, storedAt: now } satisfies StoredReading, CURRENT_TTL_SECONDS),

@@ -109,6 +109,36 @@ describe("readOutsideBase", () => {
     expect(notes[0]).toStartWith("secret.example: rpc error");
   });
 
+  test("an error text that repeats the secret URL, with or without its scheme, keeps only the host", async () => {
+    const notes: string[] = [];
+    const fetchFn = async () => {
+      throw new Error("connect failed: https://secret.example/key123?token=abc and secret.example/key123?token=abc");
+    };
+    await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://secret.example/key123?token=abc", fetchFn, onError: (x) => notes.push(x) });
+    const all = notes.join(" ");
+    expect(all).not.toContain("key123");
+    expect(all).not.toContain("token=abc");
+    expect(all).toContain("secret.example");
+  });
+
+  test("a decoded aggregate where every sub-call failed falls through to the batch; one RPC per address is enough", async () => {
+    const fetchFn = async (url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (!Array.isArray(body)) {
+        // aggregate3 answering with every sub-call failed.
+        const { encodeFunctionResult, parseAbi } = await import("viem");
+        const abi = parseAbi(["struct Result { bool success; bytes returnData; }", "function aggregate3((address,bool,bytes)[] calls) returns (Result[] returnData)"]);
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: encodeFunctionResult({ abi, functionName: "aggregate3", result: [{ success: false, returnData: "0x" }, { success: false, returnData: "0x" }, { success: false, returnData: "0x" }, { success: false, returnData: "0x" }] }) }));
+      }
+      // Only one host answers the batch, and only for EMPTY.
+      if (!url.includes("blastapi")) return new Response("[]");
+      return new Response(JSON.stringify(body.map((c: { id: number; params: unknown[] }) => ({ jsonrpc: "2.0", id: c.id, result: JSON.stringify(c.params).toLowerCase().includes(EMPTY.toLowerCase().slice(2)) ? "0x0" : null }))));
+    };
+    const m = await readOutsideBase([USER, EMPTY], { baseEthUsd: 1, fetchFn });
+    expect(m.has(EMPTY.toLowerCase())).toBe(true);
+    expect(m.has(USER.toLowerCase())).toBe(false);
+  });
+
   test("an address whose sub-call failed is not read; the others are", async () => {
     const m = await readOutsideBase([USER, EMPTY], { baseEthUsd: 1, fetchFn: ethFetch({ [USER.toLowerCase()]: [1n, 1n] }) });
     expect(m.has(USER.toLowerCase())).toBe(true);
@@ -118,13 +148,22 @@ describe("readOutsideBase", () => {
   test("at the deadline, chunks already read are kept and the slow one is not read", async () => {
     const addrs = Array.from({ length: 101 }, (_, i) => `0x${(i + 1).toString(16).padStart(40, "0")}`);
     const fast = ethFetch(Object.fromEntries(addrs.map((a) => [a, [1n, 1n] as [bigint, bigint]])));
-    let n = 0;
+    // Every RPC hangs for the second chunk (the 101st address alone, so the short request): only it is lost.
     const m = await readOutsideBase(addrs, {
       baseEthUsd: 1, deadlineMs: 50,
-      fetchFn: (u, i) => (++n === 2 ? new Promise<Response>(() => {}) : fast(u, i)),
+      fetchFn: (u, i) => (String(i?.body).length < 2_000 ? new Promise<Response>(() => {}) : fast(u, i)),
     });
     expect(m.size).toBe(100);
-    expect(m.has(addrs[100])).toBe(false);
+    expect(m.has(addrs[100]!)).toBe(false);
+  });
+
+  test("one hung RPC never holds back the answer the others gave", async () => {
+    const fast = ethFetch({ [USER.toLowerCase()]: [1n, 0n] });
+    let n = 0;
+    const t = Date.now();
+    const m = await readOutsideBase([USER], { baseEthUsd: 1, deadlineMs: 2_000, fetchFn: (u, i) => (++n === 1 ? new Promise<Response>(() => {}) : fast(u, i)) });
+    expect(m.size).toBe(1);
+    expect(Date.now() - t).toBeLessThan(1_000);
   });
 
   test("a throwing fetch never throws out", async () => {

@@ -125,7 +125,46 @@ export const hostOf = (url: string): string => {
 
 /** Receives why a read failed, short and without secrets: "host: message". */
 export type ReadError = (msg: string) => void;
-export const whyFailed = (url: string, e: unknown): string => `${hostOf(url)}: ${(e instanceof Error ? e.message : String(e)).slice(0, 140)}`;
+/** The message text with any URL cut down to its host, so a secret path or query can never reach KV or a page. */
+const scrub = (text: string): string => text.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, (u) => hostOf(u)).replace(/[^\x20-\x7e]/g, "").slice(0, 140);
+/** The path and query parts of every configured URL: cut from any error text, whichever host's error repeats them. */
+const secretParts = (urls: readonly string[]): string[] =>
+  urls.flatMap((url) => {
+    try {
+      const u = new URL(url);
+      return [u.pathname + u.search, u.pathname, u.search].filter((p) => p.length > 1);
+    } catch {
+      return [];
+    }
+  }).sort((a, b) => b.length - a.length);
+
+export const whyFailed = (url: string, e: unknown, urls: readonly string[] = [url]): string => {
+  let text = e instanceof Error ? e.message : String(e);
+  for (const part of secretParts(urls)) text = text.split(part).join("");
+  return `${hostOf(url)}: ${scrub(text)}`;
+};
+
+/**
+ * Resolves with every answer so far as soon as each address has one, or when all have settled: one hung RPC never
+ * holds back answers the others already gave.
+ */
+function untilAnswered(count: number, asks: Promise<(OutsideRaw | null)[]>[]): Promise<(OutsideRaw | null)[][]> {
+  return new Promise((resolve) => {
+    const got: (OutsideRaw | null)[][] = [];
+    let settled = 0;
+    const done = () => {
+      const all = Array.from({ length: count }, (_, i) => got.some((g) => g[i] != null)).every(Boolean);
+      if (all || settled === asks.length) resolve(got);
+    };
+    if (asks.length === 0) resolve(got);
+    for (const a of asks) {
+      a.then((r) => void got.push(r)).catch(() => undefined).finally(() => {
+        settled += 1;
+        done();
+      });
+    }
+  });
+}
 
 /**
  * The same balances as one JSON-RPC batch of plain eth_getBalance and USDC balanceOf calls, no Multicall3
@@ -150,26 +189,36 @@ async function readChunkBatch(addresses: readonly string[], url: string, fetchFn
   });
 }
 
-/** One chunk: aggregate3 on each RPC in order, then a plain batch on each. null when every attempt failed. */
+/** Per address, the first non-null answer among several. */
+function mergeAnswers(addresses: readonly string[], answers: readonly (OutsideRaw | null)[][]): (OutsideRaw | null)[] {
+  return addresses.map((_, i) => answers.find((a) => a[i] != null)?.[i] ?? null);
+}
+
+/**
+ * One chunk (otto/mamoru-astro#40). Every RPC is asked at once, so one slow host never eats the time of the others:
+ * first aggregate3 on all of them, then, for the addresses still unanswered, a plain batch on all of them. Answers
+ * are merged address by address. null when no address was answered.
+ */
 async function readChunk(addresses: readonly string[], urls: readonly string[], fetchFn: OutsideFetch, onError?: ReadError): Promise<(OutsideRaw | null)[] | null> {
   const data = callData(addresses);
-  for (const url of urls) {
+  const ask = async (url: string, how: "aggregate" | "batch", which: readonly string[]): Promise<(OutsideRaw | null)[]> => {
     try {
-      return parseAggregate(addresses, await rpcCall(url, ETHEREUM_MULTICALL3, data, fetchFn));
+      const out = how === "aggregate" ? parseAggregate(which, await rpcCall(url, ETHEREUM_MULTICALL3, data, fetchFn)) : await readChunkBatch(which, url, fetchFn);
+      if (out.every((r) => r === null)) onError?.(whyFailed(url, new Error(`${how}: no balance answered`), urls));
+      return out;
     } catch (e) {
-      onError?.(whyFailed(url, e));
+      onError?.(whyFailed(url, e, urls));
+      return which.map(() => null);
     }
+  };
+  let merged = mergeAnswers(addresses, await untilAnswered(addresses.length, urls.map((u) => ask(u, "aggregate", addresses))));
+  const missing = addresses.filter((_, i) => merged[i] === null);
+  if (missing.length) {
+    const again = mergeAnswers(missing, await untilAnswered(missing.length, urls.map((u) => ask(u, "batch", missing))));
+    const byAddress = new Map(missing.map((a, k) => [a, again[k]]));
+    merged = merged.map((r, i) => r ?? byAddress.get(addresses[i]) ?? null);
   }
-  for (const url of urls) {
-    try {
-      const out = await readChunkBatch(addresses, url, fetchFn);
-      if (out.some((r) => r !== null)) return out;
-      onError?.(whyFailed(url, new Error("batch: no balance answered")));
-    } catch (e) {
-      onError?.(whyFailed(url, e));
-    }
-  }
-  return null;
+  return merged.some((r) => r !== null) ? merged : null;
 }
 
 /** ETH/USD from Coinbase spot; null on any failure or a non-positive number. */
