@@ -25,6 +25,8 @@ const CHUNK = 100;
 const TIMEOUT_MS = 3_000;
 /** The whole Ethereum read gives up after this, so it can never hold the Base snapshot back (waitUntil is capped at 30 s). */
 export const OUTSIDE_DEADLINE_MS = 12_000;
+/** The configured tier's share of it: past this, the public tier is asked for whatever it has not answered. */
+const TIER_MS = 5_000;
 
 const abi = parseAbi([
   "struct Call3 { address target; bool allowFailure; bytes callData; }",
@@ -158,14 +160,14 @@ export const whyFailed = (url: string, e: unknown): string => {
  * Resolves with every answer so far as soon as each address has one, or when all have settled: one hung RPC never
  * holds back answers the others already gave.
  */
-function untilAnswered(count: number, asks: Promise<(OutsideRaw | null)[]>[]): Promise<(OutsideRaw | null)[][]> {
+function untilAnswered(count: number, asks: Promise<(OutsideRaw | null)[]>[], waitAll = false): Promise<(OutsideRaw | null)[][]> {
   return new Promise((resolve) => {
     // Kept by the RPC's position in the list, not by arrival, so a merge can prefer the earlier one.
     const got: (OutsideRaw | null)[][] = asks.map(() => []);
     let settled = 0;
     const done = () => {
       const all = Array.from({ length: count }, (_, i) => got.some((g) => g[i] != null)).every(Boolean);
-      if (all || settled === asks.length) resolve(got);
+      if ((all && !waitAll) || settled === asks.length) resolve(got);
     };
     if (asks.length === 0) resolve(got);
     asks.forEach((a, k) => {
@@ -213,17 +215,29 @@ function mergeAnswers(addresses: readonly string[], answers: readonly (OutsideRa
  */
 async function readChunk(addresses: readonly string[], tiers: readonly (readonly string[])[], fetchFn: OutsideFetch, onError?: ReadError): Promise<(OutsideRaw | null)[] | null> {
   let merged: (OutsideRaw | null)[] = addresses.map(() => null);
-  for (const urls of tiers) {
+  for (const [t, urls] of tiers.entries()) {
     const missing = addresses.filter((_, i) => merged[i] === null);
     if (!urls.length || !missing.length) continue;
-    const got = await readTier(missing, urls, fetchFn, onError);
+    // The configured tier waits for every one of its RPCs (list order decides), within its own budget; the last tier
+    // takes the first answer per address.
+    const last = t === tiers.length - 1;
+    const tier = readTier(missing, urls, fetchFn, onError, !last);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const budget = new Promise<(OutsideRaw | null)[]>((resolve) => {
+      timer = setTimeout(() => {
+        onError?.(`${urls.length} configured RPC${urls.length === 1 ? "" : "s"}: timeout`);
+        resolve(missing.map(() => null));
+      }, TIER_MS);
+    });
+    const got = last ? await tier : await Promise.race([tier, budget]);
+    clearTimeout(timer);
     const byAddress = new Map(missing.map((a, k) => [a, got[k]]));
     merged = merged.map((r, i) => r ?? byAddress.get(addresses[i]) ?? null);
   }
   return merged.some((r) => r !== null) ? merged : null;
 }
 
-async function readTier(addresses: readonly string[], urls: readonly string[], fetchFn: OutsideFetch, onError?: ReadError): Promise<(OutsideRaw | null)[]> {
+async function readTier(addresses: readonly string[], urls: readonly string[], fetchFn: OutsideFetch, onError: ReadError | undefined, waitAll: boolean): Promise<(OutsideRaw | null)[]> {
   const data = callData(addresses);
   const ask = async (url: string, how: "aggregate" | "batch", which: readonly string[]): Promise<(OutsideRaw | null)[]> => {
     try {
@@ -235,10 +249,10 @@ async function readTier(addresses: readonly string[], urls: readonly string[], f
       return which.map(() => null);
     }
   };
-  let merged = mergeAnswers(addresses, await untilAnswered(addresses.length, urls.map((u) => ask(u, "aggregate", addresses))));
+  let merged = mergeAnswers(addresses, await untilAnswered(addresses.length, urls.map((u) => ask(u, "aggregate", addresses)), waitAll));
   const missing = addresses.filter((_, i) => merged[i] === null);
   if (missing.length) {
-    const again = mergeAnswers(missing, await untilAnswered(missing.length, urls.map((u) => ask(u, "batch", missing))));
+    const again = mergeAnswers(missing, await untilAnswered(missing.length, urls.map((u) => ask(u, "batch", missing)), waitAll));
     const byAddress = new Map(missing.map((a, k) => [a, again[k]]));
     merged = merged.map((r, i) => r ?? byAddress.get(addresses[i]) ?? null);
   }
