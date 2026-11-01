@@ -688,16 +688,35 @@ export async function agentJobsByThread(db: D1Db, threadId: string, limit = 50):
 }
 
 /** The runner claim contract's `history` (AL-03): earlier *done* turns of the thread, oldest first, with their
- * verified answer -- never raw tool output, never a turn that failed or is still in flight. */
-export async function agentThreadHistory(db: D1Db, threadId: string): Promise<{ question: string; answer: unknown }[]> {
+ * verified answer and the runs that answer cites as `{resultHash, specKey}` -- never raw tool output, never a full
+ * run (up to 400 KB), never a turn that failed or is still in flight. Without `runs` the runner rendered every
+ * prior claim as nothing, and a follow-up could not see the figures it was asking about. Two queries total. */
+export async function agentThreadHistory(
+  db: D1Db,
+  threadId: string,
+): Promise<{ question: string; answer: unknown; runs: { resultHash: string; specKey: string }[] }[]> {
   const { results } = await db
-    .prepare("SELECT question, answer_json FROM lab_jobs WHERE thread_id = ? AND kind = 'agent' AND status = 'done' ORDER BY created_at ASC")
+    .prepare("SELECT id, question, answer_json FROM lab_jobs WHERE thread_id = ? AND kind = 'agent' AND status = 'done' ORDER BY created_at ASC")
     .bind(threadId)
-    .all<{ question: string | null; answer_json: string | null }>();
-  const out: { question: string; answer: unknown }[] = [];
+    .all<{ id: string; question: string | null; answer_json: string | null }>();
+  const runRows = await db
+    .prepare(
+      "SELECT jr.job_id AS job_id, r.result_hash AS result_hash, r.spec_key AS spec_key FROM lab_job_runs jr " +
+        "JOIN lab_jobs j ON j.id = jr.job_id JOIN lab_runs r ON r.result_hash = jr.result_hash " +
+        "WHERE j.thread_id = ? AND j.kind = 'agent' AND j.status = 'done'",
+    )
+    .bind(threadId)
+    .all<{ job_id: string; result_hash: string; spec_key: string }>();
+  const runsByJob = new Map<string, { resultHash: string; specKey: string }[]>();
+  for (const r of runRows.results) {
+    const list = runsByJob.get(r.job_id) ?? [];
+    list.push({ resultHash: r.result_hash, specKey: r.spec_key });
+    runsByJob.set(r.job_id, list);
+  }
+  const out: { question: string; answer: unknown; runs: { resultHash: string; specKey: string }[] }[] = [];
   for (const r of results) {
     if (!r.question) continue;
-    out.push({ question: r.question, answer: parseJsonOrNull(r.answer_json) });
+    out.push({ question: r.question, answer: parseJsonOrNull(r.answer_json), runs: runsByJob.get(r.id) ?? [] });
   }
   return out;
 }
