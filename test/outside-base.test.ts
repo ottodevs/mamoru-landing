@@ -138,6 +138,27 @@ describe("readOutsideBase", () => {
     expect(asked.filter((x) => !x.startsWith("https://own.example")).every((x) => !x.endsWith("user"))).toBe(true);
   });
 
+  test("within the configured tier list order wins, even when a later RPC answers first", async () => {
+    const first = ethFetch({ [USER.toLowerCase()]: [7n, 0n] });
+    const second = ethFetch({ [USER.toLowerCase()]: [999n, 0n] });
+    const fetchFn = async (u: string, i?: RequestInit) => {
+      if (u.includes("one.example")) {
+        await new Promise((r) => setTimeout(r, 40));
+        return first(u, i);
+      }
+      return second(u, i);
+    };
+    const m = await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://one.example/a,https://two.example/b", fetchFn });
+    expect(m.get(USER.toLowerCase())?.eth).toBe(7 / 1e18);
+  });
+
+  test("a configured RPC that hangs past its budget hands the read to the public tier", async () => {
+    const pub = ethFetch({ [USER.toLowerCase()]: [5n, 0n] });
+    const fetchFn = (u: string, i?: RequestInit) => (u.includes("own.example") ? new Promise<Response>(() => {}) : pub(u, i));
+    const m = await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://own.example/k", fetchFn, deadlineMs: 9_000 });
+    expect(m.get(USER.toLowerCase())?.eth).toBe(5 / 1e18);
+  }, 10_000);
+
   test("notes are host and category only: no error text, so a key echoed in any form never gets in", async () => {
     const notes: string[] = [];
     const fetchFn = async (url: string) => {
