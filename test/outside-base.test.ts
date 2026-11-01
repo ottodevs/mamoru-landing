@@ -159,6 +159,23 @@ describe("readOutsideBase", () => {
     expect(m.get(USER.toLowerCase())?.eth).toBe(5 / 1e18);
   }, 10_000);
 
+  test("on the configured tier's budget, answers already in are kept and only the rest goes public", async () => {
+    const OTHER = "0x00000000000000000000000000000000000000e2";
+    const own = ethFetch({ [USER.toLowerCase()]: [7n, 0n] });
+    const pub = ethFetch({ [USER.toLowerCase()]: [999n, 0n], [OTHER]: [5n, 0n] });
+    const publicAskedForUser: boolean[] = [];
+    const fetchFn = (u: string, i?: RequestInit) => {
+      const body = String(i?.body);
+      if (u.includes("own.example")) return Array.isArray(JSON.parse(body)) ? new Promise<Response>(() => {}) : own(u, i);
+      publicAskedForUser.push(body.toLowerCase().includes(USER.toLowerCase().slice(2)));
+      return pub(u, i);
+    };
+    const m = await readOutsideBase([USER, OTHER], { baseEthUsd: 1, rpcUrls: "https://own.example/k", fetchFn, deadlineMs: 9_000 });
+    expect(m.get(USER.toLowerCase())?.eth).toBe(7 / 1e18);
+    expect(m.get(OTHER)?.eth).toBe(5 / 1e18);
+    expect(publicAskedForUser.some(Boolean)).toBe(false);
+  }, 10_000);
+
   test("notes are host and category only: no error text, so a key echoed in any form never gets in", async () => {
     const notes: string[] = [];
     const fetchFn = async (url: string) => {
