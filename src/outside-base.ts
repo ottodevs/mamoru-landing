@@ -186,13 +186,29 @@ async function readChunkBatch(addresses: readonly string[], url: string, fetchFn
  * when the RPC itself failed (HTTP status, timeout, network) or both ways failed.
  */
 async function askEthereum(url: string, addresses: readonly string[], fetchFn: OutsideFetch): Promise<(OutsideRaw | null)[]> {
+  let got: (OutsideRaw | null)[] = addresses.map(() => null);
   try {
-    const got = parseAggregate(addresses, await rpcCall(url, ETHEREUM_MULTICALL3, callData(addresses), fetchFn));
-    if (got.some((r) => r !== null)) return got;
+    got = parseAggregate(addresses, await rpcCall(url, ETHEREUM_MULTICALL3, callData(addresses), fetchFn));
+    if (got.every((r) => r !== null)) return got;
   } catch (e) {
     if (!(e instanceof Error && /^rpc error /.test(e.message))) throw e;
   }
-  return readChunkBatch(addresses, url, fetchFn);
+  // The addresses aggregate3 left without a balance (all of them, if it refused) are asked as a plain batch.
+  const missing = addresses.filter((_, i) => got[i] === null);
+  let again: (OutsideRaw | null)[];
+  try {
+    // Bounded here too, so a batch that never settles cannot take the aggregate3 answers down with it.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(Object.assign(new Error("batch timed out"), { name: "TimeoutError" })), TIMEOUT_MS);
+    });
+    again = await Promise.race([readChunkBatch(missing, url, fetchFn), late]).finally(() => clearTimeout(timer));
+  } catch (e) {
+    if (got.some((r) => r !== null)) return got;
+    throw e;
+  }
+  const byAddress = new Map(missing.map((a, k) => [a, again[k]]));
+  return got.map((r, i) => r ?? byAddress.get(addresses[i]) ?? null);
 }
 
 /** ETH/USD from Coinbase spot; null on any failure or a non-positive number. */

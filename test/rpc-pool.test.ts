@@ -206,3 +206,76 @@ describe("review r1 of #42", () => {
     expect(calls.length).toBe(1);
   });
 });
+
+describe("review r2 of #42", () => {
+  const addrs = (n: number) => Array.from({ length: n }, (_, i) => `0x${(i + 1).toString(16).padStart(40, "0")}`);
+  const batchAnswer = (wei: bigint) => async (_u: string, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    if (!Array.isArray(body)) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32601, message: "no" } }));
+    return new Response(JSON.stringify(body.map((c: { id: number; method: string }) => ({ jsonrpc: "2.0", id: c.id, result: c.method === "eth_getBalance" ? `0x${wei.toString(16)}` : "0x0" }))));
+  };
+
+  test("Ethereum: what aggregate3 left unread is asked by plain batch on the same configured RPC", async () => {
+    const { encodeFunctionResult, parseAbi } = await import("viem");
+    const abi = parseAbi(["struct Result { bool success; bytes returnData; }", "function aggregate3((address,bool,bytes)[] calls) returns (Result[] returnData)"]);
+    const w = (n: bigint) => encodeAbiParameters([{ type: "uint256" }], [n]);
+    const two = addrs(2);
+    const fetchFn = async (u: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      // aggregate3: the first address answered, the second's sub-calls failed.
+      if (!Array.isArray(body)) return Response.json({ jsonrpc: "2.0", id: 1, result: encodeFunctionResult({ abi, functionName: "aggregate3", result: [{ success: true, returnData: w(5n) }, { success: true, returnData: w(0n) }, { success: false, returnData: "0x" }, { success: false, returnData: "0x" }] }) });
+      return batchAnswer(7n)(u, init);
+    };
+    const m = await readOutsideBase(two, { baseEthUsd: 1, rotation: 0, rpcUrls: "https://own.example/k", fetchFn });
+    expect(m.get(two[0])?.eth).toBe(5e-18);
+    expect(m.get(two[1])?.eth).toBe(7e-18);
+  });
+
+  test("Ethereum: what two hosts agreed on is kept even when the deadline cuts the wave", async () => {
+    const pool = ETHEREUM_PUBLIC_RPCS;
+    const honest = batchAnswer(9n);
+    const m = await readOutsideBase([A], {
+      baseEthUsd: 1,
+      rotation: 0,
+      deadlineMs: 500,
+      // Two hosts answer at once; the third hangs, which would hold a whole-wave wait past the deadline.
+      fetchFn: (u, i) => (u === pool[2] ? new Promise<Response>(() => {}) : honest(u, i)),
+    });
+    expect(m.get(A.toLowerCase())?.eth).toBe(9e-18);
+  });
+
+  test("a configured RPC that hangs costs one timeout per run, not one per chunk", async () => {
+    const seen: string[] = [];
+    const t = Date.now();
+    await readOutsideBase(addrs(250), {
+      baseEthUsd: 1,
+      rotation: 0,
+      deadlineMs: 30_000,
+      rpcUrls: "https://own.example/k",
+      fetchFn: async (u) => {
+        seen.push(u);
+        if (u.startsWith("https://own")) {
+          await new Promise((r) => setTimeout(r, 3_100));
+          throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
+        }
+        return new Response("down", { status: 503 });
+      },
+    });
+    expect(seen.filter((u) => u.startsWith("https://own")).length).toBe(1);
+    expect(Date.now() - t).toBeLessThan(6_000);
+  }, 15_000);
+
+  test("Base: public hosts that answered alone are named, by host only", async () => {
+    const { buildClient, publicHostsUsed } = await import("../src/chain-client");
+    const c = buildClient("https://own.example/secret-path", (async (u: string | URL | Request, init?: RequestInit) => {
+      if (String(u).startsWith("https://own")) return new Response("down", { status: 500 });
+      const { method } = JSON.parse(String(init?.body));
+      return Response.json({ jsonrpc: "2.0", id: 1, result: method === "eth_chainId" ? "0x2105" : "0x1" });
+    }) as typeof fetch);
+    await c.getBlockNumber({ cacheTime: 0 });
+    const used = publicHostsUsed(c);
+    expect(used.length).toBe(1);
+    expect(used[0]).not.toContain("/");
+    expect(used.join(" ")).not.toContain("secret");
+  });
+});

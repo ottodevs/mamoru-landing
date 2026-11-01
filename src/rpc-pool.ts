@@ -87,8 +87,8 @@ export function publicPool(chain: PoolChain, rotation: number, exclude: readonly
 
 /**
  * RPCs that failed during one run: skipped for the rest of it, so one dead host costs one timeout, not one per chunk or
- * request. A configured (keyed) RPC passed as `lenient` is skipped only after two failures in a row: one 429 from the
- * provider the run trusts most should not hand the rest of the run to the public pool.
+ * request. A configured (keyed) RPC passed as `lenient` is skipped only after two refusals in a row (an HTTP status or
+ * a JSON-RPC error): one 429 from the provider the run trusts most should not hand the run to the public pool.
  */
 export class RunHealth {
   private readonly fails = new Map<string, number>();
@@ -96,12 +96,13 @@ export class RunHealth {
   constructor(lenient: readonly string[] = []) {
     this.lenient = new Set(lenient);
   }
-  fail(url: string): void {
-    this.fails.set(url, (this.fails.get(url) ?? 0) + 1);
+  /** `hard` (a timeout or an unreachable host) drops even a configured RPC at once: a hang costs one timeout per run. */
+  fail(url: string, hard = false): void {
+    this.fails.set(url, hard ? 2 : (this.fails.get(url) ?? 0) + 1);
   }
-  /** An answer clears the strikes: only failures in a row, not scattered ones, drop a configured RPC. */
+  /** An answer clears a configured RPC's strikes (only refusals in a row drop it); a public host's strike is final. */
   succeed(url: string): void {
-    this.fails.delete(url);
+    if (this.lenient.has(url)) this.fails.delete(url);
   }
   ok(url: string): boolean {
     return (this.fails.get(url) ?? 0) < (this.lenient.has(url) ? 2 : 1);
@@ -194,43 +195,69 @@ export interface PoolPlan {
  * so one public RPC cannot set a figure by itself. An RPC that failed or gave nothing is skipped for the rest of the
  * run (`health`). An address with no settled answer stays absent: never zero.
  */
+/** A timeout or a host that could not be reached, as opposed to a refusal (an HTTP status or a JSON-RPC error). */
+export const isHardFailure = (e: unknown): boolean => {
+  const name = e instanceof Error ? e.name : "";
+  const text = e instanceof Error ? e.message : String(e);
+  return name === "TimeoutError" || name === "AbortError" || !/^(rpc|batch) \d{3}$|^rpc error|not a list$|no balance answered$/.test(text);
+};
+
 export async function readPooled<T>(chunks: readonly (readonly string[])[], plan: PoolPlan, r: PooledRead<T>, health: RunHealth, out: Map<string, T>): Promise<void> {
   const asked = (url: string, addresses: readonly string[]): Promise<(T | null)[]> =>
     r.ask(url, addresses).then(
       (got) => {
         if (got.some((x) => x != null)) health.succeed(url);
-        if (got.every((x) => x == null)) {
+        else {
           health.fail(url);
           r.failed?.(url, new Error("no balance answered"));
         }
         return got;
       },
       (e: unknown) => {
-        health.fail(url);
+        health.fail(url, isHardFailure(e));
         r.failed?.(url, e);
         throw e;
       },
     );
   if (plan.own.length) {
-    await Promise.all(
-      chunks.map(async (chunk) => {
-        const urls = health.healthy(plan.own);
-        const got = await settleWithin(urls.map((u) => asked(u, chunk)), plan.phaseMs);
-        chunk.forEach((a, i) => {
-          const hit = got.find((g) => g?.[i] != null)?.[i];
-          if (hit != null) out.set(a, hit);
-        });
-      }),
-    );
+    // Every answer is written the moment it arrives (a caller's deadline keeps it); an earlier RPC in the list
+    // overwrites a later one's, so list order decides among configured RPCs.
+    const rank = new Map<string, number>();
+    const ownChunk = async (chunk: readonly string[]) => {
+      const urls = health.healthy(plan.own);
+      await settleWithin(
+        urls.map((u) =>
+          asked(u, chunk).then((got) => {
+            const k = plan.own.indexOf(u);
+            got.forEach((x, i) => {
+              if (x != null && k < (rank.get(chunk[i]) ?? Infinity)) {
+                rank.set(chunk[i], k);
+                out.set(chunk[i], x);
+              }
+            });
+          }),
+        ),
+        plan.phaseMs,
+      );
+    };
+    // The first chunk alone, so a configured RPC that fails is known before every other chunk asks it too.
+    if (chunks.length) await ownChunk(chunks[0]);
+    await Promise.all(chunks.slice(1).map(ownChunk));
   }
   const left = chunks.map((c) => c.filter((a) => !out.has(a))).filter((c) => c.length > 0);
   if (!left.length) return;
   const votes = left.map(() => [] as { url: string; answers: (T | null)[] }[]);
+  const settle = (j: number) => {
+    const got = agreed(left[j].length, votes[j], r.key);
+    got.forEach((x, i) => {
+      if (x != null) out.set(left[j][i], x);
+    });
+    return got.every((x) => x !== null);
+  };
   let next = 0;
   let hosts = 0;
   for (;;) {
-    const open = left.some((c, j) => agreed(c.length, votes[j], r.key).some((x) => x === null));
-    if (!open) return;
+    if (left.every((_, j) => settle(j))) return;
     const wave: string[] = [];
     while (wave.length < plan.wave && next < plan.public.length && hosts < plan.publicHosts) {
       const u = plan.public[next++];
@@ -241,14 +268,19 @@ export async function readPooled<T>(chunks: readonly (readonly string[])[], plan
     if (!wave.length) return;
     await Promise.all(
       left.map(async (c, j) => {
-        // A wave ends as soon as every address of the chunk has two agreeing hosts: one hung RPC never holds it back.
-        const prior = votes[j];
-        const asVotes = (got: readonly ((T | null)[] | undefined)[]) => [...prior, ...wave.map((url, k) => ({ url, answers: got[k] ?? c.map(() => null) }))];
-        const got = await settleWithin(wave.map((u) => asked(u, c)), plan.phaseMs, (g) => agreed(c.length, asVotes(g), r.key).every((x) => x !== null));
-        votes[j] = asVotes(got);
-        agreed(c.length, votes[j], r.key).forEach((x, i) => {
-          if (x != null) out.set(c[i], x);
-        });
+        // Each answer is a vote the moment it arrives, and what two hosts agree on is written at once; the wave ends
+        // as soon as every address of the chunk is agreed, so one hung RPC never holds it back.
+        let complete = false;
+        await settleWithin(
+          wave.map((u) =>
+            asked(u, c).then((answers) => {
+              votes[j].push({ url: u, answers });
+              complete = settle(j);
+            }),
+          ),
+          plan.phaseMs,
+          () => complete,
+        );
       }),
     );
   }
