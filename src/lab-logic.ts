@@ -399,9 +399,12 @@ export function labLogic() {
    * reads "mar2025: ." once the token is stripped. The value is the server-verified claim's own, so this adds no
    * unverified figure. `{{vN}}` is still dropped -- the verdict sentence is shown above, in full. */
   var resolveRefTokens = function (md: string, claims: { value: number; metric: string }[]): string {
-    var withClaims = md.replace(/\{\{c(\d+)\}\}/g, function (whole: string, n: string) {
+    // The model often writes the unit after the token ("{{c0}} USDC"); the formatted value already carries it,
+    // so a unit word right after the token is consumed with it rather than shown twice.
+    var withClaims = md.replace(/\{\{c(\d+)\}\}(\s*(?:USDC|%|d[ií]as?|operaciones?)(?![\p{L}\p{N}]))?/gu, function (whole: string, n: string, unit?: string) {
       var c = claims[Number(n)];
-      return c ? fmtClaimValue(c.value, c.metric) : "";
+      if (!c) return "";
+      return fmtClaimValue(c.value, c.metric);
     });
     return stripRefTokens(withClaims);
   };

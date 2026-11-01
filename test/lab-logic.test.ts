@@ -302,6 +302,9 @@ describe("lab-logic.ts: \"Preguntar al Lab\" (otto/mamoru-astro#30, spec 008 pha
   test("resolveRefTokens: {{cN}} becomes the n-th claim's formatted value; {{vN}} and unknown refs drop", () => {
     const claims = [{ metric: "vsHodl", value: -8.46 }, { metric: "fees", value: 1.5 }];
     expect(LAB.resolveRefTokens("La mejor es mar2025: {{c0}}. Comisiones {{c1}}; {{v0}} y {{c9}}.", claims)).toBe("La mejor es mar2025: −8,46 USDC. Comisiones 1,50 USDC; y .");
+    // the model's own unit after the token is not repeated; a word that merely starts like a unit is kept
+    expect(LAB.resolveRefTokens("mar2025, con {{c0}} USDC, y fees de {{c1}}USDC.", claims)).toBe("mar2025, con −8,46 USDC, y fees de 1,50 USDC.");
+    expect(LAB.resolveRefTokens("{{c0}} USDCs", claims)).toBe("−8,46 USDC USDCs");
   });
 
   test("answerBlocksHtml: prose resolves {{cN}} on a whole answer, only strips it on a partial one", () => {
