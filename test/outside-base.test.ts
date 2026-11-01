@@ -90,7 +90,23 @@ describe("readOutsideBase", () => {
     expect(m.size).toBe(0);
     expect(seen[0]).toBe("https://secret.example/key");
     expect(seen).not.toContain("http://insecure.example");
-    expect(seen.length).toBe(3);
+    // otto/mamoru-astro#40: the secret plus four public RPCs, each tried with aggregate3 and then with a plain batch.
+    expect(seen.length).toBe(10);
+  });
+
+  test("aggregate3 refused everywhere: the plain batch reads the balances; errors name hosts, never URL paths", async () => {
+    const notes: string[] = [];
+    const fetchFn = async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (!Array.isArray(body)) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "refused" } }));
+      const word = (n: bigint) => `0x${n.toString(16)}`;
+      return new Response(JSON.stringify(body.map((c: { id: number; method: string }) => ({ jsonrpc: "2.0", id: c.id, result: c.method === "eth_getBalance" ? word(55_378_350_000_000_000n) : word(0n) }))));
+    };
+    const m = await readOutsideBase([USER], { baseEthUsd: 2000, rpcUrls: "https://secret.example/key123", fetchFn, onError: (x) => notes.push(x) });
+    expect(m.get(USER.toLowerCase())).toEqual({ eth: 0.05537835, usdc: 0, usd: 0.05537835 * 2000 });
+    expect(notes.length).toBeGreaterThan(0);
+    expect(notes.join(" ")).not.toContain("key123");
+    expect(notes[0]).toStartWith("secret.example: rpc error");
   });
 
   test("an address whose sub-call failed is not read; the others are", async () => {

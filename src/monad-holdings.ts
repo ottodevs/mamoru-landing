@@ -38,6 +38,8 @@ export interface MonadHolding {
   usd: number;
   /** True when MON is held and no price was read: `usd` is then a floor (the USDC still counts). */
   monUnpriced: boolean;
+  /** otto/mamoru-astro#40: set when this figure was carried from an earlier reading because the latest read failed. */
+  at?: string;
 }
 
 export interface MonadRaw {

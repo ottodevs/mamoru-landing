@@ -5,7 +5,8 @@ import { heldElsewhere, loadConsole } from "../src/console-data";
 import { accountsView, pulseSection } from "../src/console-views";
 import type { D1Db } from "../src/d1-infra";
 import { buildFundsMap } from "../src/funds-map";
-import type { AccountView, InfraSnapshot } from "../src/infra-snapshot";
+import { type AccountView, carryForward, type InfraSnapshot } from "../src/infra-snapshot";
+import { readAtNote } from "../src/outside-base";
 import { monUsdFromSqrt, parseMonadAggregate, readMonadHoldings, toMonadHolding } from "../src/monad-holdings";
 
 // otto/mamoru-astro#39: every balance of every Safe on every chain counts in /ops.
@@ -237,5 +238,34 @@ describe("console views", () => {
   test("a ledger account without an on-chain reading is a floor, never exact", async () => {
     const m = await loadConsole(db(), "prod", now, snapOf([rows[0]!]));
     expect(m.accounts.find((a) => a.key === "aaaa1111")!.floor).toBe(true);
+  });
+});
+
+describe("a failed read never hides money seen before (otto/mamoru-astro#40)", () => {
+  test("rows without a fresh Ethereum or Monad figure take the last one, stamped with its time; fresh figures win", () => {
+    const prev = snapOf([view({ outside: { eth: 0.05537835, usdc: 0, usd: 125.42 } })]);
+    (prev as { asOf: string }).asOf = "2026-11-01T05:00:41Z";
+    const now = snapOf([view({ outside: undefined, monad: undefined })]);
+    carryForward(now, prev);
+    expect(now.accounts!.rows[0]!.outside).toEqual({ eth: 0.05537835, usdc: 0, usd: 125.42, at: "2026-11-01T05:00:41Z" });
+    expect(now.accounts!.rows[0]!.monad?.at).toBe("2026-11-01T05:00:41Z");
+    const fresh = snapOf([view({ outside: { eth: 0.01, usdc: 0, usd: 20 } })]);
+    carryForward(fresh, prev);
+    expect(fresh.accounts!.rows[0]!.outside).toEqual({ eth: 0.01, usdc: 0, usd: 20 });
+  });
+
+  test("a carried figure keeps its first time across later failed reads", () => {
+    const first = snapOf([view({ outside: { eth: 1, usdc: 0, usd: 2000, at: "2026-11-01T05:00:41Z" } })]);
+    const next = snapOf([view({ outside: undefined })]);
+    carryForward(next, first);
+    expect(next.accounts!.rows[0]!.outside?.at).toBe("2026-11-01T05:00:41Z");
+  });
+
+  test("Accounts names when a carried figure was read", () => {
+    expect(readAtNote("2026-11-01T05:00:41Z")).toBe(" · read 1 Nov 05:00 UTC");
+    expect(readAtNote(undefined)).toBe("");
+    const e = heldElsewhere([view({ outside: { eth: 0.05537835, usdc: 0, usd: 125.42, at: "2026-11-01T05:00:41Z" } })], 2265);
+    expect(e.away).toEqual(["0.0554 ETH on Ethereum · read 1 Nov 05:00 UTC"]);
+    expect(e.usd).toBeCloseTo(125.42, 6);
   });
 });

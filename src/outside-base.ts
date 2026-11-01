@@ -11,13 +11,20 @@ import { decodeFunctionResult, encodeFunctionData, parseAbi } from "viem";
 export const ETHEREUM_USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 export const ETHEREUM_MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11";
 /** Public fallbacks, tried after any `ETHEREUM_RPC_URLS` (secret, optional, comma separated). */
-export const ETHEREUM_PUBLIC_RPCS = ["https://ethereum-rpc.publicnode.com", "https://eth.drpc.org"];
+export const ETHEREUM_PUBLIC_RPCS = [
+  "https://ethereum-rpc.publicnode.com",
+  "https://eth.drpc.org",
+  // otto/mamoru-astro#40: from Cloudflare the aggregate3 read failed on every run since 1 Nov 05:35 while it answered
+  // from elsewhere; these two also answer aggregate3 (checked 2026-11-01).
+  "https://rpc.mevblocker.io",
+  "https://eth-mainnet.public.blastapi.io",
+];
 export const ETH_SPOT_URL = "https://api.coinbase.com/v2/prices/ETH-USD/spot";
 /** Accounts per aggregate3 call (two sub-calls each): keeps one eth_call small and the subrequest count low. */
 const CHUNK = 100;
-const TIMEOUT_MS = 5_000;
+const TIMEOUT_MS = 3_000;
 /** The whole Ethereum read gives up after this, so it can never hold the Base snapshot back (waitUntil is capped at 30 s). */
-export const OUTSIDE_DEADLINE_MS = 6_000;
+export const OUTSIDE_DEADLINE_MS = 12_000;
 
 const abi = parseAbi([
   "struct Call3 { address target; bool allowFailure; bytes callData; }",
@@ -34,6 +41,17 @@ export interface OutsideHolding {
   usdc: number;
   /** eth * ETH price + usdc; null when there is ETH but no price could be read. */
   usd: number | null;
+  /** otto/mamoru-astro#40: set when this figure was carried from an earlier reading because the latest read failed. */
+  at?: string;
+}
+
+/** " · read 1 Nov 05:00 UTC" for a figure carried from an earlier reading; "" for a fresh one. */
+export function readAtNote(at: string | undefined): string {
+  if (!at) return "";
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return "";
+  const mon = d.toLocaleString("en-GB", { month: "short", timeZone: "UTC" });
+  return ` · read ${d.getUTCDate()} ${mon} ${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")} UTC`;
 }
 
 export type OutsideFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -92,18 +110,63 @@ export async function rpcCall(url: string, to: string, data: string, fetchFn: Ou
   });
   if (!res.ok) throw new Error(`rpc ${res.status}`);
   const body = (await res.json()) as { result?: unknown; error?: unknown };
-  if (typeof body.result !== "string" || !/^0x[0-9a-fA-F]+$/.test(body.result)) throw new Error("rpc error");
+  if (typeof body.result !== "string" || !/^0x[0-9a-fA-F]+$/.test(body.result)) throw new Error(`rpc error ${JSON.stringify(body.error ?? null).slice(0, 120)}`);
   return body.result as `0x${string}`;
 }
 
-/** One chunk, trying each RPC in order. null when every RPC failed. */
-async function readChunk(addresses: readonly string[], urls: readonly string[], fetchFn: OutsideFetch): Promise<(OutsideRaw | null)[] | null> {
+/** The host of an RPC URL, never its path or query (a secret URL can carry a key there). */
+export const hostOf = (url: string): string => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "?";
+  }
+};
+
+/** Receives why a read failed, short and without secrets: "host: message". */
+export type ReadError = (msg: string) => void;
+export const whyFailed = (url: string, e: unknown): string => `${hostOf(url)}: ${(e instanceof Error ? e.message : String(e)).slice(0, 140)}`;
+
+/**
+ * The same balances as one JSON-RPC batch of plain eth_getBalance and USDC balanceOf calls, no Multicall3
+ * (otto/mamoru-astro#40: from Cloudflare a plain eth_getBalance answered where the aggregate3 call did not).
+ */
+async function readChunkBatch(addresses: readonly string[], url: string, fetchFn: OutsideFetch): Promise<(OutsideRaw | null)[]> {
+  const calls = addresses.flatMap((a, i) => [
+    { jsonrpc: "2.0", id: i * 2, method: "eth_getBalance", params: [a, "latest"] },
+    { jsonrpc: "2.0", id: i * 2 + 1, method: "eth_call", params: [{ to: ETHEREUM_USDC, data: encodeFunctionData({ abi, functionName: "balanceOf", args: [a as `0x${string}`] }) }, "latest"] },
+  ]);
+  const res = await fetchFn(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(calls), signal: AbortSignal.timeout(TIMEOUT_MS) });
+  if (!res.ok) throw new Error(`batch ${res.status}`);
+  const body = (await res.json()) as unknown;
+  if (!Array.isArray(body)) throw new Error("batch answer is not a list");
+  const byId = new Map<number, unknown>();
+  for (const r of body as { id?: unknown; result?: unknown }[]) if (typeof r?.id === "number") byId.set(r.id, r.result);
+  const word = (v: unknown): bigint | null => (typeof v === "string" && /^0x[0-9a-fA-F]{1,64}$/.test(v) ? BigInt(v) : null);
+  return addresses.map((_, i) => {
+    const ethWei = word(byId.get(i * 2));
+    const usdcRaw = word(byId.get(i * 2 + 1));
+    return ethWei === null || usdcRaw === null ? null : { ethWei, usdcRaw };
+  });
+}
+
+/** One chunk: aggregate3 on each RPC in order, then a plain batch on each. null when every attempt failed. */
+async function readChunk(addresses: readonly string[], urls: readonly string[], fetchFn: OutsideFetch, onError?: ReadError): Promise<(OutsideRaw | null)[] | null> {
   const data = callData(addresses);
   for (const url of urls) {
     try {
       return parseAggregate(addresses, await rpcCall(url, ETHEREUM_MULTICALL3, data, fetchFn));
-    } catch {
-      // Next RPC.
+    } catch (e) {
+      onError?.(whyFailed(url, e));
+    }
+  }
+  for (const url of urls) {
+    try {
+      const out = await readChunkBatch(addresses, url, fetchFn);
+      if (out.some((r) => r !== null)) return out;
+      onError?.(whyFailed(url, new Error("batch: no balance answered")));
+    } catch (e) {
+      onError?.(whyFailed(url, e));
     }
   }
   return null;
@@ -136,7 +199,7 @@ export function toHolding(raw: OutsideRaw, ethUsd: number | null): OutsideHoldin
  */
 export async function readOutsideBase(
   addresses: readonly string[],
-  opts: { rpcUrls?: string; baseEthUsd: number | null; fetchFn?: OutsideFetch; deadlineMs?: number },
+  opts: { rpcUrls?: string; baseEthUsd: number | null; fetchFn?: OutsideFetch; deadlineMs?: number; onError?: ReadError },
 ): Promise<Map<string, OutsideHolding>> {
   const out = new Map<string, OutsideHolding>();
   const fetchFn = opts.fetchFn ?? fetch;
@@ -155,7 +218,7 @@ export async function readOutsideBase(
   await Promise.race([deadline, Promise.all(
     chunks.map(async (chunk) => {
       try {
-        (await readChunk(chunk, urls, fetchFn))?.forEach((r, k) => {
+        (await readChunk(chunk, urls, fetchFn, opts.onError))?.forEach((r, k) => {
           if (r) raws.set(chunk[k], r);
         });
       } catch {
@@ -164,6 +227,7 @@ export async function readOutsideBase(
     }),
   )]);
   clearTimeout(timer);
+  if (raws.size < unique.length) opts.onError?.(`${unique.length - raws.size} of ${unique.length} addresses not read`);
   let ethUsd = opts.baseEthUsd;
   if (ethUsd === null && [...raws.values()].some((r) => r.ethWei > 0n)) ethUsd = await readEthSpot(fetchFn);
   for (const [address, raw] of raws) out.set(address, toHolding(raw, ethUsd));

@@ -7,7 +7,7 @@
 
 import type { AccountView, InfraSnapshot } from "./infra-snapshot";
 import { fmtInt, fmtUsd } from "./metrics-math";
-import { outsideLine, summarizeOutside } from "./outside-base";
+import { outsideLine, summarizeOutside, readAtNote } from "./outside-base";
 import type { SectionView } from "./ops";
 import { esc } from "./text";
 
@@ -27,7 +27,7 @@ function holding(row: AccountView): string {
   const parts: string[] = [];
   if (o.eth > 0) parts.push(`${fmtEth(o.eth)} ETH`);
   if (o.usdc > 0) parts.push(`${fmtUsd(o.usdc)} USDC`);
-  return `${parts.join(" + ")}${o.usd === null ? "" : ` · ${fmtUsd(o.usd)}`}`;
+  return `${parts.join(" + ")}${o.usd === null ? "" : ` · ${fmtUsd(o.usd)}`}${readAtNote(o.at)}`;
 }
 
 /** The sheet appended to the Accounts view, or "" when there is nothing to say (no accounts reading at all). */
