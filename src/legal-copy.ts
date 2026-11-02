@@ -81,9 +81,17 @@ export const TERMS: LegalDoc = {
       ],
     },
     {
-      heading: "Limitation of liability",
+      heading: "You use Mamoru at your own risk",
       body: [
-        "To the extent the law allows, Mamoru's contributors are not liable for indirect or consequential losses, lost profits, or losses caused by blockchains, protocols, third-party services, market movements, or the loss of your passkey or devices.",
+        "Mamoru is free, open-source software offered as is. You decide whether to use it, how much to deposit and when to withdraw. You use it entirely at your own risk.",
+      ],
+    },
+    {
+      heading: "No liability",
+      body: [
+        "To the fullest extent the law allows, Mamoru's contributors accept no liability of any kind for any loss or damage arising from your use of Mamoru, however it is caused. This includes loss of funds, lost yield or profits, and losses caused by smart contracts, blockchains, bridges, protocols, third-party services, market movements, the operator's decisions, or the loss of your passkey or devices.",
+        "By using Mamoru, you agree not to bring any claim against its contributors for those losses, to the fullest extent the law allows.",
+        "Nothing in these terms limits liability that the law does not allow to be limited.",
       ],
     },
     {
@@ -157,7 +165,7 @@ export const RISKS: LegalDoc = {
   title: "Risks",
   updated: UPDATED,
   summary:
-    "Mamoru puts your funds to work in on-chain markets. That can earn yield, and it can lose money. Only deposit what you can afford to lose.",
+    "Mamoru puts your funds to work in on-chain markets. That can earn yield, and it can lose money. You use Mamoru at your own risk, and its contributors accept no liability for losses (see the terms). Only deposit what you can afford to lose.",
   sections: [
     {
       heading: "Smart contracts",
