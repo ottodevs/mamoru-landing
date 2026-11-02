@@ -466,7 +466,8 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     accounts: yields,
     totals: {
       fees: feesSum,
-      collected: receipts ? yields.reduce((x, a) => x + (a.collected ?? 0), 0) : null,
+      // Every account in scope, snapshot or not: one with receipts and no snapshot row still harvested them.
+      collected: receipts ? acctRows.reduce((x, a) => x + (collectedBy.get(a.account_key) ?? 0), 0) : null,
       lp: working.reduce((x, a) => x + a.lp, 0),
       idle: yields.reduce((x, a) => x + a.idle, 0),
       apr: capDays > 0 ? (datedFees / capDays) * 365 * 100 : null,

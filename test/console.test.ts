@@ -228,6 +228,14 @@ describe("earned is what was harvested (otto/mamoru-astro#43)", () => {
     expect(html).toContain("30¢ more earned, not yet harvested");
   });
 
+  test("an account in scope with receipts and no snapshot row still counts in the harvested total", async () => {
+    const db = memoryDb(["yield", "seed"]);
+    await db.prepare("INSERT INTO accounts VALUES ('acc3', 'u3', 8453, '0xC', '2026-09-03T00:00:00Z', 'prod', 0)").run();
+    await db.prepare("INSERT INTO yield_ledger_account_receipts VALUES ('2026-10-17', 8453, '0xc', 'acc3', 'prod', '1', 20000, 'x', '2026-10-17T10:00:00Z')").run();
+    const m = await loadConsole(db, "prod", NOW, null);
+    expect(m.totals.collected!).toBeCloseTo(0.92, 6);
+  });
+
   test("without the receipts table, earned is n/a, never the uncollected fees", async () => {
     const db = memoryDb(["yield", "seed"]);
     await db.prepare("DROP TABLE yield_ledger_account_receipts").run();
