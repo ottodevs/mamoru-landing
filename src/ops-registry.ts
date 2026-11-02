@@ -8,7 +8,7 @@
 import { fmtInt } from "./metrics-math";
 import { pageHead, type SectionView } from "./ops";
 import { CCTP_DOMAINS } from "./registry-config";
-import type { ChainReading, HistoryView, PendingView } from "./registry-read";
+import type { ChainReading, HistoryView, OkReading, PendingView } from "./registry-read";
 import { fmtSeconds, keyAddress, keyDomain, pct, poolLabel, timeLeft, type Kind, type Params, type PoolParams } from "./registry-model";
 import { esc } from "./text";
 
@@ -67,7 +67,7 @@ const entryName = (kind: Kind, key: string | null, chainId: number): string => {
   return `${kind} ${(kind === "pool" ? poolLabel(chainId, a) : null) ?? shortAddr(a)}`;
 };
 
-function pendingHtml(p: PendingView, r: Extract<ChainReading, { state: "ok" }>, now: number): string {
+function pendingHtml(p: PendingView, r: OkReading, now: number): string {
   const c = p.change;
   const left = timeLeft(p.eta, now);
   const name = entryName(c.kind, c.key, r.chain.chainId);
@@ -99,7 +99,7 @@ function pendingHtml(p: PendingView, r: Extract<ChainReading, { state: "ok" }>, 
   </article>`;
 }
 
-function active(r: Extract<ChainReading, { state: "ok" }>): string {
+function active(r: OkReading): string {
   const pools = r.pools.length
     ? `<div class="rg-scroll"><table class="rg-t"><thead><tr><th>Pool</th><th>Band</th><th>Windows</th><th>Anchor</th><th>Share</th></tr></thead><tbody>${r.pools
         .map(
@@ -121,7 +121,7 @@ function active(r: Extract<ChainReading, { state: "ok" }>): string {
   </div>`;
 }
 
-function historyHtml(r: Extract<ChainReading, { state: "ok" }>): string {
+function historyHtml(r: OkReading): string {
   if (!r.history.length) return `<p class="soft">Nothing has been executed or cancelled yet.</p>`;
   const row = (h: HistoryView) => {
     const f = h.f;
@@ -158,9 +158,10 @@ function chainHtml(r: ChainReading, now: number, chainParam: ChainChoice): strin
         .sort((a, b) => a.eta - b.eta)
         .map((p) => pendingHtml(p, r, now))
         .join("")
-    : `<p class="soft">Nothing is waiting.</p>`;
+    : `<p class="soft">${r.state === "degraded" ? "Nothing is waiting in what this one source returned." : "Nothing is waiting."}</p>`;
   return `<section class="sec rg" aria-label="${esc(r.chain.name)}">${head}<span class="soft">${where} · ${link} ${copyButton(r.address, "Copy address")}</span></div>
     <p class="soft rg-facts">Admin ${esc(shortAddr(r.admin))} (the team Safe) · guardian ${esc(shortAddr(r.guardian))} · every addition waits ${esc(fmtSeconds(r.delaySeconds))}; removals and tightening take effect at once.</p>
+    ${r.state === "degraded" ? `<p class="rg-warn" role="alert"><b>Single source, unverified:</b> ${esc(r.source.hosts.join(", "))} at block ${esc(String(r.source.block))}. Nothing cross-checked this answer: a second configured RPC is needed for a clean reading. Everything below is what that one source returned.</p>` : ""}
     <p class="soft rg-facts">Read at block ${esc(String(r.source.block))} (${esc(shortAddr(r.source.hash))}), ${r.source.hosts.length > 1 ? "the same answer from" : "from"} ${esc(r.source.hosts.join(" and "))}.</p>
     <p class="soft rg-facts">Independent alerts: the guardian watcher posts every queued change to ops-mamoru.</p>
     <h3 class="rg-h">Waiting to take effect${r.pending.length ? ` (${r.pending.length})` : ""}</h3>

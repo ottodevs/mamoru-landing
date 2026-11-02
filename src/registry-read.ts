@@ -84,12 +84,16 @@ export interface Source {
   hosts: string[];
 }
 
+/** A reading that carries data: clean (two hosts agreed) or degraded (one source, unverified). */
+export type OkReading = Extract<ChainReading, { state: "ok" | "degraded" }>;
+
 export type ReadFailure = "rpc" | "disagree" | "inconsistent" | "stale";
 export type ChainReading =
   | { state: "unset"; chain: RegistryChain["chain"] }
   | { state: "error"; chain: RegistryChain["chain"]; address: string; kind: ReadFailure; why: string }
   | {
-      state: "ok";
+      /** "ok" only when two distinct hosts agreed; "degraded" when one source answered alone (unverified). */
+      state: "ok" | "degraded";
       chain: RegistryChain["chain"];
       address: string;
       /** Chain time of the pinned block, unix seconds. */
@@ -300,7 +304,7 @@ function assemble(snap: Snap, cfg: RegistryChain & { address: string }, hosts: s
   });
   const history: HistoryView[] = folded.finished.slice(0, HISTORY).map((f) => ({ f, time: snap.times[String(f.at.block)]!, params: f.kind && f.params ? decodeParams(f.kind, f.params) : null }));
   return {
-    state: "ok",
+    state: hosts.length >= 2 ? "ok" : "degraded",
     chain: cfg.chain,
     address: cfg.address,
     asOf: snap.time,
