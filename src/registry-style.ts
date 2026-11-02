@@ -13,6 +13,8 @@ export const REGISTRY_STYLE = `
 .rg .sec-head > span { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.6rem; }
 .rg-addr { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.86rem; overflow-wrap: anywhere; }
 .rg-facts { margin: 0.5rem 0 0; font-size: 0.9rem; max-width: 46rem; }
+.rg-bad { color: var(--bad); }
+.rg-anom { margin: 0.4rem 0 0; color: var(--bad); }
 .rg-empty { margin: 0.8rem 0 0.4rem; }
 .rg .rg-h { margin: 1.6rem 0 0.6rem; font-size: 1rem; font-weight: 400; color: var(--muted); }
 .rg h4 { margin: 0 0 0.4rem; font-size: 1.05rem; font-weight: 400; }

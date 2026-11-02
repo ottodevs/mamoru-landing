@@ -5,7 +5,7 @@
  */
 
 import { DEPLOYMENTS } from "./deployments";
-import { decodeAbiParameters, decodeEventLog, encodeFunctionData, parseAbi, toEventSelector } from "viem";
+import { decodeAbiParameters, decodeEventLog, encodeAbiParameters, encodeFunctionData, keccak256, parseAbi, toEventSelector } from "viem";
 
 export const registryAbi = parseAbi([
   "event Queued(bytes32 indexed id, uint8 indexed kind, bytes32 indexed key, bytes params, uint256 nonce, uint256 eta)",
@@ -111,8 +111,10 @@ export interface Folded {
   pending: QueuedChange[];
   /** Newest first. */
   finished: Finished[];
-  /** Pool, vault and route keys that ever had an entry event: what to ask the chain about. */
+  /** Route domains (CCTP, at most 0xffffffff) that ever had an entry event: what to ask the chain about. */
   routeDomains: number[];
+  /** Executed/removed/tightened events whose key the contract could never have written: the read refuses to go on. */
+  anomalies: string[];
 }
 
 /** Events in, pending and finished out. The chain's `etaOf` has the last word on a pending id (see registry-read). */
@@ -121,6 +123,7 @@ export function foldEvents(events: readonly RegistryEvent[]): Folded {
   const queued = new Map<string, QueuedChange>();
   const finished: Finished[] = [];
   const domains = new Set<number>();
+  const anomalies: string[] = [];
   for (const e of sorted) {
     if (e.type === "queued") queued.set(e.id, e);
     else if (e.type === "executed") {
@@ -132,11 +135,14 @@ export function foldEvents(events: readonly RegistryEvent[]): Folded {
       finished.push({ how: "cancelled", id: e.id, kind: q?.kind ?? null, key: q?.key ?? null, params: q?.params ?? null, by: e.by, at: e.at });
     }
     if ((e.type === "queued" || e.type === "executed" || e.type === "removed" || e.type === "tightened") && e.kind === "route") {
-      const d = Number(BigInt(e.key));
-      if (Number.isSafeInteger(d)) domains.add(d);
+      const d = keyDomain(e.key);
+      if (d !== null) domains.add(d);
+      else if (e.type !== "queued") anomalies.push("a route event carries a domain outside 32 bits");
+    } else if ((e.type === "executed" || e.type === "removed" || e.type === "tightened") && keyAddress(e.key) === null) {
+      anomalies.push(`a ${e.kind} event carries a key that is not an address`);
     }
   }
-  return { pending: [...queued.values()], finished: finished.reverse(), routeDomains: [...domains].sort((a, b) => a - b) };
+  return { pending: [...queued.values()], finished: finished.reverse(), routeDomains: [...domains].sort((a, b) => a - b), anomalies };
 }
 
 // ---- entries in words ----
@@ -215,4 +221,22 @@ export function cancelCalldata(id: string): `0x${string}` {
 export function poolLabel(chainId: number, address: string): string | null {
   const d = DEPLOYMENTS.find((x) => x.chainId === chainId)?.contracts.find((c) => c.address.toLowerCase() === address.toLowerCase());
   return d && d.name.startsWith("Pool ") ? d.name.slice(5) : null;
+}
+
+/** The id MamoruRegistry.queue derives: keccak256(abi.encode(kind, key, params, nonce)), the enum as uint8. */
+export function changeId(q: Pick<QueuedChange, "kind" | "key" | "params" | "nonce">): string {
+  return keccak256(encodeAbiParameters([{ type: "uint8" }, { type: "bytes32" }, { type: "bytes" }, { type: "uint256" }], [KINDS.indexOf(q.kind), q.key as `0x${string}`, q.params, q.nonce]));
+}
+
+/**
+ * Why a queued change cannot be one the contract's `queue` would have accepted, or null. `queue` checks the same
+ * things (BadEntry), so a change that fails here means this reading and the contract disagree: it is shown as anomalous,
+ * with its cancel calldata, never dropped.
+ */
+export function anomalyOf(q: Pick<QueuedChange, "kind" | "key" | "params">): string | null {
+  if (q.kind === "route") {
+    if (keyDomain(q.key) === null) return "its route domain is outside 32 bits";
+  } else if (keyAddress(q.key) === null) return `its ${q.kind} key is not an address`;
+  if (decodeParams(q.kind, q.params) === null) return "its parameters do not decode";
+  return null;
 }

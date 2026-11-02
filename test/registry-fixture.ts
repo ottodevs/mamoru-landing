@@ -5,7 +5,7 @@
  */
 
 import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, encodeFunctionResult, type Hex } from "viem";
-import { registryAbi, type Kind } from "../src/registry-model";
+import { changeId, registryAbi, type Kind } from "../src/registry-model";
 import type { RegistryChain } from "../src/registry-config";
 import { BASE, MONAD } from "../src/funding";
 
@@ -23,7 +23,7 @@ const KIND: Record<Kind, number> = { pool: 0, vault: 1, route: 2 };
 
 const pad32 = (n: bigint | number) => `0x${BigInt(n).toString(16).padStart(64, "0")}` as Hex;
 export const keyOf = (a: string) => `0x${"0".repeat(24)}${a.slice(2).toLowerCase()}` as Hex;
-const idOf = (n: number) => `0x${n.toString(16).padStart(64, "0")}` as Hex;
+const fake = (n: number) => `0x${n.toString(16).padStart(64, "0")}` as Hex;
 
 export interface Pool {
   twapWindow: number;
@@ -38,10 +38,16 @@ export const poolParams = (p: Pool): Hex =>
 export const vaultParams = (r: number): Hex => encodeAbiParameters([{ type: "uint16" }], [r]);
 export const routeParams = (): Hex => encodeAbiParameters([{ type: "bool" }], [true]);
 
-type Ev =
+export type Ev =
   | { t: "queued"; block: number; id: number; kind: Kind; key: Hex; params: Hex; nonce: number; eta: number }
   | { t: "executed"; block: number; id: number; kind: Kind; key: Hex; params: Hex }
   | { t: "cancelled"; block: number; id: number; by: string };
+
+/** The real id of the queued change labelled `n` (keccak of kind, key, params, nonce), the way the contract derives it. */
+export function idOf(events: readonly Ev[], n: number): Hex {
+  const q = events.find((e): e is Extract<Ev, { t: "queued" }> => e.t === "queued" && e.id === n);
+  return q ? (changeId({ kind: q.kind, key: q.key, params: q.params, nonce: BigInt(q.nonce) }) as Hex) : fake(n);
+}
 
 export interface Fixture {
   now: number;
@@ -97,11 +103,11 @@ export interface Calls {
   logRanges: [number, number][];
 }
 
-export function fixtureFetch(f: Fixture, calls: Calls = { methods: [], logRanges: [] }, opts: { chainIdOf?: (url: string) => number; failLogs?: boolean } = {}) {
+export function fixtureFetch(f: Fixture, calls: Calls = { methods: [], logRanges: [] }, opts: { chainIdOf?: (url: string) => number; failLogs?: boolean; logAddress?: string; tamper?: (url: string, method: string, params: any[], result: unknown) => unknown; failCalls?: string[] } = {}) {
   const fn = async (url: string, init?: RequestInit): Promise<Response> => {
     const body = JSON.parse(String(init?.body)) as { id: number; method: string; params: any[] };
     calls.methods.push(body.method);
-    const ok = (result: unknown) => new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }));
+    const ok = (result: unknown) => new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: opts.tamper ? opts.tamper(url, body.method, body.params, result) : result }));
     const timeOf = (n: number) => f.now - (HEAD - n) * 2;
     switch (body.method) {
       case "eth_chainId":
@@ -110,7 +116,7 @@ export function fixtureFetch(f: Fixture, calls: Calls = { methods: [], logRanges
         return ok(`0x${HEAD.toString(16)}`);
       case "eth_getBlockByNumber": {
         const n = body.params[0] === "latest" ? HEAD : Number(BigInt(body.params[0]));
-        return ok({ number: `0x${n.toString(16)}`, timestamp: `0x${timeOf(n).toString(16)}` });
+        return ok({ number: `0x${n.toString(16)}`, hash: fake(n + 7), timestamp: `0x${timeOf(n).toString(16)}` });
       }
       case "eth_getLogs": {
         if (opts.failLogs) return new Response("nope", { status: 500 });
@@ -120,21 +126,22 @@ export function fixtureFetch(f: Fixture, calls: Calls = { methods: [], logRanges
         const logs = f.events
           .filter((e) => e.block >= from && e.block <= to)
           .map((e, i) => {
-            const common = { blockNumber: `0x${e.block.toString(16)}`, logIndex: `0x${i.toString(16)}`, transactionHash: idOf(9000 + e.id), address: REGISTRY };
+            const common = { blockNumber: `0x${e.block.toString(16)}`, logIndex: `0x${i.toString(16)}`, transactionHash: fake(9000 + e.id), address: opts.logAddress ?? REGISTRY };
             const ev = (name: string, args: Record<string, unknown>, data: Hex) => {
               const topics = encodeEventTopics({ abi: registryAbi, eventName: name as "Queued", args: args as any });
               return { ...common, topics, data };
             };
             if (e.t === "queued")
-              return ev("Queued", { id: idOf(e.id), kind: KIND[e.kind], key: e.key }, encodeAbiParameters([{ type: "bytes" }, { type: "uint256" }, { type: "uint256" }], [e.params, BigInt(e.nonce), BigInt(e.eta)]));
-            if (e.t === "executed") return ev("Executed", { id: idOf(e.id), kind: KIND[e.kind], key: e.key }, encodeAbiParameters([{ type: "bytes" }], [e.params]));
-            return ev("Cancelled", { id: idOf(e.id), by: e.by }, "0x");
+              return ev("Queued", { id: idOf(f.events, e.id), kind: KIND[e.kind], key: e.key }, encodeAbiParameters([{ type: "bytes" }, { type: "uint256" }, { type: "uint256" }], [e.params, BigInt(e.nonce), BigInt(e.eta)]));
+            if (e.t === "executed") return ev("Executed", { id: idOf(f.events, e.id), kind: KIND[e.kind], key: e.key }, encodeAbiParameters([{ type: "bytes" }], [e.params]));
+            return ev("Cancelled", { id: idOf(f.events, e.id), by: e.by }, "0x");
           });
         return ok(logs);
       }
       case "eth_call": {
         const data = body.params[0].data as Hex;
         const { functionName, args } = decodeFunctionData({ abi: registryAbi, data }) as { functionName: any; args: any[] | undefined };
+        if (opts.failCalls?.includes(functionName)) return new Response("nope", { status: 500 });
         const enc = (result: unknown) => ok(encodeFunctionResult({ abi: registryAbi, functionName, result } as any));
         switch (functionName) {
           case "ADMIN":
@@ -154,7 +161,7 @@ export function fixtureFetch(f: Fixture, calls: Calls = { methods: [], logRanges
           case "routeOn":
             return enc(Boolean(f.routes[Number(args![0])]));
           case "etaOf":
-            return enc(BigInt(f.eta[Number(BigInt(args![0]))] ?? 0));
+            return enc(BigInt(f.eta[Object.keys(f.eta).map(Number).find((n) => idOf(f.events, n).toLowerCase() === String(args![0]).toLowerCase()) ?? -1] ?? 0));
         }
         throw new Error(`unexpected call ${functionName}`);
       }

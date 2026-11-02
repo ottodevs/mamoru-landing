@@ -72,11 +72,12 @@ function pendingHtml(p: PendingView, r: Extract<ChainReading, { state: "ok" }>, 
   const left = timeLeft(p.eta, now);
   const name = entryName(c.kind, c.key, r.chain.chainId);
   const diff = p.current && p.params ? changes(p.current, p.params) : [];
-  const verb = c.kind === "route" ? `Opens the ${name}` : p.current ? `Changes ${name}` : `Adds ${name}, or turns it back on`;
-  const detail = p.current && p.params && diff.length ? diff.join("; ") : paramsWords(p.params);
+  const verb = p.anomaly ? `Unusual ${c.kind} change` : c.kind === "route" ? `Opens the ${name}` : p.current ? `Changes ${name}` : `Adds ${name}, or turns it back on`;
+  const detail = p.anomaly && !p.params ? `raw parameters ${c.params}` : p.current && p.params && diff.length ? diff.join("; ") : paramsWords(p.params);
   return `<article class="rg-pend" aria-label="${esc(`${verb}, ${left.text.toLowerCase()}`)}">
     <p class="rg-when${left.ready ? " ready" : ""}">${esc(left.text)}</p>
     <h4>${esc(verb)}</h4>
+    ${p.anomaly ? `<p class="rg-anom"><b>Anomalous.</b> The contract would not have accepted this change: ${esc(p.anomaly)}. Treat it as hostile and cancel it.</p>` : ""}
     <dl class="rg-kv">
       <div><dt>What it sets</dt><dd>${esc(detail)}</dd></div>
       <div><dt>Queued by</dt><dd>the admin Safe <span class="rg-addr">${esc(shortAddr(r.admin))}</span>${p.queuedAt ? `, ${esc(utc(p.queuedAt))}` : ""}</dd></div>
@@ -139,8 +140,14 @@ function chainHtml(r: ChainReading, now: number, chainParam: ChainChoice): strin
   const where = `<span class="rg-addr">${esc(shortAddr(r.address))}</span>`;
   const link = `<a href="${esc(r.chain.explorerAddress + r.address)}">${esc(r.chain.explorerName)}</a>`;
   if (r.state === "error") {
+    const lead =
+      r.kind === "disagree"
+        ? "The RPCs disagree about this registry"
+        : r.kind === "inconsistent"
+          ? "The registry's answer does not add up"
+          : "The registry could not be read just now";
     return `<section class="sec rg" aria-label="${esc(r.chain.name)}">${head}<span class="soft">${where} · ${link}</span></div>
-      <p class="rg-empty">The registry could not be read just now (${esc(r.why)}). Nothing is shown rather than a partial list.</p>
+      <p class="rg-empty${r.kind === "rpc" ? "" : " rg-bad"}">${esc(lead)} (${esc(r.why)}). Nothing is shown rather than a list that may be wrong.</p>
       <form method="get" action="/ops/money/registry"><input type="hidden" name="chain" value="${esc(chainParam)}" /><button type="submit">Retry</button></form></section>`;
   }
   const pending = r.pending.length
@@ -152,6 +159,7 @@ function chainHtml(r: ChainReading, now: number, chainParam: ChainChoice): strin
     : `<p class="soft">Nothing is waiting.</p>`;
   return `<section class="sec rg" aria-label="${esc(r.chain.name)}">${head}<span class="soft">${where} · ${link} ${copyButton(r.address, "Copy address")}</span></div>
     <p class="soft rg-facts">Admin ${esc(shortAddr(r.admin))} (the team Safe) · guardian ${esc(shortAddr(r.guardian))} · every addition waits ${esc(fmtSeconds(r.delaySeconds))}; removals and tightening take effect at once.</p>
+    <p class="soft rg-facts">Read at block ${esc(String(r.source.block))} (${esc(shortAddr(r.source.hash))}), the same answer from ${esc(r.source.hosts.join(" and "))}.</p>
     <h3 class="rg-h">Waiting to take effect${r.pending.length ? ` (${r.pending.length})` : ""}</h3>
     ${pending}
     <h3 class="rg-h">In force</h3>
