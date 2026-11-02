@@ -3,14 +3,15 @@
  * and routes, every change still waiting (from the `Queued` events, confirmed by `etaOf`), and the last twenty
  * executed or cancelled. This panel is how the team spots a hostile queued change during the timelock, so it never
  * hides or misstates one:
- *  - Two distinct RPC hosts must answer the same, byte for byte, at one pinned block (hash included); every host,
- *    configured or public, proved its chain id first. One host's word is never enough. No agreement: error, no list.
+ *  - Only the configured RPCs are read (no public pool): one, or two that must answer the same, byte for byte, at one
+ *    pinned block (hash included), each having proved its chain id first. A block older than the chain's limit is an
+ *    error. No agreement, no RPC, a failed read: error, no list. The guardian watcher (#293) alerts independently.
  *  - Every log must come from the registry; every change id is recomputed from kind, key, params and nonce, as
  *    MamoruRegistry.sol derives it, before any calldata is built; a mismatch is an error, not a display.
  *  - A read that fails (etaOf, the entry a change replaces, a block time) fails the whole reading. Nothing is
  *    filled in with a guess; nothing "unknown" is ever cached.
  *  - A queued change the contract could not have accepted is shown as anomalous, never dropped.
- * Plain JSON-RPC. No URL is ever logged or rendered: configured hosts are named "configured RPC", public ones by host.
+ * Plain JSON-RPC. Only the host of a configured URL is ever rendered, never its path or query.
  */
 
 import { decodeFunctionResult, encodeFunctionData } from "viem";
@@ -33,17 +34,15 @@ import {
   type RawLog,
   registryAbi,
 } from "./registry-model";
-import { ownRpcs } from "./rpc-pool";
 
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
 
 const HISTORY = 20;
 const REQUEST_MS = 4_000;
 const BUDGET_MS = 25_000;
-const MAX_CHUNKS = 60;
-/** Hosts asked for their head, and hosts a read may try before giving up on agreement. */
-const MAX_HEADS = 6;
-const MAX_READERS = 3;
+/** At most two configured RPCs are used; with two, they must agree, and their heads may differ by this many blocks. */
+const MAX_HOSTS = 2;
+const MAX_HEAD_GAP = 10;
 
 export interface PoolView {
   address: string;
@@ -81,11 +80,11 @@ export interface Source {
   /** The block every answer was pinned to. */
   block: number;
   hash: string;
-  /** "configured RPC" or a public host, for each of the hosts that agreed. */
+  /** The host (never the path) of each configured RPC that answered, and agreed. */
   hosts: string[];
 }
 
-export type ReadFailure = "rpc" | "disagree" | "inconsistent";
+export type ReadFailure = "rpc" | "disagree" | "inconsistent" | "stale";
 export type ChainReading =
   | { state: "unset"; chain: RegistryChain["chain"] }
   | { state: "error"; chain: RegistryChain["chain"]; address: string; kind: ReadFailure; why: string }
@@ -167,6 +166,10 @@ class Host {
   }
 }
 
+/** JSON with keys sorted at every level: two equal states always compare equal, whatever order the answers came in. */
+const canon = (v: unknown): string =>
+  JSON.stringify(v, (_k, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x));
+
 const hex = (n: number) => `0x${n.toString(16)}`;
 
 /** Everything the page needs, read from one host at one block. Throws on any failed read. */
@@ -188,9 +191,7 @@ async function readAt(host: Host, block: number, cfg: RegistryChain & { address:
   const head = await header(block);
 
   const raw: unknown[] = [];
-  let chunks = 0;
   for (let from = cfg.fromBlock; from <= block; from += cfg.logChunk) {
-    if (++chunks > MAX_CHUNKS) inconsistent("the event scan is too long: set a later start block");
     const to = Math.min(block, from + cfg.logChunk - 1);
     const got = await host.call("eth_getLogs", [{ address, topics: [[...EVENT_TOPICS]], fromBlock: hex(from), toBlock: hex(to) }]);
     if (!Array.isArray(got)) throw new Error("logs are not a list");
@@ -324,13 +325,18 @@ const hostOf = (url: string): string => {
 };
 
 /**
- * Reads one chain. `urls` are tried in order (the configured ones, `secret`, first, then public ones). Never throws.
+ * Reads one chain from its configured RPCs (`urls`): one or two, two must agree. Never throws. `nowSec` is the clock
+ * the staleness check uses.
  */
-export async function readRegistry(cfg: RegistryChain, urls: readonly string[], secret: string | undefined, fetchFn: Fetch = fetch): Promise<ChainReading> {
+export async function readRegistry(
+  cfg: RegistryChain,
+  urls: readonly string[],
+  fetchFn: Fetch = fetch,
+  nowSec: number = Math.floor(Date.now() / 1000),
+): Promise<ChainReading> {
   const { chain } = cfg;
   if (!cfg.address || !isAddress(cfg.address)) return { state: "unset", chain };
   const c = { ...cfg, address: cfg.address };
-  const own = new Set(ownRpcs(secret));
   const deadline = Date.now() + BUDGET_MS;
   const fail = (kind: ReadFailure, why: string): ChainReading => ({ state: "error", chain, address: c.address, kind, why });
 
@@ -341,50 +347,43 @@ export async function readRegistry(cfg: RegistryChain, urls: readonly string[], 
     const key = hostOf(url);
     if (seen.has(key)) continue;
     seen.add(key);
-    hosts.push(new Host(url, own.has(url) ? "configured RPC" : key, chain.chainId, fetchFn, deadline));
-    if (hosts.length >= MAX_HEADS) break;
+    hosts.push(new Host(url, key, chain.chainId, fetchFn, deadline));
+    if (hosts.length >= MAX_HOSTS) break;
   }
+  if (hosts.length === 0) return fail("rpc", "no RPC is configured for this chain");
 
-  // Heads: who is alive on this chain, and where. The pinned block is the second highest head, so two hosts have it.
-  const heads = (
-    await Promise.all(
+  // Every configured host must answer with a head, and with two they must be within a few blocks of each other.
+  let heads: number[];
+  try {
+    heads = await Promise.all(
       hosts.map(async (h) => {
-        try {
-          const b = (await h.call("eth_getBlockByNumber", ["latest", false])) as { number?: string } | null;
-          return b?.number ? { h, n: Number(BigInt(b.number)) } : null;
-        } catch {
-          return null;
-        }
+        const b = (await h.call("eth_getBlockByNumber", ["latest", false])) as { number?: string } | null;
+        if (!b?.number) throw new Error("no block");
+        return Number(BigInt(b.number));
       }),
-    )
-  ).filter((x): x is { h: Host; n: number } => x !== null);
-  if (heads.length < 2) return fail("rpc", "fewer than two RPCs answered on this chain");
-  const block = [...heads].sort((a, b) => b.n - a.n)[1]!.n;
-  const readers = heads.filter((x) => x.n >= block).slice(0, MAX_READERS);
-
-  const answers: { id: string; name: string; json: string; snap: Snap }[] = [];
-  let bad: Inconsistent | null = null;
-  for (const { h } of readers) {
-    try {
-      const snap = await readAt(h, block, c);
-      answers.push({ id: hostOf(h.url), name: h.name, json: JSON.stringify(snap), snap });
-    } catch (e) {
-      if (e instanceof Inconsistent) bad = e;
-      continue;
-    }
-    // Two different hosts with the same answer: done.
-    for (let i = 0; i < answers.length; i++) {
-      const j = answers.findIndex((x, k) => k > i && x.json === answers[i]!.json && x.id !== answers[i]!.id);
-      if (j > -1) {
-        try {
-          return assemble(answers[i]!.snap, c, [answers[i]!.name, answers[j]!.name]);
-        } catch {
-          return fail("inconsistent", "the registry's answer could not be put together");
-        }
-      }
-    }
+    );
+  } catch {
+    return fail("rpc", hosts.length === 2 ? "a configured RPC did not answer" : "the configured RPC did not answer");
   }
-  if (bad) return fail("inconsistent", bad.message);
-  if (answers.length >= 2) return fail("disagree", "the RPCs gave different answers for the same block");
-  return fail("rpc", "fewer than two RPCs answered the read");
+  if (Math.max(...heads) - Math.min(...heads) > MAX_HEAD_GAP) return fail("stale", `the two RPCs are more than ${MAX_HEAD_GAP} blocks apart`);
+  const block = Math.min(...heads);
+
+  const snaps: { host: Host; snap: Snap }[] = [];
+  let bad: Inconsistent | null = null;
+  const settled = await Promise.allSettled(hosts.map((h) => readAt(h, block, c)));
+  settled.forEach((r, i) => {
+    if (r.status === "fulfilled") snaps.push({ host: hosts[i]!, snap: r.value });
+    else if (r.reason instanceof Inconsistent) bad = r.reason;
+  });
+  if (bad) return fail("inconsistent", (bad as Inconsistent).message);
+  if (snaps.length !== hosts.length) return fail("rpc", "a configured RPC could not complete the read");
+  const first = canon(snaps[0]!.snap);
+  if (snaps.some((x) => canon(x.snap) !== first)) return fail("disagree", "the two RPCs gave different answers for the same block");
+  const age = nowSec - snaps[0]!.snap.time;
+  if (age > cfg.maxAgeSeconds) return fail("stale", `the latest block is ${age} s old, over the ${cfg.maxAgeSeconds} s limit`);
+  try {
+    return assemble(snaps[0]!.snap, c, snaps.map((x) => x.host.name));
+  } catch {
+    return fail("inconsistent", "the registry's answer could not be put together");
+  }
 }

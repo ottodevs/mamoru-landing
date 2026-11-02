@@ -145,7 +145,9 @@ function chainHtml(r: ChainReading, now: number, chainParam: ChainChoice): strin
         ? "The RPCs disagree about this registry"
         : r.kind === "inconsistent"
           ? "The registry's answer does not add up"
-          : "The registry could not be read just now";
+          : r.kind === "stale"
+            ? "The chain data is not current"
+            : "The registry could not be read just now";
     return `<section class="sec rg" aria-label="${esc(r.chain.name)}">${head}<span class="soft">${where} · ${link}</span></div>
       <p class="rg-empty${r.kind === "rpc" ? "" : " rg-bad"}">${esc(lead)} (${esc(r.why)}). Nothing is shown rather than a list that may be wrong.</p>
       <form method="get" action="/ops/money/registry"><input type="hidden" name="chain" value="${esc(chainParam)}" /><button type="submit">Retry</button></form></section>`;
@@ -159,7 +161,8 @@ function chainHtml(r: ChainReading, now: number, chainParam: ChainChoice): strin
     : `<p class="soft">Nothing is waiting.</p>`;
   return `<section class="sec rg" aria-label="${esc(r.chain.name)}">${head}<span class="soft">${where} · ${link} ${copyButton(r.address, "Copy address")}</span></div>
     <p class="soft rg-facts">Admin ${esc(shortAddr(r.admin))} (the team Safe) · guardian ${esc(shortAddr(r.guardian))} · every addition waits ${esc(fmtSeconds(r.delaySeconds))}; removals and tightening take effect at once.</p>
-    <p class="soft rg-facts">Read at block ${esc(String(r.source.block))} (${esc(shortAddr(r.source.hash))}), the same answer from ${esc(r.source.hosts.join(" and "))}.</p>
+    <p class="soft rg-facts">Read at block ${esc(String(r.source.block))} (${esc(shortAddr(r.source.hash))}), ${r.source.hosts.length > 1 ? "the same answer from" : "from"} ${esc(r.source.hosts.join(" and "))}.</p>
+    <p class="soft rg-facts">Independent alerts: the guardian watcher posts every queued change to ops-mamoru.</p>
     <h3 class="rg-h">Waiting to take effect${r.pending.length ? ` (${r.pending.length})` : ""}</h3>
     ${pending}
     <h3 class="rg-h">In force</h3>
