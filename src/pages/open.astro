@@ -430,7 +430,9 @@ import { APP_HREF, OPEN_COPY as copy } from "../open-copy";
     box-sizing: border-box;
   }
   /* The FAQs are the last band: the footer starts closer, without a rule of its own. */
+  /* Right under DeFi yield: that band's bottom padding is the air between them, not twice that. */
   #questions {
+    padding-top: 0;
     padding-bottom: clamp(2rem, 4vw, 3rem);
   }
   .wrap {
