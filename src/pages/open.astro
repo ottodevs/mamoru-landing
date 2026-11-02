@@ -54,7 +54,7 @@ import { APP_HREF, OPEN_COPY as copy } from "../open-copy";
 
     <section class="band" id="questions" aria-labelledby="questions-title">
       <div class="wrap">
-        <h2 id="questions-title">{copy.questions.heading}</h2>
+        <h2 class="label" id="questions-title">{copy.questions.heading}</h2>
         <div class="qa-list">
           {copy.questions.items.map((item) => (
             <details class="qa">
@@ -443,6 +443,15 @@ import { APP_HREF, OPEN_COPY as copy } from "../open-copy";
     font-weight: 400;
     letter-spacing: 0.01em;
     line-height: 1.15;
+  }
+  /* A section label, as the flow's eyebrows (Plex Mono, emerald): FAQs names the list, it is not a headline. */
+  h2.label {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    letter-spacing: 0.24em;
+    line-height: 1.4;
+    text-transform: uppercase;
+    color: var(--emerald);
   }
   .name {
     margin: 0;
