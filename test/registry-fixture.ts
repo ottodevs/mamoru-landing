@@ -95,15 +95,15 @@ export function standardFixture(now: number): Fixture {
   };
 }
 
-export const fixtureChain = (over: Partial<RegistryChain> = {}): RegistryChain => ({ chain: BASE, address: REGISTRY, fromBlock: 0, logChunk: 5_000_000, ...over });
-export const monadChain = (over: Partial<RegistryChain> = {}): RegistryChain => ({ chain: MONAD, address: null, fromBlock: 0, logChunk: 100_000, ...over });
+export const fixtureChain = (over: Partial<RegistryChain> = {}): RegistryChain => ({ chain: BASE, address: REGISTRY, fromBlock: 0, logChunk: 5_000_000, maxAgeSeconds: 120, ...over });
+export const monadChain = (over: Partial<RegistryChain> = {}): RegistryChain => ({ chain: MONAD, address: null, fromBlock: 0, logChunk: 100_000, maxAgeSeconds: 60, ...over });
 
 export interface Calls {
   methods: string[];
   logRanges: [number, number][];
 }
 
-export function fixtureFetch(f: Fixture, calls: Calls = { methods: [], logRanges: [] }, opts: { chainIdOf?: (url: string) => number; failLogs?: boolean; logAddress?: string; tamper?: (url: string, method: string, params: any[], result: unknown) => unknown; failCalls?: string[] } = {}) {
+export function fixtureFetch(f: Fixture, calls: Calls = { methods: [], logRanges: [] }, opts: { chainIdOf?: (url: string) => number; failLogs?: boolean; logAddress?: string; tamper?: (url: string, method: string, params: any[], result: unknown) => unknown; failCalls?: string[]; delay?: (url: string, fn: string, args: unknown[]) => number; headOf?: (url: string) => number } = {}) {
   const fn = async (url: string, init?: RequestInit): Promise<Response> => {
     const body = JSON.parse(String(init?.body)) as { id: number; method: string; params: any[] };
     calls.methods.push(body.method);
@@ -115,7 +115,7 @@ export function fixtureFetch(f: Fixture, calls: Calls = { methods: [], logRanges
       case "eth_blockNumber":
         return ok(`0x${HEAD.toString(16)}`);
       case "eth_getBlockByNumber": {
-        const n = body.params[0] === "latest" ? HEAD : Number(BigInt(body.params[0]));
+        const n = body.params[0] === "latest" ? (opts.headOf?.(url) ?? HEAD) : Number(BigInt(body.params[0]));
         return ok({ number: `0x${n.toString(16)}`, hash: fake(n + 7), timestamp: `0x${timeOf(n).toString(16)}` });
       }
       case "eth_getLogs": {
@@ -142,6 +142,8 @@ export function fixtureFetch(f: Fixture, calls: Calls = { methods: [], logRanges
         const data = body.params[0].data as Hex;
         const { functionName, args } = decodeFunctionData({ abi: registryAbi, data }) as { functionName: any; args: any[] | undefined };
         if (opts.failCalls?.includes(functionName)) return new Response("nope", { status: 500 });
+        const wait = opts.delay?.(url, functionName, args ?? []) ?? 0;
+        if (wait) await new Promise((r) => setTimeout(r, wait));
         const enc = (result: unknown) => ok(encodeFunctionResult({ abi: registryAbi, functionName, result } as any));
         switch (functionName) {
           case "ADMIN":

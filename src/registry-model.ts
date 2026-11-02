@@ -228,15 +228,39 @@ export function changeId(q: Pick<QueuedChange, "kind" | "key" | "params" | "nonc
   return keccak256(encodeAbiParameters([{ type: "uint8" }, { type: "bytes32" }, { type: "bytes" }, { type: "uint256" }], [KINDS.indexOf(q.kind), q.key as `0x${string}`, q.params, q.nonce]));
 }
 
+/** MamoruRegistry's hard bounds (the same constants as the contract, which `_check` enforces at queue and at execute). */
+const B = { MIN_TWAP: 600, MAX_TWAP: 86_400, MIN_SHORT: 60, MIN_RATIO: 4, MIN_BAND: 2, MAX_BAND: 500, MAX_TICK: 887_272, MAX_RATIO_BPS: 10_000, MAX_VAULT_BPS: 5_000 };
+
 /**
- * Why a queued change cannot be one the contract's `queue` would have accepted, or null. `queue` checks the same
- * things (BadEntry), so a change that fails here means this reading and the contract disagree: it is shown as anomalous,
- * with its cancel calldata, never dropped.
+ * Why a queued change cannot be one the contract's `queue` would have accepted, or null. It repeats the contract's
+ * `_check` (BadEntry): key range, exact parameter length, every field bound; and it requires the parameters to be
+ * the canonical encoding of what they decode to, so a non-canonical blob is anomalous too. A change that fails here
+ * means this reading and the contract disagree: it is shown as anomalous, with its cancel calldata, never dropped.
  */
 export function anomalyOf(q: Pick<QueuedChange, "kind" | "key" | "params">): string | null {
+  const key = BigInt(q.key);
+  const params = q.params.toLowerCase();
   if (q.kind === "route") {
-    if (keyDomain(q.key) === null) return "its route domain is outside 32 bits";
-  } else if (keyAddress(q.key) === null) return `its ${q.kind} key is not an address`;
-  if (decodeParams(q.kind, q.params) === null) return "its parameters do not decode";
-  return null;
+    if (key > 0xffffffffn) return "its route domain is outside 32 bits";
+    return params === `0x${"0".repeat(63)}1` ? null : "its parameters are not exactly `true`";
+  }
+  if (key > (1n << 160n) - 1n || key === 0n) return `its ${q.kind} key is not a valid address`;
+  const d = decodeParams(q.kind, q.params);
+  if (d === null) return "its parameters do not decode";
+  if (d.kind === "vault") {
+    if (d.ratioBps === 0 || d.ratioBps > B.MAX_VAULT_BPS) return "its vault share is outside 0 to 50 %";
+    return encodeAbiParameters([{ type: "uint16" }], [d.ratioBps]) === params ? null : "its parameters are not canonical";
+  }
+  if (d.kind !== "pool") return "its parameters do not decode";
+  const v = d.v;
+  if (v.twapWindow < B.MIN_TWAP || v.twapWindow > B.MAX_TWAP) return "its long window is outside 10 min to 24 h";
+  if (v.twapShortWindow < B.MIN_SHORT || v.twapShortWindow * B.MIN_RATIO > v.twapWindow) return "its short window is too short or too long for the long one";
+  if (v.bandTicks < B.MIN_BAND || v.bandTicks > B.MAX_BAND) return "its band is outside 2 to 500 ticks";
+  if (v.anchorBand > B.MAX_BAND || v.anchorTick < -B.MAX_TICK || v.anchorTick > B.MAX_TICK) return "its anchor is out of range";
+  if (v.ratioBps === 0 || v.ratioBps > B.MAX_RATIO_BPS) return "its pool share is outside 0 to 100 %";
+  const again = encodeAbiParameters(
+    [{ type: "uint32" }, { type: "uint32" }, { type: "uint24" }, { type: "int24" }, { type: "uint24" }, { type: "uint16" }],
+    [v.twapWindow, v.twapShortWindow, v.bandTicks, v.anchorTick, v.anchorBand, v.ratioBps],
+  );
+  return again === params ? null : "its parameters are not canonical";
 }
