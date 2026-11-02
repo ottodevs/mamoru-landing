@@ -158,6 +158,7 @@ export const OPEN_COPY = {
     line: "Non-custodial. No token.",
     email: "hi@mamoru.lol",
     x: { handle: "@entermamoru", href: "https://x.com/entermamoru" },
+    licence: "Open source · MIT",
     legal: [
       { label: "Terms", href: "/terms" },
       { label: "Privacy", href: "/privacy" },
