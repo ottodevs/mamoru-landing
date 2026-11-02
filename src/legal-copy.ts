@@ -19,13 +19,14 @@ export const TERMS: LegalDoc = {
   title: "Terms of Use",
   updated: UPDATED,
   summary:
-    "These terms cover your use of mamoru.lol and the Mamoru app. By creating an account or using the app, you agree to them. If you do not agree, do not use Mamoru.",
+    "These terms cover your use of mamoru.lol and the Mamoru app. Mamoru is an open-source project built by its contributors. It is not a company. By creating an account or using the app, you agree to these terms. If you do not agree, do not use Mamoru.",
   sections: [
     {
       heading: "What Mamoru is",
       body: [
         "Mamoru is software. It sets up a smart account that you own, and runs an automated operator that puts the funds in that account to work in on-chain liquidity positions and turns the yield into stablecoins.",
         "Mamoru is not a bank, a broker, an exchange or an investment adviser. It does not take custody of your funds, and nothing on mamoru.lol or in the app is financial, legal or tax advice.",
+        "There is no company behind Mamoru today. It is built and run by a small group of contributors. On these pages, \"we\" means them.",
       ],
     },
     {
@@ -46,7 +47,7 @@ export const TERMS: LegalDoc = {
     {
       heading: "Fees",
       body: [
-        "Mamoru's fee is 10% of the yield harvested from your positions. No yield, no fee.",
+        "Mamoru's fee is 10% of the yield harvested from your positions, never of your deposit. No yield, no fee. Today the fee is counted but not yet taken. Before it is taken, we will say so here and in the app.",
       ],
     },
     {
@@ -82,13 +83,13 @@ export const TERMS: LegalDoc = {
     {
       heading: "Limitation of liability",
       body: [
-        "To the extent the law allows, Mamoru and its contributors are not liable for indirect or consequential losses, lost profits, or losses caused by blockchains, protocols, third-party services, market movements, or the loss of your passkey or devices.",
+        "To the extent the law allows, Mamoru's contributors are not liable for indirect or consequential losses, lost profits, or losses caused by blockchains, protocols, third-party services, market movements, or the loss of your passkey or devices.",
       ],
     },
     {
       heading: "Changes and pauses",
       body: [
-        "Mamoru may change, pause or stop the service, or these terms. We will post changes here with a new date. If the operator stops, your funds stay in your account, and you can still withdraw them with your passkey.",
+        "We may change, pause or stop the service, or change these terms. We will post changes here with a new date. If Mamoru ever forms a company, these terms will say so. If the operator stops, your funds stay in your account, and you can still withdraw them with your passkey.",
       ],
     },
     {
@@ -103,7 +104,7 @@ export const PRIVACY: LegalDoc = {
   title: "Privacy",
   updated: UPDATED,
   summary:
-    "Mamoru keeps as little about you as it can. No ads, no third-party analytics, nothing sold. This page lists what we keep and why.",
+    "Mamoru is an open-source project run by its contributors, not a company. We keep as little about you as we can. No ads, no third-party analytics, nothing sold. This page lists what we keep and why.",
   sections: [
     {
       heading: "What we keep",
@@ -134,7 +135,7 @@ export const PRIVACY: LegalDoc = {
         "Cloudflare hosts mamoru.lol and the app and keeps short-lived request logs.",
         "Blockchain nodes (RPC providers) receive the requests needed to read and send transactions. Circle sees the transfers it handles when funds move between chains.",
         "Price and pool data providers receive no personal data.",
-        "Feedback is shared with the Mamoru team in our internal chat. Emails are sent through Loops.",
+        "Feedback is shared with the contributors in our internal chat. Emails are sent through Loops.",
         "Anything done on a blockchain is public and permanent.",
       ],
     },
@@ -210,6 +211,12 @@ export const RISKS: LegalDoc = {
       heading: "No insurance",
       body: [
         "Funds in Mamoru are not covered by deposit insurance or any guarantee scheme.",
+      ],
+    },
+    {
+      heading: "A small project, no company",
+      body: [
+        "Mamoru is run by a small group of contributors, with no company behind it. Development or the operator can stop. If that happens, your funds stay in your account and you can withdraw them with your passkey.",
       ],
     },
     {
