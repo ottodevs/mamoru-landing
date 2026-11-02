@@ -43,6 +43,7 @@ export function opsRouterLogic() {
     { id: "costs", path: "/ops/money" },
     { id: "mails", path: "/ops/mails" },
     { id: "infra", path: "/ops/money/funding" },
+    { id: "registry", path: "/ops/money/registry" },
     { id: "experiments", path: "/ops/experiments" },
     { id: "settings", path: "/ops/engine/settings" },
     { id: "functions", path: "/ops/engine/functions" },
