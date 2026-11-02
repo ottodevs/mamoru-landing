@@ -69,6 +69,9 @@ const emailHref = `mailto:${copy.footer.email}`;
                   <span class="watch-len">{item.watch.length}</span>
                 </button>
               ) : null}
+              {"link" in item ? (
+                <a class="qa-link" href={item.link.href} target="_blank" rel="noopener noreferrer">{item.link.label}</a>
+              ) : null}
             </details>
           ))}
         </div>
@@ -509,6 +512,23 @@ const emailHref = `mailto:${copy.footer.email}`;
   .qa .body {
     margin-top: 0.7rem;
     padding-bottom: 0.35rem;
+  }
+
+  .qa-link {
+    display: inline-block;
+    margin-top: 0.9rem;
+    font-size: 1.05rem;
+    color: var(--emerald);
+    text-decoration: underline;
+    text-underline-offset: 0.18em;
+    text-decoration-thickness: 1px;
+  }
+  .qa-link:hover {
+    color: var(--ink);
+  }
+  .qa-link:focus-visible {
+    outline: 2px solid var(--emerald);
+    outline-offset: 3px;
   }
 
   .watch {
