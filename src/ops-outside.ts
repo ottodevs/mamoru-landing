@@ -7,7 +7,7 @@
 
 import type { AccountView, InfraSnapshot } from "./infra-snapshot";
 import { fmtInt, fmtUsd } from "./metrics-math";
-import { outsideLine, summarizeOutside } from "./outside-base";
+import { outsideLine, summarizeOutside, readAtNote } from "./outside-base";
 import type { SectionView } from "./ops";
 import { esc } from "./text";
 
@@ -27,7 +27,7 @@ function holding(row: AccountView): string {
   const parts: string[] = [];
   if (o.eth > 0) parts.push(`${fmtEth(o.eth)} ETH`);
   if (o.usdc > 0) parts.push(`${fmtUsd(o.usdc)} USDC`);
-  return `${parts.join(" + ")}${o.usd === null ? "" : ` · ${fmtUsd(o.usd)}`}`;
+  return `${parts.join(" + ")}${o.usd === null ? "" : ` · ${fmtUsd(o.usd)}`}${readAtNote(o.at)}`;
 }
 
 /** The sheet appended to the Accounts view, or "" when there is nothing to say (no accounts reading at all). */
@@ -47,7 +47,7 @@ export function outsideSheet(snapshot: InfraSnapshot | null | undefined): string
     folded ? `<p class="c-foot">${fmtInt(folded)} more ${folded === 1 ? "account holds" : "accounts hold"} ETH or USDC on Ethereum.</p>` : "",
     unreadRows.length ? `<p class="c-foot">Accounts marked "not read" could not be read on Ethereum. None counted as zero.</p>` : "",
   ].join("");
-  return `<section class="c-sheet"><header class="c-sheet-h"><h2>Held on Ethereum</h2><p>${esc(outsideLine(summarizeOutside(a.rows), fmtUsd))}. Not working, and not in any Base figure.</p></header>${table}${notes}</section>`;
+  return `<section class="c-sheet"><header class="c-sheet-h"><h2>Held on Ethereum</h2><p>${esc(outsideLine(summarizeOutside(a.rows), fmtUsd))}. Counted in Value held; it earns nothing until it moves to Base.</p></header>${table}${notes}</section>`;
 }
 
 /** Puts the sheet before the account drawers (templates) of the Accounts view, or at the end of its wrapper. */

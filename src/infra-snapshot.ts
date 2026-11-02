@@ -11,6 +11,7 @@ import {
   type BaseClient,
   type ContractCall,
   buildClient,
+  publicHostsUsed,
   multi,
 } from "./chain-client";
 import {
@@ -47,7 +48,15 @@ import {
 import { type PoolState, priceOfBaseInQuote, sameAddress, valuePosition } from "./uniswap-math";
 import { type AccountRow, type D1Db, fetchChainAccounts, fetchInfraCounts } from "./d1-infra";
 import type { AccountFilter } from "./account-filter";
+import { type MonadHolding, readMonadHoldings } from "./monad-holdings";
 import { type OutsideHolding, readOutsideBase } from "./outside-base";
+
+/** otto/mamoru-astro#40: why the last Ethereum read of the account addresses fell short (hosts only, never URLs). */
+export interface ReadNotes {
+  ethereum?: string[];
+  /** otto/mamoru-astro#42: public hosts that answered Base reads because every configured RPC failed (one host, no cross-check). */
+  base?: string[];
+}
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
@@ -110,6 +119,8 @@ export interface AccountView {
   /** Holdings at the same address on Ethereum Mainnet (otto/mamoru-astro#31). Not part of the working Base
    * value above. Unset = the Ethereum read failed or was not tried ("not read"), never zero. */
   outside?: OutsideHolding;
+  /** Holdings at the same address on Monad (otto/mamoru-astro#39): MON, USDC and position NFTs. Unset = not read. */
+  monad?: MonadHolding;
 }
 
 /** Whether an account belongs in a filtered view (otto/mamoru#130). `env: 'test'` matches is_test regardless
@@ -163,12 +174,16 @@ export interface InfraSnapshot {
   accounts: AccountsView | null;
   /** Balance of each funding target (src/funding.ts), wei as a decimal string; null when that chain did not answer. */
   funding?: { id: string; balanceWei: string | null }[];
+  /** otto/mamoru-astro#40: what went wrong in the last per-address read of other chains, for diagnosis. */
+  readNotes?: ReadNotes;
 }
 
 export interface InfraEnv {
   BASE_RPC_URL?: string;
   /** Optional secret, comma separated. Tried before the public Ethereum RPCs (otto/mamoru-astro#31). */
   ETHEREUM_RPC_URLS?: string;
+  /** Secret, optional, comma separated: tried before the public Monad RPC. */
+  MONAD_RPC_URLS?: string;
   MAMORU_DB?: D1Db;
 }
 
@@ -486,16 +501,35 @@ async function attachOutsideBase(
   env: InfraEnv,
   baseEthUsd: number | null,
   fetchFn: (input: string, init?: RequestInit) => Promise<Response>,
+  notes: string[] = [],
 ): Promise<void> {
   if (!accounts || accounts.rows.length === 0) return;
   try {
     const held = await readOutsideBase(
       accounts.rows.map((r) => r.address),
-      { rpcUrls: env.ETHEREUM_RPC_URLS, baseEthUsd, fetchFn },
+      { rpcUrls: env.ETHEREUM_RPC_URLS, baseEthUsd, fetchFn, onError: (m) => void (notes.length < 12 && notes.push(m)) },
     );
     for (const row of accounts.rows) {
       const o = held.get(row.address.toLowerCase());
       if (o) row.outside = o;
+    }
+  } catch {
+    // Left as "not read".
+  }
+}
+
+/** Same as attachOutsideBase, on Monad: sets `row.monad` on the accounts that answered. Never throws. */
+async function attachMonad(
+  accounts: AccountsView | null,
+  env: InfraEnv,
+  fetchFn: (input: string, init?: RequestInit) => Promise<Response>,
+): Promise<void> {
+  if (!accounts || accounts.rows.length === 0) return;
+  try {
+    const held = await readMonadHoldings(accounts.rows.map((r) => r.address), { rpcUrls: env.MONAD_RPC_URLS, fetchFn });
+    for (const row of accounts.rows) {
+      const m = held.get(row.address.toLowerCase());
+      if (m) row.monad = m;
     }
   } catch {
     // Left as "not read".
@@ -564,7 +598,8 @@ export async function computeInfraSnapshot(
   };
 
   const [accounts, funding] = await Promise.all([buildAccountsView(env, client, prices), fundingOf(relayerBalanceWei)]);
-  await attachOutsideBase(accounts, env, prices.ethUsd, fetchFn);
+  const ethNotes: string[] = [];
+  await Promise.all([attachOutsideBase(accounts, env, prices.ethUsd, fetchFn, ethNotes), attachMonad(accounts, env, fetchFn)]);
 
   // A missing ETH price leaves every USD figure blank; unread accounts leave totals short.
   const parts = new Set<UnreadPart>(accounts?.unreadParts ?? []);
@@ -573,5 +608,33 @@ export async function computeInfraSnapshot(
     ? { unreadAccounts: accounts?.unreadAccounts ?? 0, parts: [...parts] }
     : undefined;
 
-  return { asOf, ...(partial ? { partial } : {}), ethUsd: prices.ethUsd, btcUsd: prices.btcUsd, relayer, cost, accounts, funding };
+  const baseNotes = publicHostsUsed(client).map((h) => `${h}: answered alone (configured RPC failed)`);
+  const readNotes: ReadNotes = { ...(ethNotes.length ? { ethereum: ethNotes } : {}), ...(baseNotes.length ? { base: baseNotes } : {}) };
+  return { asOf, ...(partial ? { partial } : {}), ethUsd: prices.ethUsd, btcUsd: prices.btcUsd, relayer, cost, accounts, funding, ...(Object.keys(readNotes).length ? { readNotes } : {}) };
+}
+
+/**
+ * otto/mamoru-astro#40: an address whose Ethereum or Monad read failed this time keeps the figure of the last reading
+ * that had it, stamped with that reading's time (`at`), so money once seen never drops out of /ops on a failed read.
+ * Only rows still without a figure are filled; a fresh read always wins. Mutates and returns `computed`.
+ */
+export function carryForward(computed: InfraSnapshot, ...previous: (InfraSnapshot | null | undefined)[]): InfraSnapshot {
+  const rows = computed.accounts?.rows;
+  if (!rows?.length) return computed;
+  // Per address, the first earlier reading (in the order given: newest first) that has a figure for it.
+  const eth = new Map<string, OutsideHolding>();
+  const mon = new Map<string, MonadHolding>();
+  for (const p of previous) {
+    for (const r of p?.accounts?.rows ?? []) {
+      const a = r.address.toLowerCase();
+      if (r.outside && !eth.has(a)) eth.set(a, { ...r.outside, at: r.outside.at ?? p!.asOf });
+      if (r.monad && !mon.has(a)) mon.set(a, { ...r.monad, at: r.monad.at ?? p!.asOf });
+    }
+  }
+  for (const r of rows) {
+    const a = r.address.toLowerCase();
+    if (!r.outside && eth.has(a)) r.outside = eth.get(a);
+    if (!r.monad && mon.has(a)) r.monad = mon.get(a);
+  }
+  return computed;
 }

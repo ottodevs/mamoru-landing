@@ -5,6 +5,7 @@
 import { type ConsoleEnv, type ConsoleModel, type AccountYield, type AccountCap, type EngineOp, capNow, money, pct, poolLabel } from "./console-data";
 import { capSourceWords, DEFAULT_CAP_USDC, usdc } from "./account-cap-model";
 import { csrfField, maskEmail, type SectionId, type SectionView } from "./ops";
+import { renderFundsMap } from "./funds-map";
 import { esc } from "./text";
 
 const int = (n: number) => n.toLocaleString("en-US");
@@ -274,14 +275,20 @@ export function pulseSection(m: ConsoleModel, now: Date): SectionView {
 ${capitalChart(m)}
 <p class="c-foot">Capital held per day, every account including test: that daily table has no environment yet. A dip is a withdrawal as often as a price move.</p></section>`;
   const attention = sheet("Needs attention", m.alerts.length ? `${m.alerts.length} open` : null, alertsList(m), "c-attn");
-  const figs = `<div class="c-figs">
+  // otto/mamoru-astro#39: Value held is every Safe balance on every chain; the map below says where each dollar sits.
+  const f = m.funds;
+  const held = f ? `${f.partial ? "≥ " : ""}${money(f.total)}` : "n/a";
+  const heldNote = f ? `${money(f.working)} working · ${money(f.notWorking)} not working · ${money(f.reserve)} Safe gas` : "no on-chain reading yet";
+  const figs = `<div class="c-figs five">
+${fig("Value held, every chain", held, heldNote, f ? `<a class="c-note" href="#funds-map">Where the money is</a>` : "")}
 ${fig("Placed and earning", money(t.lp), `${money(t.idle)} waiting to be placed`)}
 ${fig("Positions in range", `${t.inRange} of ${t.positions}`, t.inRange === t.positions ? "All earning fees" : `${t.positions - t.inRange} paused out of range`)}
 ${fig("Accounts", int(m.lifecycle.total), `${m.lifecycle.earning} earning, ${m.lifecycle.signedUp} signed up only`)}
 ${fig("Projected fee", money(t.fees * 0.1), "10% of the yield, once harvested")}
 </div>`;
+  const funds = f ? `<section class="c-sheet c-funds">${renderFundsMap(f, { inlineStyle: false })}</section>` : "";
   const bottom = `<div class="c-grid two">${sheet("Where the yield comes from", "Uncollected fees by pool, and each pool's fee APR", poolStack(m))}${sheet("Sign-ups per day", `${int(m.lifecycle.total)} accounts so far`, signupChart(m))}</div>`;
-  return view("overview", "Pulse", head("Pulse", "/ops", m) + `<div class="c-grid hero">${hero}${attention}</div>` + figs + bottom + drawers(m, now));
+  return view("overview", "Pulse", head("Pulse", "/ops", m) + `<div class="c-grid hero">${hero}${attention}</div>` + figs + funds + bottom + drawers(m, now));
 }
 
 function leaderboard(m: ConsoleModel): string {
@@ -331,15 +338,18 @@ export function accountsView(m: ConsoleModel, now: Date, opts: AccountsOpts = {}
 <ul class="c-legend"><li><i class="emerald"></i><b>Earning</b><span class="n">${l.earning}</span></li><li><i class="umber"></i><b>Funds waiting</b><span class="n">${l.waiting}</span></li><li><i class="wash"></i><b>Signed up, no deposit</b><span class="n">${l.signedUp}</span></li></ul>`;
   const steps: [string, number][] = [["Signed up", l.total], ["Deposited", l.earning + l.waiting], ["Earning", l.earning]];
   const funnel = `<ul class="c-funnel">${steps.map(([n, c]) => `<li><span>${esc(n)}</span><span class="c-meter"><i style="width:${((c / Math.max(1, l.total)) * 100).toFixed(1)}%"></i></span><span class="n">${c}</span><span class="n dim">${l.total ? pct((c / l.total) * 100, 0) : ""}</span></li>`).join("")}</ul>`;
-  const shown = m.accounts.filter((a) => a.total >= 0.01);
+  // otto/mamoru-astro#39: a Safe counts by everything it holds on every chain, so money outside Base is never hidden.
+  // A floor (some part not read) stays listed too: hiding it would read as "nothing there".
+  const shown = m.accounts.filter((a) => a.held >= 0.01 || a.away.length > 0 || a.floor).sort((x, y) => y.held - x.held);
   const folded = m.accounts.length - shown.length;
   const list = m.accounts.length
     ? `<ul class="c-lb plain">${shown
         .map((a) => {
-          const state = a.lp > 0.01 ? chip("Earning", "good") : a.idle >= 0.2 ? chip("Funds waiting", "warn") : chip("No deposit");
+          const state = a.lp > 0.01 ? chip("Earning", "good") : a.idle >= 0.2 ? chip("Funds waiting", "warn") : a.away.length ? chip("Not working", "warn") : chip("No deposit");
+          const away = a.away.map((w) => chip(w, "warn")).join("");
           const cap = m.caps.byKey.get(a.key.toLowerCase());
           const own = cap?.override?.capUsdc != null ? chip(`Own cap ${cap.override.capUsdc.toLocaleString("en-US")}`, "em") : "";
-          return `<li><button type="button" class="c-lb-row compact" data-account="${esc(a.key)}"><span class="c-mono">${esc(a.key)}</span><span class="c-chips">${state}${authChip(m, cap)}${own}</span><span class="n">${esc(money(a.total))}</span><span class="n wide">${esc(ago(a.readAt, now))}</span></button></li>`;
+          return `<li><button type="button" class="c-lb-row compact" data-account="${esc(a.key)}"><span class="c-mono">${esc(a.key)}</span><span class="c-chips">${state}${away}${authChip(m, cap)}${own}</span><span class="n">${esc(`${a.floor ? "≥ " : ""}${money(a.held)}`)}</span><span class="n wide">${esc(ago(a.readAt, now))}</span></button></li>`;
         })
         .join("")}</ul>${folded ? `<p class="c-foot">${folded} more Safe${folded === 1 ? "" : "s"} with nothing deposited yet.</p>` : ""}`
     : `<p class="c-empty">No account has been read yet.</p>`;
@@ -349,7 +359,7 @@ export function accountsView(m: ConsoleModel, now: Date, opts: AccountsOpts = {}
     head("Accounts", "/ops/accounts", m) +
       (opts.confirm && opts.csrf ? capConfirmSheet(m, opts.confirm, opts.csrf) : "") +
       `<div class="c-grid two">${sheet("Where every account stands", `${int(l.total)} accounts`, stand)}${sheet("From sign-up to earning", "Conversion so far", funnel)}</div>` +
-      `<div class="c-grid hero">${sheet("Sign-ups per day", "Since launch", signupChart(m, 170))}${sheet("Accounts with money in", "Every Safe the ledger reads that holds funds", list)}</div>` +
+      `<div class="c-grid hero">${sheet("Sign-ups per day", "Since launch", signupChart(m, 170))}${sheet("Accounts with money in", "Every Safe that holds funds on any chain: Base, Ethereum, Monad", list)}</div>` +
       ownCapsSheet(m, new Set(m.accounts.map((a) => a.key))) +
       drawers(m, now, opts.csrf),
   );

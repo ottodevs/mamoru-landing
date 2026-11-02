@@ -6,12 +6,15 @@
  *  - working:  USDC idle and LP positions in the account Safes. Their sum is exactly the headline "Value held".
  *  - reserve:  gas ETH sitting in the Safes. Real money, not part of Value held.
  *  - operator: the relayer wallets that pay for gas. Not user money.
- *  - outside:  balances at the account addresses on Ethereum. Not working, never added to Value held.
+ *  - outside:  balances at the account addresses on Ethereum and Monad that earn nothing.
+ *
+ * Value held (otto/mamoru-astro#39) is every user bucket on every chain: working + Safe gas + not working.
+ * Operator relayers are team gas and never in it.
  */
 
 import type { AccountView, InfraSnapshot } from "./infra-snapshot";
 import { fmtInt, fmtUsd } from "./metrics-math";
-import { summarizeOutside } from "./outside-base";
+import { summarizeOutside, readAtNote } from "./outside-base";
 import { esc } from "./text";
 
 export type FundsKind = "working" | "reserve" | "operator" | "outside";
@@ -55,12 +58,14 @@ export interface FundsMap {
 }
 
 export const BASE_ID = 8453;
+/** True for the mainnets the map counts; testnet tokens are never money. */
+export const isMapped = (chainId: number): boolean => chainId === 8453 || chainId === 1 || chainId === 143;
 export const ETHEREUM_ID = 1;
 export const MONAD_ID = 143;
 /** Only these chains enter the map. Testnets (10143, 84532, 11155111) and unknown ids are counted apart, never mapped. */
 const MAPPED = new Set([BASE_ID, ETHEREUM_ID, MONAD_ID]);
 
-export type Row = Pick<AccountView, "chainId" | "usdcIdle" | "lpUsd" | "ethBalance" | "positions" | "outside" | "unread" | "address">;
+export type Row = Pick<AccountView, "chainId" | "usdcIdle" | "lpUsd" | "ethBalance" | "positions" | "outside" | "unread" | "address"> & Partial<Pick<AccountView, "monad">>;
 
 const chainName = (id: number): string => (id === BASE_ID ? "Base" : id === ETHEREUM_ID ? "Ethereum" : id === MONAD_ID ? "Monad" : `Chain ${id}`);
 const canonical = (id: number): number => id;
@@ -85,10 +90,11 @@ function fmtNative(n: number, symbol: string): string {
  * The rows whose Ethereum balance counts as "outside Base, not working", used by the map AND the headline figure
  * so they can never disagree. Safes share one address across chains: a row at an address that also has a chain-1
  * row is already working money on Ethereum, and several rows at one address are one L1 balance, counted once.
- * Only mapped chains (Base, Ethereum, Monad) take part: testnet and unknown-chain rows are left out.
+ * Every row takes part, whatever chain its D1 row names (otto/mamoru-astro#39): the read is per address, so a
+ * testnet row's address still holds real Ethereum money in an "all" view.
  */
 export function outsideRowsOf<T extends Pick<Row, "chainId" | "address" | "outside">>(all: readonly T[]): T[] {
-  const rows = all.filter((r) => MAPPED.has(r.chainId));
+  const rows = all;
   const l1Addresses = new Set(rows.filter((r) => r.chainId === ETHEREUM_ID && r.address).map((r) => r.address.toLowerCase()));
   const outsideRows: T[] = [];
   const seen = new Map<string, number>();
@@ -107,6 +113,28 @@ export function outsideRowsOf<T extends Pick<Row, "chainId" | "address" | "outsi
     } else if (!outsideRows[at].outside && r.outside) outsideRows[at] = r;
   }
   return outsideRows;
+}
+
+/**
+ * One row per address for the Monad read (the same Safe address on every chain is one Monad balance). Every row
+ * takes part, whatever chain its D1 row names: the read is per address, so a testnet row's address still holds real
+ * Monad money in an "all" view.
+ */
+export function monadRowsOf<T extends Pick<Row, "chainId" | "address" | "monad">>(all: readonly T[]): T[] {
+  const byAddress = new Map<string, T>();
+  const loose: T[] = [];
+  for (const r of all) {
+    const a = r.address?.toLowerCase();
+    if (!a) loose.push(r);
+    else if (!byAddress.has(a) || (!byAddress.get(a)?.monad && r.monad)) byAddress.set(a, r);
+  }
+  return [...byAddress.values(), ...loose];
+}
+
+/** "from the 1 Nov 05:00 UTC reading" when some figures were carried from an earlier read (otto/mamoru-astro#40). */
+function carriedNote(ats: (string | undefined)[]): string {
+  const old = ats.filter((x): x is string => Boolean(x)).sort()[0];
+  return old ? `some from an earlier reading${readAtNote(old).replace(" · read", ",")}` : "";
 }
 
 export function buildFundsMap(
@@ -167,7 +195,7 @@ export function buildFundsMap(
   const out = summarizeOutside(outsideRows);
   put(ETHEREUM_ID, {
     id: "outside",
-    label: "Outside Base, not working",
+    label: "At the Safes, not working",
     kind: "outside",
     usd: out.read === 0 ? null : out.usd,
     accounts: out.holders,
@@ -179,9 +207,55 @@ export function buildFundsMap(
             out.usdc > 0 ? `${out.usdc.toFixed(2)} USDC` : "",
             out.usd === null ? "not priced" : "",
             out.unread > 0 ? `${out.unread} not read` : "",
+            carriedNote(outsideRows.map((r) => r.outside?.at)),
           ].filter(Boolean).join(", "),
     atLeast: out.read > 0 && out.unread > 0,
   });
+
+  // Monad: MON, USDC and positions at the account addresses. Positions are working but not priced here.
+  const monadRows = monadRowsOf(allRows);
+  const monadRead = monadRows.filter((r) => r.monad);
+  const monadUnread = monadRows.length - monadRead.length;
+  const mon = monadRead.reduce((s, r) => s + (r.monad?.mon ?? 0), 0);
+  const monUsdc = monadRead.reduce((s, r) => s + (r.monad?.usdc ?? 0), 0);
+  const monPositions = monadRead.reduce((s, r) => s + (r.monad?.positions ?? 0), 0);
+  // MON and USDC count for every read Safe, positions or not; an unpriced Safe leaves the known part standing as a floor.
+  const unpricedMon = monadRead.filter((r) => r.monad?.monUnpriced === true);
+  const pricedUsd = monadRead.reduce((s, r) => s + (r.monad?.usd ?? 0), 0);
+  // Known USDC always counts; only when nothing at all is priced is the bucket "not priced".
+  const looseUsd = unpricedMon.length > 0 && pricedUsd === 0 ? null : pricedUsd;
+  if (monadRows.length > 0) {
+    put(MONAD_ID, {
+      id: "monad-held",
+      label: "MON and USDC at the Safes",
+      kind: "outside",
+      usd: monadRead.length === 0 ? null : looseUsd,
+      accounts: monadRead.filter((r) => (r.monad?.mon ?? 0) > 0 || (r.monad?.usdc ?? 0) > 0).length,
+      note:
+        monadRead.length === 0
+          ? "not read"
+          : [
+              mon > 0 ? fmtNative(mon, "MON") : "",
+              monUsdc > 0 ? `${monUsdc.toFixed(2)} USDC` : "",
+              unpricedMon.length > 0 ? "MON not priced" : "",
+              monadUnread > 0 ? `${monadUnread} not read` : "",
+              carriedNote(monadRead.map((r) => r.monad?.at)),
+            ].filter(Boolean).join(", "),
+      atLeast: monadRead.length > 0 && (monadUnread > 0 || (unpricedMon.length > 0 && looseUsd !== null)),
+    });
+  }
+  if (monPositions > 0) {
+    const holders = monadRead.filter((r) => (r.monad?.positions ?? 0) > 0);
+    put(MONAD_ID, {
+      id: "monad-positions",
+      label: "Positions on Monad",
+      kind: "working",
+      usd: null,
+      accounts: holders.length,
+      note: `${fmtInt(monPositions)} ${monPositions === 1 ? "position" : "positions"}, not priced yet`,
+      atLeast: false,
+    });
+  }
 
   // Operator relayers.
   const baseRelayer = snapshot.relayer ? snapshot.relayer.ethBalance : wei(snapshot, "relayer-base");
@@ -298,6 +372,8 @@ export const FUNDS_STYLE = `
 .fm .fm-note { color: var(--muted); font-size: 0.85rem; margin: 0.9rem 0 0; }
 `;
 
+export const SR_STYLE = ".sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}";
+
 /** A figure that is not known is never printed as $0: unread says "not read", unpriced says "not priced", a floor says "≥". */
 const usdCell = (b: FundsBucket): string => {
   const st = stateOf(b);
@@ -368,7 +444,7 @@ function chainBlock(c: FundsChain, f: FundsMap, scale: number): string {
 }
 
 /** The "Where the money is" section. Working and not-working are shown apart; only the last line adds them. */
-export function renderFundsMap(f: FundsMap): string {
+export function renderFundsMap(f: FundsMap, opts: { inlineStyle?: boolean } = {}): string {
   const sum = (cls: string, label: string, a: Agg | number, sub = "") => {
     const v = typeof a === "number" ? { text: fmtUsd(a), sub } : a;
     return `<div class="${cls}"><dt>${esc(label)}</dt><dd>${esc(v.text)}</dd>${v.sub ? `<small>${esc(v.sub)}</small>` : ""}</div>`;
@@ -377,14 +453,14 @@ export function renderFundsMap(f: FundsMap): string {
   const scale = f.partial ? Math.max(0, ...f.chains.map((c) => c.usd)) : f.total;
   const rest = f.total;
   return `<section class="fm" id="${FUNDS_ANCHOR}" aria-labelledby="fm-h">
-    <style>${FUNDS_STYLE}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}</style>
+    ${opts.inlineStyle === false ? "" : `<style>${FUNDS_STYLE}${SR_STYLE}</style>`}
     <div class="fm-head"><h2 id="fm-h">Where the money is</h2><a href="/ops/accounts">Accounts</a></div>
     <dl class="fm-sum">
-      ${sum("fm-w", "Working (Value held)", aggregate(f, ["working"], "Positions and idle USDC"))}
-      ${sum("fm-r", "Gas in the Safes", aggregate(f, ["reserve"], "Not part of Value held"))}
+      ${sum("fm-t", "Value held, every chain", f.partial ? { text: `≥ ${fmtUsd(rest)}`, sub: "Every Safe balance on every chain. A floor: some figures are unread or unpriced" } : { text: fmtUsd(rest), sub: "Every Safe balance on every chain: working + Safe gas + not working" })}
+      ${sum("fm-w", "Working", aggregate(f, ["working"], "Positions and idle USDC"))}
+      ${sum("fm-r", "Gas in the Safes", aggregate(f, ["reserve"], "In Value held"))}
+      ${sum("fm-x", "Not working", aggregate(f, ["outside"], "In Value held, earns nothing"))}
       ${sum("fm-o", "Operator relayers (team gas)", aggregate(f, ["operator"], "Team money, not in any total"))}
-      ${sum("fm-x", "Not working", aggregate(f, ["outside"], "Outside Base, never in Value held"))}
-      ${sum("fm-t", "Total including not working", f.partial ? { text: `≥ ${fmtUsd(rest)}`, sub: "User money only. A floor: some figures are unread or unpriced" } : { text: fmtUsd(rest), sub: "User money only: working + Safe gas + not working" })}
     </dl>
     ${f.chains.map((c) => chainBlock(c, f, scale)).join("")}
     <p class="fm-note">${f.partial ? "Shares are not shown while some figures are unread or unpriced; bars show known amounts only." : "Shares are of user money (working, Safe gas, not working)."} Operator relayers are team gas and sit outside every total and share. Dashed bars are money outside Base that earns nothing.</p>

@@ -395,16 +395,49 @@ export function labLogic() {
 
   /** AL-20: text/caveat prose references a claim as `{{c0}}` and a verdict as `{{v0}}` -- the screen already
    * shows that figure as a chip or sentence above, so the token is dropped rather than resolved a second time. */
+  /** `{{cN}}` becomes the n-th claim's value, formatted like its chip: prose such as "mar2025: {{c0}}" otherwise
+   * reads "mar2025: ." once the token is stripped. The value is the server-verified claim's own, so this adds no
+   * unverified figure. `{{vN}}` is still dropped -- the verdict sentence is shown above, in full. */
+  var resolveRefTokens = function (md: string, claims: { value: number; metric: string }[]): string {
+    // The model often writes the unit after the token ("{{c0}} USDC"). It is dropped only when the formatted
+    // value already ends with that same unit; otherwise it is kept as written.
+    // Only USDC and % (the money and percentage metrics the agent cites); a token is matched exactly as
+    // stripRefTokens matches it (lowercase c, no case folding).
+    var withClaims = md.replace(/\{\{c(\d+)\}\}(?:([ \t]*)(USDC|%)(?![\p{L}\p{N}]))?/gu, function (whole: string, n: string, sp?: string, unit?: string) {
+      var c = claims[Number(n)];
+      if (!c) return "";
+      var v = fmtClaimValue(c.value, c.metric);
+      if (!unit) return v;
+      return v.endsWith(unit) ? v : v + (sp || "") + unit;
+    });
+    return stripRefTokens(withClaims);
+  };
+
   var stripRefTokens = function (md: string): string {
     return md.replace(/\{\{[cv]\d+\}\}/g, "").replace(/\s{2,}/g, " ").trim();
   };
 
-  type RunLite = VerdictRunLike & { resultHash: string; windowId: string };
+  /** The thread API serves `LabRunSummary`, whose window is `window.id` -- there is no top-level `windowId` on
+   * a served run (the chart button read one and always got undefined); `windowId` stays for callers that have it. */
+  type RunLite = VerdictRunLike & { resultHash: string; windowId?: string; window?: { id: string } };
+  var runWindowId = function (run?: RunLite): string {
+    if (!run) return "";
+    return run.windowId || (run.window && run.window.id) || "";
+  };
+
+  /** Which run a figure belongs to (window id · variant): without it a chip or verdict sentence reads as a bare
+   * number, and a sweep's fourteen figures, or a partial answer whose prose was dropped, can't be told apart. */
+  var runContextText = function (run?: RunLite): string {
+    if (!run) return "";
+    var w = runWindowId(run);
+    return w ? w + " · " + run.variantLabel : run.variantLabel;
+  };
 
   var claimChipHtml = function (b: { runId: string; value: number; metric: string }, run?: RunLite): string {
-    var title = run ? "Resultado: " + run.variantLabel : "";
+    var ctx = runContextText(run);
     return (
-      '<span class="lab-ask-chip" data-run-id="' + escHtml(b.runId) + '"' + (title ? ' title="' + escHtml(title) + '"' : "") + ">" +
+      '<span class="lab-ask-chip" data-run-id="' + escHtml(b.runId) + '">' +
+      (ctx ? '<i class="lab-ask-ctx">' + escHtml(ctx) + "</i>" : "") +
       "<b>" + escHtml(fmtClaimValue(b.value, b.metric)) + "</b><small>" + escHtml(metricLabel(b.metric)) + "</small></span>"
     );
   };
@@ -416,10 +449,15 @@ export function labLogic() {
     return verdictSentence(run, b.against, other);
   };
 
+  var verdictHtml = function (b: { runId: string; against: string }, runsByHash: Record<string, RunLite>): string {
+    var ctx = runContextText(runsByHash[b.runId]);
+    return '<p class="lab-verdict">' + (ctx ? '<i class="lab-ask-ctx">' + escHtml(ctx) + "</i>" : "") + escHtml(verdictText(b, runsByHash)) + "</p>";
+  };
+
   var chartButtonHtml = function (b: { kind: string; runIds: string[] }, runsByHash: Record<string, RunLite>): string {
     var first = b.runIds[0];
     var run = first ? runsByHash[first] : undefined;
-    var windowId = run ? run.windowId : "";
+    var windowId = runWindowId(run);
     var compare = b.runIds.length > 1 || b.kind === "decomposition" ? "1" : "0";
     return (
       '<button type="button" class="lab-ask-openbench" data-run-id="' + escHtml(first || "") + '" data-window-id="' + escHtml(windowId) + '" data-compare="' + compare + '">' +
@@ -438,13 +476,14 @@ export function labLogic() {
   var answerBlocksHtml = function (blocks: AnswerBlock[], runsByHash: Record<string, RunLite>, partial: boolean): string {
     if (!blocks || !blocks.length) return "";
     var headline = answerHeadlineBlock(blocks);
+    var claimBlocks = blocks.filter(function (x) { return x.type === "claim"; }) as { value: number; metric: string }[];
     var out = "";
     if (headline) {
       // `.lab-verdict`/`.lab-prose` are the PoC-1 prototype's own class names (AL-53: "the visual reference
       // for the implementing session"), ported into lab-style.ts at the B-07 shell pass and left unused until
       // this ticket -- reused here rather than inventing a parallel set of class names for the same thing.
       out += headline.type === "verdict"
-        ? '<p class="lab-verdict">' + escHtml(verdictText(headline, runsByHash)) + "</p>"
+        ? verdictHtml(headline, runsByHash)
         : '<div class="lab-verdict lab-verdict-claim">' + claimChipHtml(headline, runsByHash[(headline as { runId: string }).runId]) + "</div>";
     }
     if (partial) out += '<p class="lab-ask-partial">Respuesta parcial: solo se muestra lo verificado.</p>';
@@ -456,9 +495,12 @@ export function labLogic() {
       var b = blocks[i];
       if (b === headline) continue;
       if (b.type === "claim") chips += claimChipHtml(b, runsByHash[b.runId]);
-      else if (b.type === "verdict") sentences += '<p class="lab-verdict">' + escHtml(verdictText(b, runsByHash)) + "</p>";
+      else if (b.type === "verdict") sentences += verdictHtml(b, runsByHash);
       else if (b.type === "chart") charts += chartButtonHtml(b, runsByHash);
-      else prose += "<p>" + escHtml(stripRefTokens(b.md)) + "</p>";
+      // A partial answer (AL-22) may have dropped claims, which would shift {{cN}} onto the wrong value: there
+      // the tokens are only stripped. (The server's fallback never keeps prose next to kept claims, so this is
+      // belt-and-braces; ok/repaired answers passed the verifier whole, so every index resolves as written.)
+      else prose += "<p>" + escHtml(partial ? stripRefTokens(b.md) : resolveRefTokens(b.md, claimBlocks)) + "</p>";
     }
     if (chips) out += '<div class="lab-ask-chips">' + chips + "</div>";
     out += sentences + charts;
@@ -537,6 +579,7 @@ export function labLogic() {
     isVerdictBaseline: isVerdictBaseline,
     answerHeadlineBlock: answerHeadlineBlock,
     stripRefTokens: stripRefTokens,
+    resolveRefTokens: resolveRefTokens,
     answerBlocksHtml: answerBlocksHtml,
     answerFooterText: answerFooterText,
     askStatusHeadline: askStatusHeadline,

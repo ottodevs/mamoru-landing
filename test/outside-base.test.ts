@@ -9,6 +9,7 @@ import { outsideSheet } from "../src/ops-outside";
 import { renderInfra } from "../src/ops-infra";
 import {
   ETHEREUM_MULTICALL3,
+  ETHEREUM_PUBLIC_RPCS,
   ETHEREUM_USDC,
   ethereumRpcList,
   outsideLine,
@@ -60,6 +61,7 @@ describe("readOutsideBase", () => {
     const m = await readOutsideBase([USER, EMPTY], {
       baseEthUsd: 2300,
       fetchFn: ethFetch({ [USER.toLowerCase()]: [55378350000000000n, 1_500_000n], [EMPTY]: [0n, 0n] }, { seen }),
+      rotation: 0,
     });
     const h = m.get(USER.toLowerCase())!;
     expect(h.eth).toBeCloseTo(0.05537835, 10);
@@ -67,7 +69,7 @@ describe("readOutsideBase", () => {
     expect(h.usd).toBeCloseTo(0.05537835 * 2300 + 1.5, 6);
     expect(m.get(EMPTY)).toEqual({ eth: 0, usdc: 0, usd: 0 });
     expect(seen.some((u) => u.includes("coinbase"))).toBe(false);
-    expect(seen[0]).toBe("https://ethereum-rpc.publicnode.com");
+    expect(seen[0]).toBe(ETHEREUM_PUBLIC_RPCS[0]);
   });
 
   test("falls back to Coinbase spot when there is no Base price, and not at all when no one holds ETH", async () => {
@@ -86,11 +88,154 @@ describe("readOutsideBase", () => {
 
   test("a failing RPC is skipped for the next one; all failing leaves the map empty (never zero)", async () => {
     const seen: string[] = [];
-    const m = await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://secret.example/key, http://insecure.example", fetchFn: ethFetch({}, { fail: true, seen }) });
+    const m = await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://secret.example/key, http://insecure.example", fetchFn: ethFetch({}, { fail: true, seen }), rotation: 0 });
     expect(m.size).toBe(0);
     expect(seen[0]).toBe("https://secret.example/key");
     expect(seen).not.toContain("http://insecure.example");
-    expect(seen.length).toBe(3);
+    // otto/mamoru-astro#42: an RPC that answers 503 is not asked again this run (no plain batch either): the secret
+    // once, then the run's public budget of nine, in waves of three.
+    expect(seen.length).toBe(10);
+    expect(seen.slice(1)).toEqual(ETHEREUM_PUBLIC_RPCS.slice(0, 9));
+  });
+
+  test("aggregate3 refused everywhere: the plain batch reads the balances; errors name hosts, never URL paths", async () => {
+    const notes: string[] = [];
+    const fetchFn = async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (!Array.isArray(body)) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "refused" } }));
+      const word = (n: bigint) => `0x${n.toString(16)}`;
+      return new Response(JSON.stringify(body.map((c: { id: number; method: string }) => ({ jsonrpc: "2.0", id: c.id, result: c.method === "eth_getBalance" ? word(55_378_350_000_000_000n) : word(0n) }))));
+    };
+    const m = await readOutsideBase([USER], { baseEthUsd: 2000, rpcUrls: "https://secret.example/key123", fetchFn, onError: (x) => notes.push(x) });
+    expect(m.get(USER.toLowerCase())).toEqual({ eth: 0.05537835, usdc: 0, usd: 0.05537835 * 2000 });
+    // The configured RPC answered the plain batch: nothing failed, so nothing is noted (and no URL path ever is).
+    expect(notes.join(" ")).not.toContain("key123");
+  });
+
+  test("a healthy configured RPC is the only one asked: public hosts never see the addresses (otto/mamoru-astro#41)", async () => {
+    const seen: string[] = [];
+    const fast = ethFetch({ [USER.toLowerCase()]: [1n, 0n] }, { seen });
+    const m = await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://own.example/k", fetchFn: fast });
+    expect(m.size).toBe(1);
+    expect(seen).toEqual(["https://own.example/k"]);
+  });
+
+  test("a public answer never overrules the configured RPC, whatever arrives first; public hosts get only what it missed", async () => {
+    const OTHER = "0x00000000000000000000000000000000000000e2";
+    const asked: string[] = [];
+    const own = ethFetch({ [USER.toLowerCase()]: [7n, 0n] });
+    const pub = ethFetch({ [USER.toLowerCase()]: [999n, 0n], [OTHER]: [5n, 0n] });
+    const fetchFn = async (u: string, i?: RequestInit) => {
+      asked.push(`${u} ${String(i?.body).toLowerCase().includes(USER.toLowerCase().slice(2)) ? "user" : ""}`);
+      if (u.includes("own.example")) {
+        await new Promise((r) => setTimeout(r, 30));
+        // The configured RPC answers USER only.
+        const res = await own(u, i);
+        return res;
+      }
+      return pub(u, i);
+    };
+    const m = await readOutsideBase([USER, OTHER], { baseEthUsd: 1, rpcUrls: "https://own.example/k", fetchFn });
+    expect(m.get(USER.toLowerCase())?.eth).toBe(7 / 1e18);
+    expect(m.get(OTHER)?.eth).toBe(5 / 1e18);
+    expect(asked.filter((x) => !x.startsWith("https://own.example")).every((x) => !x.endsWith("user"))).toBe(true);
+  });
+
+  test("within the configured tier list order wins, even when a later RPC answers first", async () => {
+    const first = ethFetch({ [USER.toLowerCase()]: [7n, 0n] });
+    const second = ethFetch({ [USER.toLowerCase()]: [999n, 0n] });
+    const fetchFn = async (u: string, i?: RequestInit) => {
+      if (u.includes("one.example")) {
+        await new Promise((r) => setTimeout(r, 40));
+        return first(u, i);
+      }
+      return second(u, i);
+    };
+    const m = await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://one.example/a,https://two.example/b", fetchFn });
+    expect(m.get(USER.toLowerCase())?.eth).toBe(7 / 1e18);
+  });
+
+  test("a configured RPC that hangs past its budget hands the read to the public tier", async () => {
+    const pub = ethFetch({ [USER.toLowerCase()]: [5n, 0n] });
+    const fetchFn = (u: string, i?: RequestInit) => (u.includes("own.example") ? new Promise<Response>(() => {}) : pub(u, i));
+    const m = await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://own.example/k", fetchFn, deadlineMs: 9_000 });
+    expect(m.get(USER.toLowerCase())?.eth).toBe(5 / 1e18);
+  }, 10_000);
+
+  test("on the configured tier's budget, answers already in are kept and only the rest goes public", async () => {
+    const OTHER = "0x00000000000000000000000000000000000000e2";
+    const own = ethFetch({ [USER.toLowerCase()]: [7n, 0n] });
+    const pub = ethFetch({ [USER.toLowerCase()]: [999n, 0n], [OTHER]: [5n, 0n] });
+    const publicAskedForUser: boolean[] = [];
+    const fetchFn = (u: string, i?: RequestInit) => {
+      const body = String(i?.body);
+      if (u.includes("own.example")) return Array.isArray(JSON.parse(body)) ? new Promise<Response>(() => {}) : own(u, i);
+      publicAskedForUser.push(body.toLowerCase().includes(USER.toLowerCase().slice(2)));
+      return pub(u, i);
+    };
+    const m = await readOutsideBase([USER, OTHER], { baseEthUsd: 1, rpcUrls: "https://own.example/k", fetchFn, deadlineMs: 9_000 });
+    expect(m.get(USER.toLowerCase())?.eth).toBe(7 / 1e18);
+    expect(m.get(OTHER)?.eth).toBe(5 / 1e18);
+    expect(publicAskedForUser.some(Boolean)).toBe(false);
+  }, 10_000);
+
+  test("notes are host and category only: no error text, so a key echoed in any form never gets in", async () => {
+    const notes: string[] = [];
+    const fetchFn = async (url: string) => {
+      if (url.includes("secret")) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32001, message: "invalid apiKey=abc" } }));
+      throw new Error("invalid apiKey=abc");
+    };
+    await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://secret.example/?apiKey=abc", fetchFn, onError: (x) => notes.push(x), rotation: 0 });
+    expect(notes.join(" ")).not.toContain("abc");
+    expect(notes).toContain("secret.example: batch not supported");
+    expect(notes).toContain("rpc.mevblocker.io: network error");
+  });
+
+  test("an error text that repeats the secret URL, with or without its scheme, keeps only the host", async () => {
+    const notes: string[] = [];
+    const fetchFn = async () => {
+      throw new Error("connect failed: https://secret.example/key123?token=abc and secret.example/key123?token=abc");
+    };
+    await readOutsideBase([USER], { baseEthUsd: 1, rpcUrls: "https://secret.example/key123?token=abc", fetchFn, onError: (x) => notes.push(x) });
+    const all = notes.join(" ");
+    expect(all).not.toContain("key123");
+    expect(all).not.toContain("token=abc");
+    expect(all).toContain("secret.example");
+  });
+
+  test("a decoded aggregate where every sub-call failed falls through to the batch; two public hosts must agree (#42)", async () => {
+    const fetchFn = async (url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (!Array.isArray(body)) {
+        // aggregate3 answering with every sub-call failed.
+        const { encodeFunctionResult, parseAbi } = await import("viem");
+        const abi = parseAbi(["struct Result { bool success; bytes returnData; }", "function aggregate3((address,bool,bytes)[] calls) returns (Result[] returnData)"]);
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: encodeFunctionResult({ abi, functionName: "aggregate3", result: [{ success: false, returnData: "0x" }, { success: false, returnData: "0x" }, { success: false, returnData: "0x" }, { success: false, returnData: "0x" }] }) }));
+      }
+      // Only two hosts answer the batch, and only for EMPTY.
+      if (!url.includes("publicnode") && !url.includes("1rpc")) return new Response("[]");
+      return new Response(JSON.stringify(body.map((c: { id: number; params: unknown[] }) => ({ jsonrpc: "2.0", id: c.id, result: JSON.stringify(c.params).toLowerCase().includes(EMPTY.toLowerCase().slice(2)) ? "0x0" : null }))));
+    };
+    const m = await readOutsideBase([USER, EMPTY], { baseEthUsd: 1, fetchFn, rotation: 0 });
+    expect(m.has(EMPTY.toLowerCase())).toBe(true);
+    expect(m.has(USER.toLowerCase())).toBe(false);
+  });
+
+  test("one public host alone never sets a balance; a second that disagrees does not either (#42)", async () => {
+    const answer = (wei: bigint) => async (_u: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (!Array.isArray(body)) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32601, message: "no" } }));
+      return new Response(JSON.stringify(body.map((c: { id: number; method: string }) => ({ jsonrpc: "2.0", id: c.id, result: c.method === "eth_getBalance" ? `0x${wei.toString(16)}` : "0x0" }))));
+    };
+    const liar = answer(10n ** 24n);
+    const honest = answer(55_378_350_000_000_000n);
+    const pool = ETHEREUM_PUBLIC_RPCS;
+    const one = await readOutsideBase([USER], { baseEthUsd: 1, rotation: 0, fetchFn: (u, i) => (u === pool[0] ? liar(u, i) : Promise.resolve(new Response("down", { status: 503 }))) });
+    expect(one.size).toBe(0);
+    const split = await readOutsideBase([USER], { baseEthUsd: 1, rotation: 0, fetchFn: (u, i) => (u === pool[0] ? liar(u, i) : u === pool[1] ? honest(u, i) : Promise.resolve(new Response("down", { status: 503 }))) });
+    expect(split.size).toBe(0);
+    const two = await readOutsideBase([USER], { baseEthUsd: 1, rotation: 0, fetchFn: (u, i) => (u === pool[0] ? liar(u, i) : honest(u, i)) });
+    expect(two.get(USER.toLowerCase())!.eth).toBeCloseTo(0.05537835, 10);
   });
 
   test("an address whose sub-call failed is not read; the others are", async () => {
@@ -102,13 +247,22 @@ describe("readOutsideBase", () => {
   test("at the deadline, chunks already read are kept and the slow one is not read", async () => {
     const addrs = Array.from({ length: 101 }, (_, i) => `0x${(i + 1).toString(16).padStart(40, "0")}`);
     const fast = ethFetch(Object.fromEntries(addrs.map((a) => [a, [1n, 1n] as [bigint, bigint]])));
-    let n = 0;
+    // Every RPC hangs for the second chunk (the 101st address alone, so the short request): only it is lost.
     const m = await readOutsideBase(addrs, {
       baseEthUsd: 1, deadlineMs: 50,
-      fetchFn: (u, i) => (++n === 2 ? new Promise<Response>(() => {}) : fast(u, i)),
+      fetchFn: (u, i) => (String(i?.body).length < 2_000 ? new Promise<Response>(() => {}) : fast(u, i)),
     });
     expect(m.size).toBe(100);
-    expect(m.has(addrs[100])).toBe(false);
+    expect(m.has(addrs[100]!)).toBe(false);
+  });
+
+  test("one hung RPC never holds back the answer the others gave", async () => {
+    const fast = ethFetch({ [USER.toLowerCase()]: [1n, 0n] });
+    let n = 0;
+    const t = Date.now();
+    const m = await readOutsideBase([USER], { baseEthUsd: 1, deadlineMs: 2_000, fetchFn: (u, i) => (++n === 1 ? new Promise<Response>(() => {}) : fast(u, i)) });
+    expect(m.size).toBe(1);
+    expect(Date.now() - t).toBeLessThan(1_000);
   });
 
   test("a throwing fetch never throws out", async () => {
@@ -125,7 +279,9 @@ describe("readOutsideBase", () => {
   });
 
   test("ethereumRpcList puts the secret first and keeps the public fallbacks", () => {
-    expect(ethereumRpcList()[0]).toBe("https://ethereum-rpc.publicnode.com");
+    expect(ethereumRpcList()[0]).toBe(ETHEREUM_PUBLIC_RPCS[0]);
+    expect(ethereumRpcList(undefined, 1)[0]).toBe(ETHEREUM_PUBLIC_RPCS[1]);
+    expect(ethereumRpcList("https://a.example").length).toBe(ETHEREUM_PUBLIC_RPCS.length + 1);
     expect(ethereumRpcList("https://a.example")[0]).toBe("https://a.example");
   });
 });
@@ -195,7 +351,7 @@ describe("pages", () => {
     expect(html).toContain("0.0200 ETH · $46.00");
     expect(html).toContain('<td class="unread">not read</td>');
     expect(html).toContain("<td>acc3</td>");
-    expect(html).toContain("Not working, and not in any Base figure");
+    expect(html).toContain("Counted in Value held; it earns nothing until it moves to Base");
     // Funding no longer carries the per-account table.
     expect(renderInfra({ reading: { snapshot: snap(rows) }, csrf: "c", nonce: "n" })).not.toContain("On Ethereum");
   });

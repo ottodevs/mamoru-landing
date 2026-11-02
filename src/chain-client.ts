@@ -1,21 +1,105 @@
-import { type Address, type Chain, createPublicClient, fallback, http, type PublicClient } from "viem";
+import { type Address, type Chain, createPublicClient, custom, type PublicClient } from "viem";
 import { base } from "viem/chains";
 import { MULTICALL3_ADDRESS, rpcUrls } from "./chain-addresses";
+import { isHardFailure, ownRpcs, RunHealth } from "./rpc-pool";
 
-// Widened to the generic `Chain`: pinning this to `typeof base`'s literal formatter
-// types makes some viem action return types blow up for tsc (known upstream issue).
-export type BaseClient = PublicClient<ReturnType<typeof fallback>, Chain>;
+export type BaseClient = PublicClient<ReturnType<typeof custom>, Chain>;
+
+/** Per RPC: a hung host costs this much once, then is skipped for the rest of the client's life (one snapshot run). */
+const BASE_TIMEOUT_MS = 4_000;
+/** One request gives up after this, whatever is left in the list, so a read never eats the run's 30 s. */
+const BASE_REQUEST_MS = 10_000;
+
+/** A JSON-RPC error that is the chain's answer (a revert, bad params), not the RPC's failure: never retried elsewhere. */
+const isChainAnswer = (code: unknown, message: unknown): boolean =>
+  code === 3 || code === -32602 || (typeof message === "string" && /revert/i.test(message));
 
 /**
- * A read client that tries the secret RPC (if set) then the public fallbacks in order.
+ * A read client over the secret RPCs (if set) then a rotated slice of the public pool, in order
+ * (otto/mamoru-astro#42). A public host is used only after it answered eth_chainId 8453; as before this PR, one
+ * public host's answer is taken alone when every configured RPC failed (Base reads are many calls at "latest", where
+ * two hosts a block apart legitimately differ, so they are not cross-checked like the Ethereum and Monad balances). An RPC that fails (HTTP status, timeout, network, a JSON-RPC error that is not the chain's
+ * answer) is skipped for the rest of this client's life, so it costs one timeout per run, not one per request.
  * The URLs never leave this function: nothing here is logged or rendered.
  */
-export function buildClient(secretRpcUrl?: string): BaseClient {
-  const transports = rpcUrls(secretRpcUrl).map((url) => http(url, { timeout: 8_000 }));
-  return createPublicClient({
+/** Hosts (never paths) of public RPCs that answered for a client, when every configured one had failed. */
+const publicHosts = new WeakMap<object, Set<string>>();
+export function publicHostsUsed(client: object): string[] {
+  return [...(publicHosts.get(client) ?? [])];
+}
+
+export function buildClient(secretRpcUrl?: string, fetchFn: typeof fetch = fetch): BaseClient {
+  const urls = rpcUrls(secretRpcUrl);
+  const own = ownRpcs(secretRpcUrl);
+  const health = new RunHealth(own);
+  // A public host is used only once it said it serves Base (asked once per client). Configured ones are trusted.
+  const onBase = new Map<string, Promise<boolean>>();
+  let id = 0;
+  const post = async (url: string, method: string, params: unknown, ms: number): Promise<{ result?: unknown; error?: { code?: unknown; message?: unknown } }> => {
+    const res = await fetchFn(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params: params ?? [] }),
+      signal: AbortSignal.timeout(ms),
+    });
+    if (!res.ok) throw new Error(`rpc ${res.status}`);
+    const body = (await res.json()) as unknown;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) throw new Error("rpc answer is not an object");
+    return body as { result?: unknown; error?: { code?: unknown; message?: unknown } };
+  };
+  const servesBase = (url: string): Promise<boolean> => {
+    if (own.includes(url)) return Promise.resolve(true);
+    let p = onBase.get(url);
+    if (!p) {
+      p = post(url, "eth_chainId", [], BASE_TIMEOUT_MS).then((b) => b.result === "0x2105", () => false);
+      onBase.set(url, p);
+    }
+    return p;
+  };
+  const used = new Set<string>();
+  const request = async ({ method, params }: { method: string; params?: unknown }): Promise<unknown> => {
+    const until = Date.now() + BASE_REQUEST_MS;
+    let last: unknown = new Error("no Base RPC answered");
+    for (const url of health.healthy(urls)) {
+      const left = until - Date.now();
+      if (left <= 0) break;
+      let body: { result?: unknown; error?: { code?: unknown; message?: unknown } };
+      try {
+        // The chain check is cached per host but still bounded by this request's budget; running out is not the host's fault.
+        const onChain = await Promise.race([servesBase(url), new Promise<null>((r) => setTimeout(() => r(null), left))]);
+        if (onChain === null) break;
+        if (!onChain) throw new Error("not Base");
+        const rest = until - Date.now();
+        if (rest <= 0) break;
+        body = await post(url, method, params, Math.min(BASE_TIMEOUT_MS, rest));
+      } catch (e) {
+        health.fail(url, isHardFailure(e));
+        last = e;
+        continue;
+      }
+      if (body.error) {
+        if (isChainAnswer(body.error.code, body.error.message)) throw Object.assign(new Error(String(body.error.message ?? "rpc error")), { code: body.error.code });
+        health.fail(url);
+        last = new Error("rpc error");
+        continue;
+      }
+      if (!("result" in body)) {
+        health.fail(url);
+        last = new Error("rpc answer without a result");
+        continue;
+      }
+      health.succeed(url);
+      if (!own.includes(url)) used.add(new URL(url).host);
+      return body.result;
+    }
+    throw last;
+  };
+  const client = createPublicClient({
     chain: base as Chain,
-    transport: fallback(transports, { rank: false }),
+    transport: custom({ request }, { retryCount: 0 }),
   });
+  publicHosts.set(client, used);
+  return client;
 }
 
 export type ContractCall = {

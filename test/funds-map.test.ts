@@ -21,6 +21,7 @@ const row = (o: Partial<AccountView> = {}): AccountView => {
     ethBalance: 0,
     positions: 0,
     inRange: 0,
+    monad: { mon: 0, usdc: 0, positions: 0, usd: 0, monUnpriced: false },
     ...o,
   };
 };
@@ -180,7 +181,7 @@ describe("buildFundsMap", () => {
   test("render escapes, links buckets, marks not working", () => {
     const html = renderFundsMap(buildFundsMap(snap(), [row({ outside: { eth: 1, usdc: 0, usd: 2000 } })]));
     expect(html).toContain('id="funds-map"');
-    expect(html).toContain("Total including not working");
+    expect(html).toContain("Value held, every chain");
     expect(html).toContain('href="/ops/accounts"');
     expect(html).toContain("Not working</span>");
   });
@@ -202,7 +203,7 @@ describe("buildFundsMap", () => {
     expect(html).toContain("team gas");
   });
 
-  test("headline outside figure uses the same dedupe as the map (no double count, testnets out)", () => {
+  test("headline outside figure uses the same dedupe as the map (no double count; a testnet row's mainnet balance counts, otto/mamoru-astro#39)", () => {
     const A = "0xAbC0000000000000000000000000000000000009";
     const rows = [
       row({ address: A, outside: { eth: 0, usdc: 500, usd: 500 } }),
@@ -212,9 +213,9 @@ describe("buildFundsMap", () => {
     ];
     const head = summarizeOutside(outsideRowsOf(rows));
     const m = buildFundsMap(snap(), rows);
-    expect(head.usd).toBe(100);
+    expect(head.usd).toBe(170);
     expect(m.notWorking).toBe(head.usd!);
-    expect(m.total).toBeCloseTo(600, 6);
+    expect(m.total).toBeCloseTo(670, 6);
   });
 
   test("operator summary is a floor or not priced, never exact or $0", () => {

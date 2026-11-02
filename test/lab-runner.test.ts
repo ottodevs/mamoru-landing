@@ -378,14 +378,21 @@ describe("lab-runner.ts: agent jobs (claim history, result storing the verified 
     await insertAgentJob(db, { id: "job-done-1", requester: "r", threadId: "thread-2", question: "primera pregunta", status: "done", now });
     const answer1 = { blocks: [{ type: "claim", metric: "end", runId: "h1", value: 100 }] };
     await db.prepare("UPDATE lab_jobs SET answer_json = ? WHERE id = ?").bind(JSON.stringify(answer1), "job-done-1").run();
+    await db
+      .prepare("INSERT INTO lab_runs (result_hash, spec_key, window_id, summary_json, run_json, sim_version, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .bind("h1", "mar2025|live|1000|1000", "mar2025", "{}", "{}", "v1", now)
+      .run();
+    await db.prepare("INSERT INTO lab_job_runs (job_id, result_hash) VALUES (?, ?)").bind("job-done-1", "h1").run();
     // A failed or still-queued turn in between must never show up in history.
     await insertAgentJob(db, { id: "job-failed-1", requester: "r", threadId: "thread-2", question: "una que falló", status: "failed", now });
+    await db.prepare("INSERT INTO lab_job_runs (job_id, result_hash) VALUES (?, ?)").bind("job-failed-1", "h1").run();
     await insertAgentJob(db, { id: "job-follow-up", requester: "r", threadId: "thread-2", question: "¿y el doble de ancho?", status: "queued", now });
 
     const res = await signedFetch(env, "/ops/lab/runner/claim", {});
-    const body = (await res.json()) as { job: { id: string; history: { question: string; answer: unknown }[] } };
+    const body = (await res.json()) as { job: { id: string; history: { question: string; answer: unknown; runs: unknown[] }[] } };
     expect(body.job.id).toBe("job-follow-up");
-    expect(body.job.history).toEqual([{ question: "primera pregunta", answer: answer1 }]);
+    // each turn carries the runs its answer cites, by hash and spec, so the runner can render prior claims
+    expect(body.job.history).toEqual([{ question: "primera pregunta", answer: answer1, runs: [{ resultHash: "h1", specKey: "mar2025|live|1000|1000" }] }]);
   });
 
   test("result on an agent job stores answer/verifier/cost and records the cited runs in lab_job_runs, fenced", async () => {

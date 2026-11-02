@@ -299,6 +299,30 @@ describe("lab-logic.ts: \"Preguntar al Lab\" (otto/mamoru-astro#30, spec 008 pha
     expect(LAB.answerHeadlineBlock([])).toBe(null);
   });
 
+  test("resolveRefTokens: {{cN}} becomes the n-th claim's formatted value; {{vN}} and unknown refs drop", () => {
+    const claims = [{ metric: "vsHodl", value: -8.46 }, { metric: "fees", value: 1.5 }];
+    expect(LAB.resolveRefTokens("La mejor es mar2025: {{c0}}. Comisiones {{c1}}; {{v0}} y {{c9}}.", claims)).toBe("La mejor es mar2025: −8,46 USDC. Comisiones 1,50 USDC; y .");
+    // the model's own unit after the token is not repeated; a word that merely starts like a unit is kept
+    expect(LAB.resolveRefTokens("mar2025, con {{c0}} USDC, y fees de {{c1}}USDC.", claims)).toBe("mar2025, con −8,46 USDC, y fees de 1,50 USDC.");
+    expect(LAB.resolveRefTokens("{{c0}} USDCs", claims)).toBe("−8,46 USDC USDCs");
+    // a unit is dropped only when the formatted value already ends with it; anything else stays as written
+    const more = [{ metric: "timeInRange", value: 90 }];
+    expect(LAB.resolveRefTokens("{{c0}} % en rango y {{c0}}% del tiempo", more)).toBe("90,0 % en rango y 90,0 % del tiempo");
+    expect(LAB.resolveRefTokens("{{c0}} USDC", more)).toBe("90,0 % USDC");
+    expect(LAB.resolveRefTokens("{{C0}} USDC", claims)).toBe("{{C0}} USDC");
+  });
+
+  test("answerBlocksHtml: prose resolves {{cN}} on a whole answer, only strips it on a partial one", () => {
+    const blocks = [
+      { type: "claim" as const, metric: "vsHodl", runId: "hash-a", value: -16.44 },
+      { type: "text" as const, md: "La ventana feb2025 terminó en {{c0}}." },
+    ];
+    expect(LAB.answerBlocksHtml(blocks, { "hash-a": runA }, false)).toContain("La ventana feb2025 terminó en −16,44 USDC.");
+    const partial = LAB.answerBlocksHtml(blocks, { "hash-a": runA }, true);
+    expect(partial).toContain("La ventana feb2025 terminó en .");
+    expect(partial).not.toContain("terminó en −16,44");
+  });
+
   test("stripRefTokens (AL-20): {{cN}}/{{vN}} reference tokens are removed, not resolved, extra whitespace collapsed", () => {
     expect(LAB.stripRefTokens("Con {{c0}} de comisiones y {{v0}} frente a mantener.")).toBe("Con de comisiones y frente a mantener.");
     expect(LAB.stripRefTokens("sin tokens")).toBe("sin tokens");
@@ -336,6 +360,26 @@ describe("lab-logic.ts: \"Preguntar al Lab\" (otto/mamoru-astro#30, spec 008 pha
     const withoutPartial = LAB.answerBlocksHtml(blocks, { "hash-a": runA }, false);
     expect(withoutPartial).not.toContain("Respuesta parcial");
     expect(LAB.answerBlocksHtml([], {}, false)).toBe("");
+  });
+
+  test("answerBlocksHtml: every chip and verdict names its run (window · variant), escaped -- a partial answer's bare figures stay legible", () => {
+    const blocks = [
+      { type: "claim" as const, metric: "vsHodl", runId: "hash-a", value: -16.44 },
+      { type: "claim" as const, metric: "vsHodl", runId: "hash-b", value: -3.26 },
+      { type: "verdict" as const, runId: "hash-b", against: "hold" },
+    ];
+    const html = LAB.answerBlocksHtml(blocks, { "hash-a": runA, "hash-b": runB }, true);
+    expect(html).toContain('<i class="lab-ask-ctx">feb2025 · Política actual</i><b>−16,44 USDC</b>');
+    expect(html).toContain('<p class="lab-verdict"><i class="lab-ask-ctx">feb2025 · Rango ×2</i>Terminó 3,26 USDC por debajo');
+    const hostile = { ...runA, variantLabel: "<img onerror=x>" };
+    expect(LAB.answerBlocksHtml([blocks[0]!], { "hash-a": hostile }, false)).toContain("feb2025 · &lt;img onerror=x&gt;");
+    expect(LAB.answerBlocksHtml([blocks[0]!], {}, false)).not.toContain("lab-ask-ctx");
+    // what the thread API actually serves: LabRunSummary, window under `window.id`, no top-level windowId
+    const served = { resultHash: "hash-s", window: { id: "mar2025" }, variantLabel: "Rango 1.000 ticks", metrics: { end: 991.54, vsHodl: -8.46 }, deposit: 1000 };
+    const servedHtml = LAB.answerBlocksHtml([{ type: "claim" as const, metric: "vsHodl", runId: "hash-s", value: -8.46 }, { type: "chart" as const, kind: "equity", runIds: ["hash-s"] }], { "hash-s": served }, false);
+    expect(servedHtml).toContain("mar2025 · Rango 1.000 ticks");
+    expect(servedHtml).toContain('data-window-id="mar2025"');
+    expect(servedHtml).not.toContain("undefined");
   });
 
   test("answerBlocksHtml: a verdict citing a run the caller never resolved fails safe, never throws", () => {

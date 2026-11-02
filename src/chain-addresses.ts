@@ -1,3 +1,4 @@
+import { hourRotation, ownRpcs, publicPool } from "./rpc-pool";
 /**
  * Base mainnet constants for the Infra panel. Addresses only, no secrets.
  * Matches the live registry in ottodevs/mamoru (packages/registry/base.json).
@@ -47,17 +48,16 @@ export function tokenMeta(address: string): TokenMeta | null {
   return KNOWN_TOKENS[address.toLowerCase()] ?? null;
 }
 
+/** Public Base RPCs one client tries after the configured ones (the rest of the pool is reached on later runs). */
+const BASE_PUBLIC_PER_CLIENT = 6;
+
 /**
- * Public Base RPCs, tried in order. `BASE_RPC_URL` (secret, optional) goes first
- * when set. The chosen URL is never sent to the browser or logged.
+ * Base RPCs, tried in order: `BASE_RPC_URL` (secret, optional, comma separated) first, then a slice of the public
+ * pool rotated for this run (otto/mamoru-astro#42, see rpc-pool.ts). The chosen URL is never sent to the browser or logged.
  */
-export function rpcUrls(secretFirst?: string): string[] {
-  const list = [
-    "https://base-rpc.publicnode.com",
-    "https://base.drpc.org",
-    "https://mainnet.base.org",
-  ];
-  return secretFirst ? [secretFirst, ...list] : list;
+export function rpcUrls(secretFirst?: string, rotation = hourRotation()): string[] {
+  const own = ownRpcs(secretFirst);
+  return [...own, ...publicPool("base", rotation, own).slice(0, BASE_PUBLIC_PER_CLIENT)];
 }
 
 /** Public, non-secret endpoint used only for the wallet's "Add Base Network" prompt. */

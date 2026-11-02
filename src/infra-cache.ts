@@ -5,7 +5,7 @@
  */
 
 import type { D1Db } from "./d1-infra";
-import { computeInfraSnapshot, type InfraSnapshot } from "./infra-snapshot";
+import { carryForward, computeInfraSnapshot, type InfraSnapshot } from "./infra-snapshot";
 import type { WaitlistKv } from "./list";
 
 const CURRENT_KEY = "ops:infra:v2";
@@ -50,6 +50,7 @@ export interface InfraSources {
   rpcUrl?: string;
   /** Optional secret ETHEREUM_RPC_URLS (otto/mamoru-astro#31). */
   ethRpcUrls?: string;
+  monadRpcUrls?: string;
   db?: D1Db;
   kv?: WaitlistKv;
 }
@@ -88,13 +89,16 @@ async function writeJson(kv: WaitlistKv, key: string, value: unknown, ttl: numbe
 
 type Compute = (sources: InfraSources) => Promise<InfraSnapshot>;
 
-const defaultCompute: Compute = (s) => computeInfraSnapshot({ BASE_RPC_URL: s.rpcUrl, ETHEREUM_RPC_URLS: s.ethRpcUrls, MAMORU_DB: s.db });
+const defaultCompute: Compute = (s) => computeInfraSnapshot({ BASE_RPC_URL: s.rpcUrl, ETHEREUM_RPC_URLS: s.ethRpcUrls, MONAD_RPC_URLS: s.monadRpcUrls, MAMORU_DB: s.db });
 
 /** Computes now and stores the outcome: a complete reading in both keys, anything else only as current. */
 async function computeAndStore(sources: InfraSources, compute: Compute, now: number): Promise<InfraReading> {
   const kv = sources.kv;
   const computed = await compute(sources);
   if (!kv) return { snapshot: computed, computed };
+  // A failed Ethereum or Monad read keeps the last figure seen for that address (otto/mamoru-astro#40).
+  const [current, good] = await Promise.all([readJson<StoredReading>(kv, CURRENT_KEY), readJson<InfraSnapshot>(kv, GOOD_KEY)]);
+  carryForward(computed, current?.snapshot, good);
   if (isComplete(computed)) {
     await Promise.all([
       writeJson(kv, CURRENT_KEY, { snapshot: computed, storedAt: now } satisfies StoredReading, CURRENT_TTL_SECONDS),

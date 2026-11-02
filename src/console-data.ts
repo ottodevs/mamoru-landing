@@ -3,7 +3,9 @@
 // own /metrics as the app Worker stores it in operator_metrics_latest (ottodevs/mamoru migration 0013). Every
 // figure says where it comes from, and a source that is not there yet is null, never a guessed zero.
 import type { D1Db } from "./d1-infra";
-import type { InfraSnapshot } from "./infra-snapshot";
+import { buildFundsMap, type FundsMap, isMapped } from "./funds-map";
+import { readAtNote } from "./outside-base";
+import type { AccountView, InfraSnapshot } from "./infra-snapshot";
 import { CAP_SOURCES, DEFAULT_CAP_USDC, type CapSource } from "./account-cap-model";
 import { newestOverrides, type CapOverrideRow } from "./account-caps-store";
 import { inEffect } from "./engine-settings-store";
@@ -35,6 +37,14 @@ export type AccountYield = {
   apr: number | null;
   positions: Position[];
   readAt: string;
+  /**
+   * otto/mamoru-astro#39: everything the Safe holds on every chain, from the infra snapshot: the ledger's Base total
+   * plus Safe gas on Base, ETH/USDC on Ethereum and MON/USDC/positions on Monad. `floor` when a part could not be read
+   * or priced (the figure is then a minimum). `away` names what sits outside Base, e.g. "0.0554 ETH on Ethereum".
+   */
+  held: number;
+  floor: boolean;
+  away: string[];
 };
 
 export type PoolYield = { pool: string; value: number; fees: number; positions: number; inRange: number; apr: number | null };
@@ -108,6 +118,70 @@ export interface ConsoleModel {
    * `table`: account_cap_overrides exists. `byKey`: accounts in scope, by lowercase 8-character key.
    */
   caps: { reported: boolean; complete: boolean; table: boolean; byKey: Map<string, AccountCap> };
+  /** otto/mamoru-astro#39: every Safe balance by chain, for the accounts in scope; null without an infra reading. */
+  funds: FundsMap | null;
+}
+
+const fmtNum = (n: number) => n.toFixed(n < 0.001 ? 6 : 4);
+
+/** Addresses whose Ethereum / Monad balance an earlier account already counted: one balance, one account. */
+export interface Credited {
+  eth: Set<string>;
+  monad: Set<string>;
+}
+
+/**
+ * What one Safe holds besides the ledger's Base total, from its infra rows. Safe gas is per row; Ethereum and Monad
+ * are per address and go to the first account whose read of that address succeeded (`credited`). An unread row,
+ * a missing reading or an unpriced part makes the result a floor.
+ */
+export function heldElsewhere(
+  rows: readonly AccountView[],
+  ethUsd: number | null,
+  credited: Credited = { eth: new Set(), monad: new Set() },
+): { usd: number; floor: boolean; away: string[] } {
+  let usdSum = 0;
+  let floor = rows.some((r) => r.unread === true);
+  const away: string[] = [];
+  const addrs = [...new Set(rows.map((r) => r.address.toLowerCase()))];
+  const gas = rows.filter((r) => isMapped(r.chainId)).reduce((x, r) => x + r.ethBalance, 0);
+  if (gas > 0) {
+    if (ethUsd === null) floor = true;
+    else usdSum += gas * ethUsd;
+  }
+  // Per address: each one is credited by the first account whose read of it succeeded, and only by that read.
+  for (const a of addrs) {
+    const at = rows.filter((r) => r.address.toLowerCase() === a);
+    if (!credited.eth.has(a)) {
+      const eth = at.find((r) => r.outside)?.outside;
+      if (!eth) floor = true;
+      else {
+        credited.eth.add(a);
+        if (eth.eth > 0 || eth.usdc > 0) {
+          if (eth.usd === null) floor = true;
+          else usdSum += eth.usd;
+          away.push([eth.eth > 0 ? `${fmtNum(eth.eth)} ETH` : "", eth.usdc > 0 ? `${eth.usdc.toFixed(2)} USDC` : ""].filter(Boolean).join(" + ") + " on Ethereum" + readAtNote(eth.at));
+        }
+      }
+    }
+    if (!credited.monad.has(a)) {
+      const mon = at.find((r) => r.monad)?.monad;
+      if (!mon) floor = true;
+      else {
+        credited.monad.add(a);
+        if (mon.mon > 0 || mon.usdc > 0 || mon.positions > 0) {
+          if (mon.monUnpriced || mon.positions > 0) floor = true;
+          usdSum += mon.usd;
+          away.push(
+            [mon.mon > 0 ? `${fmtNum(mon.mon)} MON` : "", mon.usdc > 0 ? `${mon.usdc.toFixed(2)} USDC` : "", mon.positions > 0 ? `${mon.positions} ${mon.positions === 1 ? "position" : "positions"}` : ""]
+              .filter(Boolean)
+              .join(" + ") + " on Monad" + readAtNote(mon.at),
+          );
+        }
+      }
+    }
+  }
+  return { usd: usdSum, floor, away };
 }
 
 const missing = (e: unknown) => /no such (table|column)/i.test(e instanceof Error ? e.message : String(e));
@@ -244,6 +318,7 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     relayer: relayerOf(infra, null),
     alerts: [],
     caps: { reported: false, complete: false, table: false, byKey: new Map() },
+    funds: null,
   };
   if (!db) return empty;
 
@@ -302,7 +377,47 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
       apr: days && lp >= 0.5 ? (fees / lp) * (365 / days) * 100 : null,
       positions,
       readAt: s.read_at,
+      held: usd(s.total_usdc),
+      floor: false,
+      away: [],
     });
+  }
+
+  // otto/mamoru-astro#39: every balance of every Safe on every chain counts, not only the ledger's Base figure.
+  const infraRows = (infra?.accounts?.rows ?? []).filter((r) => inScope(env, r.env, r.isTest ? 1 : 0));
+  const infraByKey = new Map<string, AccountView[]>();
+  for (const r of infraRows) {
+    const k = r.key.slice(0, 8);
+    infraByKey.set(k, [...(infraByKey.get(k) ?? []), r]);
+  }
+  // One address is one Ethereum and one Monad balance: only the first account at an address is credited with them.
+  const credited: Credited = { eth: new Set(), monad: new Set() };
+  const elsewhere = (rs: AccountView[]) => heldElsewhere(rs, infra?.ethUsd ?? null, credited);
+  for (const y of yields) {
+    const rs = infraByKey.get(y.key);
+    // No on-chain reading of this Safe: its gas, Ethereum and Monad balances are unknown, so the figure is a floor.
+    if (!rs) {
+      y.floor = true;
+      continue;
+    }
+    const e = elsewhere(rs);
+    y.held += e.usd;
+    y.floor = e.floor;
+    y.away = e.away;
+  }
+  // A Safe the ledger has not written yet still counts with everything the on-chain read saw, Base included.
+  const ledgerKeys = new Set(yields.map((y) => y.key));
+  for (const [k, rs] of infraByKey) {
+    if (ledgerKeys.has(k)) continue;
+    const e = elsewhere(rs);
+    // Testnet rows' Base-side figures are testnet tokens, never money.
+    const real = rs.filter((r) => isMapped(r.chainId));
+    const idle = real.reduce((x, r) => x + r.usdcIdle, 0);
+    const lp = real.reduce((x, r) => x + r.lpUsd, 0);
+    const held = idle + lp + e.usd;
+    // An unread Base read could hide money: such a Safe stays listed, as a floor.
+    if (held < 0.01 && e.away.length === 0 && !rs.some((r) => r.unread === true)) continue;
+    yields.push({ key: k, env: rs[0].isTest ? "test" : rs[0].env, total: idle + lp, lp, idle, fees: 0, since: null, days: null, apr: null, positions: [], readAt: infra?.asOf ?? now.toISOString(), held, floor: e.floor, away: e.away });
   }
   yields.sort((a, b) => b.fees - a.fees || b.lp - a.lp);
 
@@ -358,6 +473,7 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     relayer: relayerOf(infra, operator?.relayerWei ?? null),
     alerts: [],
     caps: empty.caps,
+    funds: infra?.accounts && !infra.accounts.error ? buildFundsMap(infra, infraRows) : null,
   };
   model.caps = capsOf(acctRows, parseAuthorizations(parsePayload(operatorRows?.[0])?.authorizations), overrides, settings);
   model.alerts = alertsOf(model, now, snaps === null);
