@@ -79,6 +79,8 @@ import { infraSection } from "./ops-infra";
 import { withOutside } from "./ops-outside";
 import type { InfraSnapshot } from "./infra-snapshot";
 import { loadInfraReading } from "./infra-cache";
+import { loadRegistry } from "./registry-load";
+import { parseChain, registrySection } from "./ops-registry";
 import { captureDaily } from "./metrics-store";
 import type { D1Db } from "./d1-infra";
 import { homeDocument, isOpen } from "./open-at";
@@ -400,7 +402,7 @@ function withNotice(view: SectionView, text: string, tone: "plain" | "bad" = "pl
 }
 
 /** Sections a stranger is sent to Google from, and returned to after signing in. */
-const SECTION_PATHS = new Set(["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/functions", "/ops/archive", "/ops/lab", "/ops/money", "/ops/money/funding", "/ops/engine/settings", "/ops/engine/functions"]);
+const SECTION_PATHS = new Set(["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/functions", "/ops/archive", "/ops/lab", "/ops/money", "/ops/money/funding", "/ops/money/registry", "/ops/engine/settings", "/ops/engine/functions"]);
 
 /**
  * otto/mamoru-astro#35: Engine (Status, Settings, Functions) and Money (Costs, Funding) replaced five sections.
@@ -706,6 +708,10 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
 
   if (sectionPath === "/ops/money/funding" && request.method === "GET") {
     return flashed(await infraView(url.searchParams.get("fresh") === "1"));
+  }
+
+  if (sectionPath === "/ops/money/registry" && request.method === "GET") {
+    return flashed(registrySection(await loadRegistry(env), Math.floor(Date.now() / 1000), parseChain(url.searchParams.get("chain"))));
   }
 
   if (sectionPath === "/ops/experiments" && request.method === "GET") {
@@ -1228,6 +1234,7 @@ const RETURN_TO = new Set([
   "https://mamoru.lol/ops/infra",
   "https://mamoru.lol/ops/money",
   "https://mamoru.lol/ops/money/funding",
+  "https://mamoru.lol/ops/money/registry",
   "https://mamoru.lol/ops/engine/settings",
   "https://mamoru.lol/ops/engine/functions",
   "https://mamoru.lol/ops/experiments",

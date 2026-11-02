@@ -2389,6 +2389,33 @@ export function opsClientScript(nonce: string): string {
     }
     navigate(link.href, "push");
   });
+  // Registry (otto/mamoru#296): a button with data-copy puts that text on the clipboard and says so beside itself.
+  document.addEventListener("click", function (ev) {
+    var node = ev.target && ev.target.closest ? ev.target.closest("button[data-copy]") : null;
+    if (!node) return;
+    var fb = node.nextElementSibling && node.nextElementSibling.classList.contains("rg-fb") ? node.nextElementSibling : null;
+    var say = function (text) {
+      if (!fb) return;
+      fb.textContent = text;
+      clearTimeout(fb._t);
+      fb._t = setTimeout(function () { fb.textContent = ""; }, 2500);
+    };
+    var text = node.getAttribute("data-copy") || "";
+    var select = function () {
+      var box = node.closest(".rg-cd");
+      var code = box ? box.querySelector("code") : null;
+      if (code && window.getSelection) {
+        var range = document.createRange();
+        range.selectNodeContents(code);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        say("Selected, now copy");
+      } else say("Could not copy");
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { say("Copied \u2713"); }, select);
+    else select();
+  });
   // Warm the next section as soon as the reader points at it.
   var warm = function (ev) {
     var link = linkOf(ev);
