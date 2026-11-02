@@ -1,15 +1,24 @@
 /**
  * Reads one chain's MamoruRegistry for /ops/money/registry (otto/mamoru#296): its constants, the active pools, vaults
- * and routes, and every change still waiting (from the `Queued` events, checked against `etaOf`), plus the last
- * twenty executed or cancelled. Plain JSON-RPC over the configured RPCs, then a slice of the public pool; a public
- * host is used only after it answered the right chain id. Fails closed: a registry that is not set, or a read that
- * does not complete, never shows a partial list. No URL is ever logged or rendered.
+ * and routes, every change still waiting (from the `Queued` events, confirmed by `etaOf`), and the last twenty
+ * executed or cancelled. This panel is how the team spots a hostile queued change during the timelock, so it never
+ * hides or misstates one:
+ *  - Two distinct RPC hosts must answer the same, byte for byte, at one pinned block (hash included); every host,
+ *    configured or public, proved its chain id first. One host's word is never enough. No agreement: error, no list.
+ *  - Every log must come from the registry; every change id is recomputed from kind, key, params and nonce, as
+ *    MamoruRegistry.sol derives it, before any calldata is built; a mismatch is an error, not a display.
+ *  - A read that fails (etaOf, the entry a change replaces, a block time) fails the whole reading. Nothing is
+ *    filled in with a guess; nothing "unknown" is ever cached.
+ *  - A queued change the contract could not have accepted is shown as anomalous, never dropped.
+ * Plain JSON-RPC. No URL is ever logged or rendered: configured hosts are named "configured RPC", public ones by host.
  */
 
 import { decodeFunctionResult, encodeFunctionData } from "viem";
 import { isAddress, type RegistryChain } from "./registry-config";
 import {
+  anomalyOf,
   cancelCalldata,
+  changeId,
   decodeParams,
   decodeRegistryLog,
   EVENT_TOPICS,
@@ -24,14 +33,17 @@ import {
   type RawLog,
   registryAbi,
 } from "./registry-model";
-import { RunHealth, isHardFailure, ownRpcs } from "./rpc-pool";
+import { ownRpcs } from "./rpc-pool";
 
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
 
 const HISTORY = 20;
 const REQUEST_MS = 4_000;
-const BUDGET_MS = 20_000;
+const BUDGET_MS = 25_000;
 const MAX_CHUNKS = 60;
+/** Hosts asked for their head, and hosts a read may try before giving up on agreement. */
+const MAX_HEADS = 6;
+const MAX_READERS = 3;
 
 export interface PoolView {
   address: string;
@@ -48,31 +60,42 @@ export interface RouteView {
 }
 export interface PendingView {
   change: QueuedChange;
-  /** From `etaOf` on chain (the Queued event's value when the call failed). */
+  /** From `etaOf` on chain. */
   eta: number;
   params: Params | null;
   /** The entry it would replace, when the key already has one. */
   current: Params | null;
-  /** The block's time the change was queued at, unix seconds; null when not read. */
-  queuedAt: number | null;
+  /** The time of the block it was queued in, unix seconds. */
+  queuedAt: number;
+  /** Set when the contract could not have accepted this change: the reason. */
+  anomaly: string | null;
   executeData: string;
   cancelData: string;
 }
 export interface HistoryView {
   f: Finished;
-  time: number | null;
+  time: number;
   params: Params | null;
 }
+export interface Source {
+  /** The block every answer was pinned to. */
+  block: number;
+  hash: string;
+  /** "configured RPC" or a public host, for each of the hosts that agreed. */
+  hosts: string[];
+}
 
+export type ReadFailure = "rpc" | "disagree" | "inconsistent";
 export type ChainReading =
   | { state: "unset"; chain: RegistryChain["chain"] }
-  | { state: "error"; chain: RegistryChain["chain"]; address: string; why: string }
+  | { state: "error"; chain: RegistryChain["chain"]; address: string; kind: ReadFailure; why: string }
   | {
       state: "ok";
       chain: RegistryChain["chain"];
       address: string;
-      /** Chain time of the latest block, unix seconds. */
+      /** Chain time of the pinned block, unix seconds. */
       asOf: number;
+      source: Source;
       admin: string;
       guardian: string;
       delaySeconds: number;
@@ -83,192 +106,285 @@ export type ChainReading =
       history: HistoryView[];
     };
 
-class Rpc {
-  private readonly health: RunHealth;
-  private readonly onChain = new Map<string, Promise<boolean>>();
+/** What the contract and the log scan disagree about, in a short fixed phrase (never text from an RPC). */
+class Inconsistent extends Error {}
+const inconsistent = (why: string): never => {
+  throw new Inconsistent(why);
+};
+
+interface Snap {
+  block: number;
+  hash: string;
+  time: number;
+  logs: { address: string; topics: string[]; data: string; blockNumber: string; logIndex: string; transactionHash: string }[];
+  admin: string;
+  guardian: string;
+  delay: string;
+  poolAddrs: string[];
+  vaultAddrs: string[];
+  pools: Record<string, PoolParams & { active: boolean }>;
+  vaults: Record<string, { ratioBps: number; active: boolean }>;
+  routes: Record<string, boolean>;
+  etas: Record<string, string>;
+  times: Record<string, number>;
+}
+
+class Host {
   private id = 0;
+  private chainOk: Promise<boolean> | null = null;
   constructor(
-    private readonly urls: readonly string[],
-    private readonly own: readonly string[],
+    readonly url: string,
+    readonly name: string,
     private readonly chainId: number,
     private readonly fetchFn: Fetch,
     private readonly deadline: number,
-  ) {
-    this.health = new RunHealth(own);
-  }
-  private async post(url: string, method: string, params: unknown[], ms: number): Promise<{ result?: unknown; error?: { code?: unknown } }> {
-    const res = await this.fetchFn(url, {
+  ) {}
+  private async post(method: string, params: unknown[]): Promise<{ result?: unknown; error?: { code?: unknown } }> {
+    const left = this.deadline - Date.now();
+    if (left <= 0) throw Object.assign(new Error("out of time"), { name: "TimeoutError" });
+    const res = await this.fetchFn(this.url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: ++this.id, method, params }),
-      signal: AbortSignal.timeout(ms),
+      signal: AbortSignal.timeout(Math.min(REQUEST_MS, left)),
     });
     if (!res.ok) throw new Error(`rpc ${res.status}`);
     const body = (await res.json()) as unknown;
     if (typeof body !== "object" || body === null || Array.isArray(body)) throw new Error("rpc answer is not an object");
     return body as { result?: unknown; error?: { code?: unknown } };
   }
-  private serves(url: string): Promise<boolean> {
-    if (this.own.includes(url)) return Promise.resolve(true);
-    let p = this.onChain.get(url);
-    if (!p) {
-      p = this.post(url, "eth_chainId", [], REQUEST_MS).then((b) => b.result === `0x${this.chainId.toString(16)}`, () => false);
-      this.onChain.set(url, p);
-    }
-    return p;
+  /** Every host, configured or public, proves it serves this chain before anything it says is used. */
+  private serves(): Promise<boolean> {
+    this.chainOk ??= this.post("eth_chainId", []).then((b) => b.result === `0x${this.chainId.toString(16)}`, () => false);
+    return this.chainOk;
   }
-  /** The result, or a throw. A revert is the chain's answer and is not retried elsewhere. */
   async call(method: string, params: unknown[]): Promise<unknown> {
-    let last: unknown = new Error("no RPC answered");
-    for (const url of this.health.healthy(this.urls)) {
-      const left = this.deadline - Date.now();
-      if (left <= 0) break;
-      let body: { result?: unknown; error?: { code?: unknown } };
-      try {
-        if (!(await this.serves(url))) throw new Error("wrong chain");
-        body = await this.post(url, method, params, Math.min(REQUEST_MS, left));
-      } catch (e) {
-        this.health.fail(url, isHardFailure(e));
-        last = e;
-        continue;
-      }
-      if (body.error) {
-        if (body.error.code === 3) throw new Error("reverted");
-        this.health.fail(url);
-        last = new Error("rpc error");
-        continue;
-      }
-      if (!("result" in body)) {
-        this.health.fail(url);
-        continue;
-      }
-      this.health.succeed(url);
-      return body.result;
-    }
-    throw last;
+    if (!(await this.serves())) throw new Error("wrong chain");
+    const body = await this.post(method, params);
+    if (body.error) throw new Error(body.error.code === 3 ? "reverted" : "rpc error");
+    if (!("result" in body)) throw new Error("rpc answer without a result");
+    return body.result;
   }
 }
 
-/** Reads one chain. `urls` are tried in order; `own` are the configured (secret) ones among them. Never throws. */
-export async function readRegistry(
-  cfg: RegistryChain,
-  urls: readonly string[],
-  secret: string | undefined,
-  fetchFn: Fetch = fetch,
-): Promise<ChainReading> {
-  const { chain } = cfg;
-  if (!cfg.address || !isAddress(cfg.address)) return { state: "unset", chain };
+const hex = (n: number) => `0x${n.toString(16)}`;
+
+/** Everything the page needs, read from one host at one block. Throws on any failed read. */
+async function readAt(host: Host, block: number, cfg: RegistryChain & { address: string }): Promise<Snap> {
+  const at = hex(block);
   const address = cfg.address;
-  const rpc = new Rpc(urls, ownRpcs(secret), chain.chainId, fetchFn, Date.now() + BUDGET_MS);
-  const eth = async (data: `0x${string}`): Promise<`0x${string}`> => (await rpc.call("eth_call", [{ to: address, data }, "latest"])) as `0x${string}`;
-  const view = async <N extends string>(functionName: N, args: readonly unknown[] = []): Promise<unknown> => {
+  const view = async (functionName: string, args: readonly unknown[] = []): Promise<unknown> => {
     // biome-ignore lint: viem's overload typing does not carry through a generic helper
     const abi = registryAbi as any;
     const data = encodeFunctionData({ abi, functionName, args } as any);
-    return decodeFunctionResult({ abi, functionName, data: await eth(data) } as any);
+    const out = (await host.call("eth_call", [{ to: address, data }, at])) as `0x${string}`;
+    return decodeFunctionResult({ abi, functionName, data: out } as any);
   };
-  const blockTime = async (n: number | "latest"): Promise<number> => {
-    const b = (await rpc.call("eth_getBlockByNumber", [n === "latest" ? "latest" : `0x${n.toString(16)}`, false])) as { timestamp?: string; number?: string } | null;
-    if (!b?.timestamp) throw new Error("no block");
-    return Number(BigInt(b.timestamp));
+  const header = async (n: number | string) => {
+    const b = (await host.call("eth_getBlockByNumber", [typeof n === "number" ? hex(n) : n, false])) as { hash?: string; timestamp?: string } | null;
+    if (!b?.timestamp || !b.hash) throw new Error("no block");
+    return { hash: b.hash, time: Number(BigInt(b.timestamp)) };
   };
-  try {
-    const [head, headBlock] = await Promise.all([rpc.call("eth_blockNumber", []), rpc.call("eth_getBlockByNumber", ["latest", false])]);
-    const latest = Number(BigInt(head as string));
-    const asOf = Number(BigInt((headBlock as { timestamp: string }).timestamp));
+  const head = await header(block);
 
-    // Every event, from the deployment block to the head, in chunks the RPCs accept.
-    const logs: RawLog[] = [];
-    let chunks = 0;
-    for (let from = cfg.fromBlock; from <= latest; from += cfg.logChunk) {
-      if (++chunks > MAX_CHUNKS) throw new Error("the scan is too long: set a later start block");
-      const to = Math.min(latest, from + cfg.logChunk - 1);
-      const got = (await rpc.call("eth_getLogs", [{ address, topics: [[...EVENT_TOPICS]], fromBlock: `0x${from.toString(16)}`, toBlock: `0x${to.toString(16)}` }])) as RawLog[];
-      if (!Array.isArray(got)) throw new Error("logs are not a list");
-      logs.push(...got);
-    }
-    const events = logs.map(decodeRegistryLog).filter((e): e is NonNullable<typeof e> => e !== null);
-    if (events.length !== logs.length) throw new Error("an event could not be decoded");
-    const folded = foldEvents(events);
-
-    const [admin, guardian, delay, poolAddrs, vaultAddrs] = (await Promise.all([
-      view("ADMIN"),
-      view("GUARDIAN"),
-      view("DELAY"),
-      view("activePools"),
-      view("activeVaults"),
-    ])) as [string, string, bigint, string[], string[]];
-
-    const poolOf = async (a: string): Promise<PoolParams & { active: boolean }> => (await view("poolOf", [a])) as PoolParams & { active: boolean };
-    const vaultOf = async (a: string): Promise<{ ratioBps: number; active: boolean }> => (await view("vaultOf", [a])) as { ratioBps: number; active: boolean };
-
-    // A pending change is one the chain still has an ETA for; a log scan that missed an Executed cannot show a ghost.
-    const etas = await Promise.all(folded.pending.map((q) => view("etaOf", [q.id]).then((v) => Number(v as bigint), () => q.eta)));
-    const live = folded.pending.map((change, i) => ({ change, eta: etas[i] })).filter((p) => p.eta !== 0);
-
-    const [pools, vaults, routeFlags] = await Promise.all([
-      Promise.all(poolAddrs.map(async (a) => ({ address: a, label: poolLabel(chain.chainId, a), v: pick(await poolOf(a)) }))),
-      Promise.all(vaultAddrs.map(async (a) => ({ address: a, ratioBps: Number((await vaultOf(a)).ratioBps) }))),
-      Promise.all(folded.routeDomains.map(async (d) => ((await view("routeOn", [d])) as boolean) && { domain: d })),
-    ]);
-
-    // What each pending change would replace, and when it was queued.
-    const current = async (q: QueuedChange): Promise<Params | null> => {
-      const a = keyAddress(q.key);
-      if (q.kind === "pool" && a) {
-        const p = await poolOf(a);
-        return p.active ? { kind: "pool", v: pick(p) } : null;
-      }
-      if (q.kind === "vault" && a) {
-        const v = await vaultOf(a);
-        return v.active ? { kind: "vault", ratioBps: Number(v.ratioBps) } : null;
-      }
-      return null;
-    };
-    const pending: PendingView[] = await Promise.all(
-      live.map(async ({ change, eta }) => ({
-        change,
-        eta,
-        params: decodeParams(change.kind, change.params),
-        current: await current(change).catch(() => null),
-        queuedAt: await blockTime(change.at.block).catch(() => null),
-        executeData: executeCalldata(change),
-        cancelData: cancelCalldata(change.id),
-      })),
-    );
-
-    const recent = folded.finished.slice(0, HISTORY);
-    const blocks = [...new Set(recent.map((f) => f.at.block))];
-    const times = new Map<number, number | null>(await Promise.all(blocks.map(async (b) => [b, await blockTime(b).catch(() => null)] as const)));
-    const history: HistoryView[] = recent.map((f) => ({ f, time: times.get(f.at.block) ?? null, params: f.kind && f.params ? decodeParams(f.kind, f.params) : null }));
-
-    return {
-      state: "ok",
-      chain,
-      address,
-      asOf,
-      admin,
-      guardian,
-      delaySeconds: Number(delay),
-      pools,
-      vaults,
-      routes: routeFlags.filter((r): r is RouteView => r !== false),
-      pending,
-      history,
-    };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "";
-    // Only our own short reasons are shown; whatever else threw is "not read", never text from an RPC.
-    const why = /^(the scan is too long: set a later start block|an event could not be decoded|no RPC answered)$/.test(msg) ? msg : "no RPC answered in time";
-    return { state: "error", chain, address, why };
+  const raw: unknown[] = [];
+  let chunks = 0;
+  for (let from = cfg.fromBlock; from <= block; from += cfg.logChunk) {
+    if (++chunks > MAX_CHUNKS) inconsistent("the event scan is too long: set a later start block");
+    const to = Math.min(block, from + cfg.logChunk - 1);
+    const got = await host.call("eth_getLogs", [{ address, topics: [[...EVENT_TOPICS]], fromBlock: hex(from), toBlock: hex(to) }]);
+    if (!Array.isArray(got)) throw new Error("logs are not a list");
+    raw.push(...got);
   }
+  const logs = (raw as (RawLog & { address?: string })[]).map((l) => ({
+    address: String(l.address ?? "").toLowerCase(),
+    topics: [...l.topics],
+    data: l.data,
+    blockNumber: l.blockNumber,
+    logIndex: l.logIndex,
+    transactionHash: l.transactionHash,
+  }));
+  logs.sort((a, b) => Number(BigInt(a.blockNumber) - BigInt(b.blockNumber)) || Number(BigInt(a.logIndex) - BigInt(b.logIndex)));
+  if (logs.some((l) => l.address !== address.toLowerCase())) inconsistent("a log came from an address that is not the registry");
+  const events = logs.map((l) => decodeRegistryLog(l as unknown as RawLog));
+  if (events.some((e) => e === null)) inconsistent("an event of the registry could not be decoded");
+  const folded = foldEvents(events as NonNullable<(typeof events)[number]>[]);
+  if (folded.anomalies.length) inconsistent(folded.anomalies[0]!);
+  for (const q of folded.pending) if (changeId(q) !== q.id.toLowerCase()) inconsistent("a queued change's id does not match its fields");
+
+  const [admin, guardian, delay, poolAddrs, vaultAddrs] = (await Promise.all([view("ADMIN"), view("GUARDIAN"), view("DELAY"), view("activePools"), view("activeVaults")])) as [string, string, bigint, string[], string[]];
+
+  const etas: Record<string, string> = {};
+  await Promise.all(folded.pending.map(async (q) => void (etas[q.id] = String((await view("etaOf", [q.id])) as bigint))));
+  const live = folded.pending.filter((q) => etas[q.id] !== "0");
+
+  const pools: Snap["pools"] = {};
+  const vaults: Snap["vaults"] = {};
+  const poolKeys = new Set(poolAddrs);
+  const vaultKeys = new Set(vaultAddrs);
+  for (const q of live) {
+    const a = keyAddress(q.key);
+    if (a && q.kind === "pool") poolKeys.add(a);
+    if (a && q.kind === "vault") vaultKeys.add(a);
+  }
+  await Promise.all([
+    ...[...poolKeys].map(async (a) => void (pools[a.toLowerCase()] = pickPool((await view("poolOf", [a])) as PoolParams & { active: boolean }))),
+    ...[...vaultKeys].map(async (a) => {
+      const v = (await view("vaultOf", [a])) as { ratioBps: number; active: boolean };
+      vaults[a.toLowerCase()] = { ratioBps: Number(v.ratioBps), active: Boolean(v.active) };
+    }),
+  ]);
+  const routes: Snap["routes"] = {};
+  await Promise.all(folded.routeDomains.map(async (d) => void (routes[String(d)] = Boolean(await view("routeOn", [d])))));
+
+  // Times: the blocks of the live changes and of the last twenty finished ones.
+  const blocks = new Set<number>([...live.map((q) => q.at.block), ...folded.finished.slice(0, HISTORY).map((f) => f.at.block)]);
+  const times: Record<string, number> = {};
+  await Promise.all([...blocks].map(async (b) => void (times[String(b)] = (await header(b)).time)));
+
+  return {
+    block,
+    hash: head.hash,
+    time: head.time,
+    logs,
+    admin,
+    guardian,
+    delay: String(delay),
+    poolAddrs,
+    vaultAddrs,
+    pools,
+    vaults,
+    routes,
+    etas,
+    times,
+  };
 }
 
-const pick = (p: PoolParams): PoolParams => ({
+const pickPool = (p: PoolParams & { active: boolean }): PoolParams & { active: boolean } => ({
   twapWindow: Number(p.twapWindow),
   twapShortWindow: Number(p.twapShortWindow),
   bandTicks: Number(p.bandTicks),
   anchorTick: Number(p.anchorTick),
   anchorBand: Number(p.anchorBand),
   ratioBps: Number(p.ratioBps),
+  active: Boolean(p.active),
 });
+const stripActive = ({ active: _a, ...v }: PoolParams & { active: boolean }): PoolParams => v;
+
+/** The page's model from one agreed snapshot. */
+function assemble(snap: Snap, cfg: RegistryChain & { address: string }, hosts: string[]): ChainReading {
+  const events = snap.logs.map((l) => decodeRegistryLog(l as unknown as RawLog)!);
+  const folded = foldEvents(events);
+  const live = folded.pending.filter((q) => snap.etas[q.id] !== "0");
+  const pending: PendingView[] = live.map((change) => {
+    const a = keyAddress(change.key);
+    let current: Params | null = null;
+    if (a && change.kind === "pool") {
+      const p = snap.pools[a.toLowerCase()];
+      if (p?.active) current = { kind: "pool", v: stripActive(p) };
+    } else if (a && change.kind === "vault") {
+      const v = snap.vaults[a.toLowerCase()];
+      if (v?.active) current = { kind: "vault", ratioBps: v.ratioBps };
+    }
+    return {
+      change,
+      eta: Number(snap.etas[change.id]),
+      params: decodeParams(change.kind, change.params),
+      current,
+      queuedAt: snap.times[String(change.at.block)]!,
+      anomaly: anomalyOf(change),
+      executeData: executeCalldata(change),
+      cancelData: cancelCalldata(change.id),
+    };
+  });
+  const history: HistoryView[] = folded.finished.slice(0, HISTORY).map((f) => ({ f, time: snap.times[String(f.at.block)]!, params: f.kind && f.params ? decodeParams(f.kind, f.params) : null }));
+  return {
+    state: "ok",
+    chain: cfg.chain,
+    address: cfg.address,
+    asOf: snap.time,
+    source: { block: snap.block, hash: snap.hash, hosts },
+    admin: snap.admin,
+    guardian: snap.guardian,
+    delaySeconds: Number(snap.delay),
+    pools: snap.poolAddrs.map((a) => ({ address: a, label: poolLabel(cfg.chain.chainId, a), v: stripActive(snap.pools[a.toLowerCase()]!) })),
+    vaults: snap.vaultAddrs.map((a) => ({ address: a, ratioBps: snap.vaults[a.toLowerCase()]!.ratioBps })),
+    routes: Object.entries(snap.routes).filter(([, on]) => on).map(([d]) => ({ domain: Number(d) })).sort((a, b) => a.domain - b.domain),
+    pending,
+    history,
+  };
+}
+
+const hostOf = (url: string): string => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "?";
+  }
+};
+
+/**
+ * Reads one chain. `urls` are tried in order (the configured ones, `secret`, first, then public ones). Never throws.
+ */
+export async function readRegistry(cfg: RegistryChain, urls: readonly string[], secret: string | undefined, fetchFn: Fetch = fetch): Promise<ChainReading> {
+  const { chain } = cfg;
+  if (!cfg.address || !isAddress(cfg.address)) return { state: "unset", chain };
+  const c = { ...cfg, address: cfg.address };
+  const own = new Set(ownRpcs(secret));
+  const deadline = Date.now() + BUDGET_MS;
+  const fail = (kind: ReadFailure, why: string): ChainReading => ({ state: "error", chain, address: c.address, kind, why });
+
+  // One host per distinct hostname: two URLs on one host are one witness.
+  const seen = new Set<string>();
+  const hosts: Host[] = [];
+  for (const url of urls) {
+    const key = hostOf(url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    hosts.push(new Host(url, own.has(url) ? "configured RPC" : key, chain.chainId, fetchFn, deadline));
+    if (hosts.length >= MAX_HEADS) break;
+  }
+
+  // Heads: who is alive on this chain, and where. The pinned block is the second highest head, so two hosts have it.
+  const heads = (
+    await Promise.all(
+      hosts.map(async (h) => {
+        try {
+          const b = (await h.call("eth_getBlockByNumber", ["latest", false])) as { number?: string } | null;
+          return b?.number ? { h, n: Number(BigInt(b.number)) } : null;
+        } catch {
+          return null;
+        }
+      }),
+    )
+  ).filter((x): x is { h: Host; n: number } => x !== null);
+  if (heads.length < 2) return fail("rpc", "fewer than two RPCs answered on this chain");
+  const block = [...heads].sort((a, b) => b.n - a.n)[1]!.n;
+  const readers = heads.filter((x) => x.n >= block).slice(0, MAX_READERS);
+
+  const answers: { id: string; name: string; json: string; snap: Snap }[] = [];
+  let bad: Inconsistent | null = null;
+  for (const { h } of readers) {
+    try {
+      const snap = await readAt(h, block, c);
+      answers.push({ id: hostOf(h.url), name: h.name, json: JSON.stringify(snap), snap });
+    } catch (e) {
+      if (e instanceof Inconsistent) bad = e;
+      continue;
+    }
+    // Two different hosts with the same answer: done.
+    for (let i = 0; i < answers.length; i++) {
+      const j = answers.findIndex((x, k) => k > i && x.json === answers[i]!.json && x.id !== answers[i]!.id);
+      if (j > -1) {
+        try {
+          return assemble(answers[i]!.snap, c, [answers[i]!.name, answers[j]!.name]);
+        } catch {
+          return fail("inconsistent", "the registry's answer could not be put together");
+        }
+      }
+    }
+  }
+  if (bad) return fail("inconsistent", bad.message);
+  if (answers.length >= 2) return fail("disagree", "the RPCs gave different answers for the same block");
+  return fail("rpc", "fewer than two RPCs answered the read");
+}

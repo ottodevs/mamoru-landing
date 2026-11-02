@@ -18,10 +18,11 @@ import {
   fixtureFetch,
   monadChain,
   standardFixture,
+  routeParams,
 } from "./registry-fixture";
 
 const NOW = 1_800_000_000;
-const URLS = ["https://rpc.example/one"];
+const URLS = ["https://rpc.example/one", "https://rpc2.example/two"];
 const read = (f = standardFixture(NOW), over: Parameters<typeof fixtureChain>[0] = {}, calls?: Calls, opts?: Parameters<typeof fixtureFetch>[2]) =>
   readRegistry(fixtureChain(over), URLS, undefined, fixtureFetch(f, calls, opts));
 const ok = (r: ChainReading) => {
@@ -133,7 +134,9 @@ describe("reading a registry", () => {
   test("logs are read in chunks of the configured size", async () => {
     const calls: Calls = { methods: [], logRanges: [] };
     ok(await read(standardFixture(NOW), { fromBlock: 990_000, logChunk: 4_000 }, calls));
-    expect(calls.logRanges).toEqual([[990_000, 993_999], [994_000, 997_999], [998_000, 1_000_000]]);
+    // Two hosts each read the whole range.
+    expect([...new Set(calls.logRanges.map((r) => r.join("-")))]).toEqual(["990000-993999", "994000-997999", "998000-1000000"]);
+    expect(calls.logRanges).toHaveLength(6);
   });
 
   test("fails closed: logs that cannot be read show an error and no list", async () => {
@@ -143,22 +146,123 @@ describe("reading a registry", () => {
     const html = registrySection([r], NOW).html;
     expect(html).toContain("could not be read just now");
     expect(html).not.toContain("In force");
+    const d = registrySection([{ ...(r as any), kind: "disagree", why: "the RPCs gave different answers for the same block" }], NOW).html;
+    expect(d).toContain("The RPCs disagree about this registry");
   });
 
   test("a public host that serves another chain is not believed", async () => {
     const calls: Calls = { methods: [], logRanges: [] };
     const r = await readRegistry(
       fixtureChain(),
-      ["https://wrong.example", "https://right.example"],
+      ["https://wrong.example", "https://right.example", "https://right2.example"],
       undefined,
       fixtureFetch(standardFixture(NOW), calls, { chainIdOf: (u) => (u.includes("wrong") ? 1 : 8453) }),
     );
     expect(r.state).toBe("ok");
   });
 
-  test("only the right chain answering for no host: error", async () => {
-    const r = await readRegistry(fixtureChain(), ["https://wrong.example"], undefined, fixtureFetch(standardFixture(NOW), undefined, { chainIdOf: () => 1 }));
-    expect(r.state).toBe("error");
+  test("a configured RPC proves its chain too: one on the wrong chain is not believed", async () => {
+    const own = "https://own.example/key";
+    const r = await readRegistry(fixtureChain(), [own, "https://p1.example", "https://p2.example"], own, fixtureFetch(standardFixture(NOW), undefined, { chainIdOf: (u) => (u.includes("own") ? 143 : 8453) }));
+    expect(ok(r).source.hosts).toEqual(["p1.example", "p2.example"]);
+  });
+
+  test("one host alone is never enough: error, no list", async () => {
+    const r = await readRegistry(fixtureChain(), ["https://one.example"], undefined, fixtureFetch(standardFixture(NOW)));
+    expect(r).toMatchObject({ state: "error", kind: "rpc" });
+    const wrong = await readRegistry(fixtureChain(), URLS, undefined, fixtureFetch(standardFixture(NOW), undefined, { chainIdOf: () => 1 }));
+    expect(wrong.state).toBe("error");
+  });
+
+  test("two hosts that disagree: error; three where two agree: fine; never a coin flip", async () => {
+    const lie = (host: string) => (url: string, method: string, _p: unknown[], result: unknown) =>
+      url.includes(host) && method === "eth_call" ? result : url.includes(host) && method === "eth_getBlockByNumber" ? { ...(result as object), hash: "0x" + "ab".repeat(32) } : result;
+    const two = await readRegistry(fixtureChain(), URLS, undefined, fixtureFetch(standardFixture(NOW), undefined, { tamper: lie("rpc2") }));
+    expect(two).toMatchObject({ state: "error", kind: "disagree" });
+    const three = await readRegistry(fixtureChain(), [...URLS, "https://rpc3.example/x"], undefined, fixtureFetch(standardFixture(NOW), undefined, { tamper: lie("rpc2") }));
+    expect(ok(three).source.hosts).toEqual(["rpc.example", "rpc3.example"]);
+  });
+
+  test("a lie about the pending list (a hidden queued change) is a disagreement, not a display", async () => {
+    const hide = (url: string, method: string, _p: unknown[], result: unknown) =>
+      url.includes("rpc2") && method === "eth_getLogs" ? (result as unknown[]).slice(0, -1) : result;
+    const r = await readRegistry(fixtureChain(), URLS, undefined, fixtureFetch(standardFixture(NOW), undefined, { tamper: hide }));
+    expect(r).toMatchObject({ state: "error", kind: "disagree" });
+  });
+
+  test("everything is pinned to one block, not to latest", async () => {
+    const seen: unknown[] = [];
+    const spy = (_u: string, method: string, params: any[], result: unknown) => {
+      if (method === "eth_call") seen.push(params[1]);
+      if (method === "eth_getLogs") seen.push(params[0].toBlock);
+      return result;
+    };
+    ok(await read(standardFixture(NOW), {}, undefined, { tamper: spy }));
+    expect(seen.length).toBeGreaterThan(10);
+    expect(new Set(seen)).toEqual(new Set(["0xf4240"]));
+  });
+
+  test("a log from another address is refused as inconsistent", async () => {
+    const r = await read(standardFixture(NOW), {}, undefined, { logAddress: "0x9999999999999999999999999999999999999999" });
+    expect(r).toMatchObject({ state: "error", kind: "inconsistent" });
+    expect(r.state === "error" && r.why).toContain("not the registry");
+  });
+
+  test("a change id that is not keccak(kind, key, params, nonce) is refused, and no calldata is built", async () => {
+    const forge = (_u: string, method: string, _p: unknown[], result: unknown) =>
+      method === "eth_getLogs"
+        ? (result as { topics: string[] }[]).map((l, i, all) => (i === all.length - 1 ? { ...l, topics: [l.topics[0], "0x" + "cd".repeat(32), ...l.topics.slice(2)] } : l))
+        : result;
+    const r = await read(standardFixture(NOW), {}, undefined, { tamper: forge });
+    expect(r).toMatchObject({ state: "error", kind: "inconsistent" });
+    expect(JSON.stringify(r)).not.toContain("0x17bdb85");
+  });
+
+  test("a failed etaOf read fails the reading: no pending entry is filled in from the log", async () => {
+    const r = await read(standardFixture(NOW), {}, undefined, { failCalls: ["etaOf"] });
+    expect(r).toMatchObject({ state: "error", kind: "rpc" });
+  });
+
+  test("a failed read of the entry a change replaces fails the reading, not 'adds a pool'", async () => {
+    const r = await read(standardFixture(NOW), {}, undefined, { failCalls: ["poolOf"] });
+    expect(r).toMatchObject({ state: "error", kind: "rpc" });
+  });
+
+  test("an error reading is never cached", async () => {
+    clearRegistryCache();
+    const calls: Calls = { methods: [], logRanges: [] };
+    const fetchFn = fixtureFetch(standardFixture(NOW), calls, { failCalls: ["etaOf"] });
+    const opts = { chains: [fixtureChain()], fetchFn, now: 1_000 };
+    // The loader's own URLs are the public pool; the fixture answers whatever it is asked.
+    expect((await loadRegistry({}, opts))[0]!.state).toBe("error");
+    const n = calls.methods.length;
+    await loadRegistry({}, { ...opts, now: 2_000 });
+    expect(calls.methods.length).toBeGreaterThan(n);
+    clearRegistryCache();
+  });
+
+  test("an out-of-range route key is an anomalous pending entry, not dropped", async () => {
+    const f = standardFixture(NOW);
+    const key = `0x${(2n ** 40n).toString(16).padStart(64, "0")}` as `0x${string}`;
+    f.events.push({ t: "queued", block: 999_000, id: 8, kind: "route", key, params: routeParams(), nonce: 7, eta: NOW + 5 * 3600 });
+    f.eta[8] = NOW + 5 * 3600;
+    const r = ok(await read(f));
+    expect(r.pending).toHaveLength(3);
+    const odd = r.pending.find((p) => p.change.key === key)!;
+    expect(odd.anomaly).toContain("outside 32 bits");
+    expect(odd.cancelData).toMatch(/^0xc4d252f5/);
+    // The rest of the routes are still read.
+    expect(r.routes).toEqual([{ domain: 15 }]);
+    const html = registrySection([r], NOW).html;
+    expect(html).toContain("Anomalous.");
+    expect(html).toContain("Treat it as hostile");
+  });
+
+  test("an executed route with an impossible domain is inconsistent, not hidden", async () => {
+    const f = standardFixture(NOW);
+    const key = `0x${(2n ** 40n).toString(16).padStart(64, "0")}` as `0x${string}`;
+    f.events.push({ t: "executed", block: 999_000, id: 9, kind: "route", key, params: routeParams() });
+    expect(await read(f)).toMatchObject({ state: "error", kind: "inconsistent" });
   });
 
   test("the loader reads each chain once per half minute", async () => {
@@ -205,6 +309,12 @@ describe("the Registry page", () => {
     expect(html.match(/class="rg-copy"/g)!.length).toBe(5);
     expect(html.match(/class="rg-fb" role="status"/g)!.length).toBe(5);
     expect(html).toContain(REGISTRY);
+  });
+
+  test("it says which source answered, at which block", async () => {
+    const html = await page();
+    expect(html).toContain("Read at block 1000000");
+    expect(html).toContain("the same answer from rpc.example and rpc2.example");
   });
 
   test("in force and history show the parameters", async () => {
