@@ -444,14 +444,9 @@ import { APP_HREF, OPEN_COPY as copy } from "../open-copy";
     letter-spacing: 0.01em;
     line-height: 1.15;
   }
-  /* A section label, as the flow's eyebrows (Plex Mono, emerald): FAQs names the list, it is not a headline. */
+  /* FAQs names the list under it: a smaller headline than DeFi yield, a step above the questions. */
   h2.label {
-    font-family: var(--font-mono);
-    font-size: 0.8rem;
-    letter-spacing: 0.24em;
-    line-height: 1.4;
-    text-transform: uppercase;
-    color: var(--emerald);
+    font-size: clamp(1.5rem, 2.6vw, 1.9rem);
   }
   .name {
     margin: 0;
