@@ -35,6 +35,10 @@ const ok = (r: ChainReading) => {
   if (r.state !== "ok") throw new Error(`expected ok, got ${r.state}`);
   return r;
 };
+const degraded = (r: ChainReading) => {
+  if (r.state !== "degraded") throw new Error(`expected degraded, got ${r.state}`);
+  return r;
+};
 
 describe("registry config", () => {
   test("no registry is deployed yet: both chains are unset", () => {
@@ -163,10 +167,48 @@ describe("reading a registry", () => {
     expect(calls.methods).toEqual([]);
   });
 
-  test("one configured RPC is read alone, and its host is shown", async () => {
-    const r = ok(await readRegistry(fixtureChain(), ["https://only.example/secret-key"], fixtureFetch(standardFixture(NOW)), NOW));
+  test("one configured RPC is read alone, and is degraded (single source, unverified), never ok", async () => {
+    const r = degraded(await readRegistry(fixtureChain(), ["https://only.example/secret-key"], fixtureFetch(standardFixture(NOW)), NOW));
     expect(r.source.hosts).toEqual(["only.example"]);
     expect(JSON.stringify(r, (_k, v) => (typeof v === "bigint" ? String(v) : v))).not.toContain("secret-key");
+  });
+
+  test("two URLs on one host dedupe to one source: degraded, not ok", async () => {
+    const r = degraded(await readRegistry(fixtureChain(), ["https://same.example/a", "https://same.example/b"], fixtureFetch(standardFixture(NOW)), NOW));
+    expect(r.source.hosts).toEqual(["same.example"]);
+  });
+
+  test("a degraded reading still carries every pending entry it read, and the page says so prominently", async () => {
+    const r = degraded(await readRegistry(fixtureChain(), ["https://only.example/k"], fixtureFetch(standardFixture(NOW)), NOW));
+    expect(r.pending).toHaveLength(2);
+    const html = registrySection([r], NOW).html;
+    expect(html).toContain("Single source, unverified:</b> only.example at block 1000000");
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("Takes effect in 61 h");
+    expect(html).toContain("Waiting to take effect (2)");
+    // A clean two-host reading has no such banner.
+    expect(registrySection([ok(await read())], NOW).html).not.toContain("Single source");
+  });
+
+  test("degraded with nothing pending never says a plain 'Nothing is waiting.'", async () => {
+    const f = standardFixture(NOW);
+    f.eta = {};
+    const r = degraded(await readRegistry(fixtureChain(), ["https://only.example/k"], fixtureFetch(f), NOW));
+    const html = registrySection([r], NOW).html;
+    expect(html).toContain("Nothing is waiting in what this one source returned.");
+    expect(html).not.toContain(">Nothing is waiting.<");
+  });
+
+  test("a degraded reading is not cached", async () => {
+    clearRegistryCache();
+    const calls: Calls = { methods: [], logRanges: [] };
+    const env = { BASE_RPC_URL: "https://only.example/k" };
+    const opts = { chains: [fixtureChain()], fetchFn: fixtureFetch(standardFixture(NOW), calls), now: NOW * 1000 };
+    expect((await loadRegistry(env, opts))[0]!.state).toBe("degraded");
+    const n = calls.methods.length;
+    await loadRegistry(env, { ...opts, now: NOW * 1000 + 1_000 });
+    expect(calls.methods.length).toBeGreaterThan(n);
+    clearRegistryCache();
   });
 
   test("a configured RPC on the wrong chain is not believed: error", async () => {
