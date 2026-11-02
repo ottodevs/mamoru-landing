@@ -226,7 +226,7 @@ function drawers(m: ConsoleModel, now: Date, csrf?: string): string {
         .sort((x, y) => y.value - x.value)
         .map((p) => {
           const n = poolLabel(p.pool);
-          return `<li class="c-pos"><div><b>${esc(n.pair)}</b><span>${esc(n.fee)} fee tier</span></div>${chip(p.inRange ? "In range" : "Out of range", p.inRange ? "good" : "warn")}<span class="n">${esc(money(p.value))} placed</span><span class="n">${esc(money(p.fees))} earned</span></li>`;
+          return `<li class="c-pos"><div><b>${esc(n.pair)}</b><span>${esc(n.fee)} fee tier</span></div>${chip(p.inRange ? "In range" : "Out of range", p.inRange ? "good" : "warn")}<span class="n">${esc(money(p.value))} placed</span><span class="n">${esc(money(p.fees))} not yet harvested</span></li>`;
         })
         .join("");
       const ops = (m.operator?.ops ?? [])
@@ -236,7 +236,7 @@ function drawers(m: ConsoleModel, now: Date, csrf?: string): string {
         .join("");
       return `<template id="c-acct-${esc(a.key)}"><div class="c-drawer-in">
 <p class="c-k">Account ${a.env !== "prod" ? esc(a.env) : ""}</p><h2 class="c-acct">${esc(a.key)}</h2>
-<div class="c-figs two">${fig("Earned", money(a.fees), a.since ? `since ${dayLabel(a.since)}` : "")}${fig("Fee APR", pct(a.apr), `${money(a.lp)} placed, before gas`)}</div>
+<div class="c-figs two">${fig("Earned", money(a.collected), `harvested${a.since ? ` since ${dayLabel(a.since)}` : ""}; ${money(a.fees)} more not yet`)}${fig("Fee APR", pct(a.apr), `${money(a.lp)} placed, before gas`)}</div>
 ${sheet("Positions", `${a.positions.filter((p) => p.inRange).length} of ${a.positions.length} in range`, a.positions.length ? `<ul class="c-poslist">${pos}</ul>` : `<p class="c-empty">No position open. ${a.idle >= 0.01 ? money(a.idle) + " is waiting to be placed." : ""}</p>`)}
 ${authorizationSheet(m, m.caps.byKey.get(a.key.toLowerCase()), now, csrf)}
 ${sheet("Engine activity", m.operator ? "Newest first" : "Not connected yet", ops ? `<ul class="c-feed">${ops}</ul>` : `<p class="c-empty">No recent operations reported.</p>`)}
@@ -270,7 +270,8 @@ const signupChart = (m: ConsoleModel, h = 140) =>
 export function pulseSection(m: ConsoleModel, now: Date): SectionView {
   const t = m.totals;
   const hero = `<section class="c-sheet c-hero"><p class="c-k">Earned for users so far</p>
-<p class="c-big">${esc(money(t.fees))}</p>
+<p class="c-big">${esc(money(t.collected))}</p>
+<p class="c-sub">${esc(money(t.fees))} more earned, not yet harvested</p>
 <p class="c-line"><span>${t.apr != null ? `at least <b>${esc(pct(t.apr))}</b> fee APR, before gas` : "fee APR shows once the engine reports first entries"}</span><span><b>${esc(money(t.lp))}</b> placed in ${t.positions} positions</span><span><b>${t.earning}</b> accounts earning</span></p>
 ${capitalChart(m)}
 <p class="c-foot">Capital held per day, every account including test: that daily table has no environment yet. A dip is a withdrawal as often as a price move.</p></section>`;
@@ -297,7 +298,7 @@ function leaderboard(m: ConsoleModel): string {
   const max = Math.max(...earning.map((a) => a.fees), 1e-9);
   const row = (a: AccountYield) =>
     `<li><button type="button" class="c-lb-row" data-account="${esc(a.key)}"><span class="c-mono">${esc(a.key)}${a.env !== "prod" ? ` <em>${esc(a.env)}</em>` : ""}</span><span class="c-bar"><i style="width:${((a.fees / max) * 100).toFixed(1)}%"></i><small>${esc(money(a.fees))}</small></span><span class="n">${esc(pct(a.apr))}</span><span class="n wide">${esc(money(a.lp))}</span><span class="n wide">${a.positions.filter((p) => p.inRange).length}/${a.positions.length}</span></button></li>`;
-  return `<div class="c-lb-head"><span>Account</span><span>Fees earned</span><span class="n">APR</span><span class="n wide">Placed</span><span class="n wide">In range</span></div><ul class="c-lb">${earning.map(row).join("")}</ul>`;
+  return `<div class="c-lb-head"><span>Account</span><span>Not yet harvested</span><span class="n">APR</span><span class="n wide">Placed</span><span class="n wide">In range</span></div><ul class="c-lb">${earning.map(row).join("")}</ul>`;
 }
 
 function poolCards(m: ConsoleModel): string {
@@ -305,7 +306,7 @@ function poolCards(m: ConsoleModel): string {
   return `<ul class="c-pools">${m.pools
     .map((p) => {
       const n = poolLabel(p.pool);
-      return `<li><div class="c-pool-top"><div><b>${esc(n.pair)}</b><span>${esc(n.fee)} fee tier</span></div><span class="c-pool-apr">${esc(pct(p.apr))}</span></div><dl><dt>Fees earned</dt><dd>${esc(money(p.fees))}</dd><dt>Placed</dt><dd>${esc(money(p.value))}</dd><dt>In range</dt><dd>${p.inRange} of ${p.positions}</dd></dl></li>`;
+      return `<li><div class="c-pool-top"><div><b>${esc(n.pair)}</b><span>${esc(n.fee)} fee tier</span></div><span class="c-pool-apr">${esc(pct(p.apr))}</span></div><dl><dt>Not yet harvested</dt><dd>${esc(money(p.fees))}</dd><dt>Placed</dt><dd>${esc(money(p.value))}</dd><dt>In range</dt><dd>${p.inRange} of ${p.positions}</dd></dl></li>`;
     })
     .join("")}</ul>`;
 }
@@ -321,12 +322,12 @@ export function yieldView(m: ConsoleModel, now: Date): SectionView {
   const t = m.totals;
   const best = m.accounts.filter((a) => a.apr != null).sort((a, b) => (b.apr ?? 0) - (a.apr ?? 0))[0];
   const figs = `<div class="c-figs">
-${fig("Earned to date", money(t.fees), "uncollected fees, every position")}
+${fig("Earned to date", money(t.collected), `harvested; ${money(t.fees)} more not yet harvested`)}
 ${fig("Fee APR", pct(t.apr), "at least: since first entry, weighted by capital, before gas")}
 ${fig("Best account", best ? pct(best.apr) : "n/a", best ? `${best.key}, ${money(best.lp)} placed` : "")}
 ${harvestFig(m)}
 </div>`;
-  const body = `<div class="c-grid hero">${sheet("Yield by account", "Bar length is fees earned. Open an account for its positions.", leaderboard(m))}${sheet("Pools", "What each pool earns per dollar placed", poolCards(m))}</div>`;
+  const body = `<div class="c-grid hero">${sheet("Yield by account", "Bar length is fees not yet harvested. Open an account for its positions.", leaderboard(m))}${sheet("Pools", "What each pool earns per dollar placed", poolCards(m))}</div>`;
   const daily = sheet("Daily yield", "Fees earned, gas paid and the net per day, on one axis in dollars", `<p class="c-empty">The ledger started on 18 Oct. This fills in as each day closes; gas per account is recorded once the operator writes it (ottodevs/mamoru#129).</p>`);
   return view("yield", "Yield", head("Yield", "/ops/yield", m) + figs + body + daily + drawers(m, now));
 }
@@ -449,7 +450,7 @@ export function costsView(m: ConsoleModel, now: Date): SectionView {
 ${fig("Relayer balance", r ? money(r.usd) : "n/a", r ? `${r.eth.toFixed(4)} ETH, funds ${runway ?? "?"} more accounts` : "not read", meter)}
 ${fig("Cost of a new account", money(r?.costPerAccountUsd ?? null), "Safe deploy, activation and gas reserve")}
 ${fig("RPC, last 24 h", rpc.length ? `${Math.round(last24 / 1000)}K CU` : "n/a", rpc.length ? `${(last24 / 24 / 1000).toFixed(1)}K CU per hour on average` : "operator metrics not connected")}
-${fig("Fee revenue to date", money(m.totals.fees * 0.1), "10% of the yield, projected")}
+${fig("Fee revenue to date", money(m.totals.collected != null ? m.totals.collected * 0.1 : null), "10% of what was harvested, projected")}
 </div>`;
   const rpcSheet = rpc.length
     ? sheet(
