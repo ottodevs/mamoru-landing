@@ -10,6 +10,7 @@ const YIELD_SCHEMA = `
 CREATE TABLE accounts (account_key TEXT PRIMARY KEY, user_id TEXT NOT NULL, chain_id INTEGER NOT NULL, address TEXT NOT NULL, created_at TEXT NOT NULL, env TEXT NOT NULL DEFAULT 'prod', is_test INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE account_snapshot_latest (chain_id INTEGER NOT NULL, address TEXT NOT NULL, account_key TEXT NOT NULL, env TEXT NOT NULL, block INTEGER NOT NULL, read_at TEXT NOT NULL, deployed INTEGER NOT NULL, idle_usdc INTEGER NOT NULL, lp_usdc INTEGER NOT NULL, fees_usdc INTEGER NOT NULL, owed_usdc INTEGER NOT NULL, total_usdc INTEGER NOT NULL, positions_json TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE account_daily (day TEXT NOT NULL, chain_id INTEGER NOT NULL, address TEXT NOT NULL, account_key TEXT NOT NULL, env TEXT NOT NULL, block_open INTEGER NOT NULL, block_close INTEGER NOT NULL, total_open_usdc INTEGER NOT NULL, total_close_usdc INTEGER NOT NULL, idle_close_usdc INTEGER NOT NULL, lp_close_usdc INTEGER NOT NULL, fees_open_usdc INTEGER NOT NULL, fees_close_usdc INTEGER NOT NULL, collected_usdc INTEGER, gas_paid_wei TEXT);
+CREATE TABLE yield_ledger_account_receipts (day TEXT NOT NULL, chain_id INTEGER NOT NULL, address TEXT NOT NULL, account_key TEXT NOT NULL, env TEXT NOT NULL, gas_paid_wei TEXT, collected_usdc INTEGER, digest TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE yield_ledger_position_daily (day TEXT NOT NULL, chain_id INTEGER NOT NULL, token_id INTEGER NOT NULL, account_key TEXT NOT NULL, address TEXT NOT NULL, env TEXT NOT NULL, pool TEXT NOT NULL, block_open INTEGER NOT NULL, block_close INTEGER NOT NULL, accrued0_open TEXT NOT NULL, accrued1_open TEXT NOT NULL, accrued_usd_open INTEGER NOT NULL, accrued0_close TEXT NOT NULL, accrued1_close TEXT NOT NULL, accrued_usd_close INTEGER NOT NULL, value_usd INTEGER NOT NULL, hold_value_usd INTEGER NOT NULL, collected0 TEXT, collected1 TEXT, collected_usd INTEGER, fee_accrued_usd INTEGER, updated_at TEXT NOT NULL);
 `;
 
@@ -20,6 +21,9 @@ INSERT INTO accounts VALUES ('acc1', 'u1', 8453, '0xAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 INSERT INTO accounts VALUES ('acc2', 'u2', 8453, '0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB', '2026-09-02T00:00:00Z', 'beta', 0);
 INSERT INTO account_snapshot_latest VALUES (8453, '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'acc1', 'unknown', 100, '2026-10-18T09:00:00Z', 1, 1000000, 130000000, 300000, 0, 131300000, '[{"tokenId":"1","pool":"pool:USDC/ETH/500","inRange":true,"valueUsdc":"130000000","feesUsdc":"300000","owedUsdc":"0"}]', '2026-10-18T09:00:05Z');
 INSERT INTO account_snapshot_latest VALUES (8453, '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'acc2', 'unknown', 100, '2026-10-18T09:00:00Z', 1, 500000, 10000000, 50000, 0, 10550000, '[]', '2026-10-18T09:00:05Z');
+INSERT INTO yield_ledger_account_receipts VALUES ('2026-10-12', 8453, '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'acc1', 'prod', '1', 400000, 'x', '2026-10-12T10:00:00Z');
+INSERT INTO yield_ledger_account_receipts VALUES ('2026-10-17', 8453, '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'acc1', 'prod', '1', 500000, 'x', '2026-10-17T10:00:00Z');
+INSERT INTO yield_ledger_account_receipts VALUES ('2026-10-17', 8453, '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'acc2', 'beta', '1', 70000, 'x', '2026-10-17T10:00:00Z');
 INSERT INTO account_daily VALUES ('2026-10-17', 8453, '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'acc1', 'unknown', 90, 95, 120000000, 121000000, 0, 120000000, 1000000, 1500000, 500000, NULL);
 INSERT INTO account_daily VALUES ('2026-10-18', 8453, '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'acc1', 'unknown', 96, 100, 121000000, 131300000, 1000000, 130000000, 1500000, 2000000, NULL, NULL);
 `;
@@ -113,11 +117,11 @@ describe("console gate (otto/mamoru-astro#24)", () => {
 });
 
 describe("console views", () => {
-  test("Pulse, production by default: the beta account is out, the prod account's fees lead", async () => {
+  test("Pulse, production by default: the beta account is out, the prod account's harvested fees lead", async () => {
     const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "operator"]));
     const html = await (await worker.fetch(get("/ops", cookie), env)).text();
     expect(html).toContain("Earned for users so far");
-    expect(html).toContain('<p class="c-big">30¢</p>');
+    expect(html).toContain('<p class="c-big">90¢</p>');
     expect(html).not.toContain("c-acct-acc2");
     expect(html).toContain('id="c-acct-acc1"');
   });
@@ -207,6 +211,29 @@ describe("console honesty (review r1, PR #13)", () => {
     // acc2 (beta) has fees but no reported first entry: it is out of the numerator as well as the denominator.
     const a1 = m.accounts.find((a) => a.key === "acc1")!;
     expect(m.totals.apr!).toBeCloseTo(a1.apr!, 6);
+  });
+});
+
+describe("earned is what was harvested (otto/mamoru-astro#43)", () => {
+  test("Pulse's hero is the lifetime collected of the accounts in scope; uncollected fees are a secondary figure", async () => {
+    const m = await loadConsole(memoryDb(["yield", "seed", "operator"]), "prod", NOW, null);
+    expect(m.totals.collected!).toBeCloseTo(0.9, 6);
+    expect(m.totals.fees).toBeCloseTo(0.3, 6);
+    expect(m.accounts[0]!.collected!).toBeCloseTo(0.9, 6);
+    const all = await loadConsole(memoryDb(["yield", "seed", "operator"]), "all", NOW, null);
+    expect(all.totals.collected!).toBeCloseTo(0.97, 6);
+    const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "operator"]));
+    const html = await (await worker.fetch(get("/ops", cookie), env)).text();
+    expect(html).toContain('<p class="c-big">90¢</p>');
+    expect(html).toContain("30¢ more earned, not yet harvested");
+  });
+
+  test("without the receipts table, earned is n/a, never the uncollected fees", async () => {
+    const db = memoryDb(["yield", "seed"]);
+    await db.prepare("DROP TABLE yield_ledger_account_receipts").run();
+    const m = await loadConsole(db, "prod", NOW, null);
+    expect(m.totals.collected).toBeNull();
+    expect(m.accounts[0]!.collected).toBeNull();
   });
 });
 
