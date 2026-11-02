@@ -1,9 +1,9 @@
 ---
 import Base from "../layouts/Base.astro";
 import FlowStory from "../components/FlowStory.astro";
+import SiteFooter from "../components/SiteFooter.astro";
 import { APP_HREF, OPEN_COPY as copy } from "../open-copy";
 
-const emailHref = `mailto:${copy.footer.email}`;
 ---
 <Base title={copy.title} description={copy.description} canonical="https://mamoru.lol/" themeColor="#F1EEE5">
   <a class="skip" href="#content">Skip to content</a>
@@ -69,6 +69,9 @@ const emailHref = `mailto:${copy.footer.email}`;
                   <span class="watch-len">{item.watch.length}</span>
                 </button>
               ) : null}
+              {"link" in item ? (
+                <a class="qa-link" href={item.link.href} target="_blank" rel="noopener noreferrer">{item.link.label}</a>
+              ) : null}
             </details>
           ))}
         </div>
@@ -83,28 +86,7 @@ const emailHref = `mailto:${copy.footer.email}`;
     </div>
   </dialog>
 
-  <footer class="foot">
-    <div class="foot-links">
-      <a class="mail" href={emailHref}>{copy.footer.email}</a>
-      <a
-        class="mail x-link"
-        href={copy.footer.x.href}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label={`${copy.footer.x.handle} on X`}
-      >
-        <svg class="x-logo" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-        </svg>
-        <span>{copy.footer.x.handle}</span>
-      </a>
-    </div>
-    <p class="body">{copy.footer.line}</p>
-    <p class="foot-sign">
-      <img class="seal" src="/seal-mamoru.png" width="40" height="40" alt="" />
-      <span class="seal-word">{copy.footer.name}</span>
-    </p>
-  </footer>
+  <SiteFooter />
 
   <dialog class="onboard" id="mamoru-onboard" aria-labelledby="onboard-title">
     <div class="onboard-card">
@@ -392,7 +374,6 @@ const emailHref = `mailto:${copy.footer.email}`;
   }
   .cta:focus-visible,
   .brand:focus-visible,
-  .mail:focus-visible,
   summary:focus-visible {
     outline: 2px solid var(--emerald);
     outline-offset: 3px;
@@ -447,6 +428,10 @@ const emailHref = `mailto:${copy.footer.email}`;
     width: 100%;
     padding: clamp(4rem, 9vw, 6.5rem) clamp(1.15rem, 5vw, 4.5rem);
     box-sizing: border-box;
+  }
+  /* The FAQs are the last band: the footer starts closer, without a rule of its own. */
+  #questions {
+    padding-bottom: clamp(2rem, 4vw, 3rem);
   }
   .wrap {
     max-width: 68rem;
@@ -509,6 +494,23 @@ const emailHref = `mailto:${copy.footer.email}`;
   .qa .body {
     margin-top: 0.7rem;
     padding-bottom: 0.35rem;
+  }
+
+  .qa-link {
+    display: inline-block;
+    margin-top: 0.9rem;
+    font-size: 1.05rem;
+    color: var(--emerald);
+    text-decoration: underline;
+    text-underline-offset: 0.18em;
+    text-decoration-thickness: 1px;
+  }
+  .qa-link:hover {
+    color: var(--ink);
+  }
+  .qa-link:focus-visible {
+    outline: 2px solid var(--emerald);
+    outline-offset: 3px;
   }
 
   .watch {
@@ -581,66 +583,6 @@ const emailHref = `mailto:${copy.footer.email}`;
     height: auto;
     aspect-ratio: 16 / 9;
     background: var(--ink);
-  }
-
-  .mail {
-    color: var(--emerald);
-    text-underline-offset: 0.16em;
-  }
-  .mail:hover {
-    color: var(--ink);
-  }
-
-  /* One centred column signed by the seal, as on the dashboard. No rule on top: the FAQ already closes with one, space and the seal end the page. */
-  .foot {
-    width: 100%;
-    box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 1.25rem;
-    text-align: center;
-    padding: 2.5rem clamp(1.15rem, 5vw, 4.5rem) 3rem;
-  }
-  .foot .body {
-    margin: 0;
-  }
-  .foot-links {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-wrap: wrap;
-    gap: 0.5rem 1.75rem;
-  }
-  .foot-sign {
-    margin: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.85rem;
-  }
-  .x-link {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.45rem;
-  }
-  /* The seal signs the end of the page, as on the dashboard. */
-  .seal {
-    width: 2.5rem;
-    height: auto;
-    display: block;
-  }
-  .seal-word {
-    font-family: var(--font-mono);
-    font-size: 0.8rem;
-    letter-spacing: 0.45em;
-    text-transform: uppercase;
-    color: var(--stone);
-  }
-  .x-logo {
-    width: 0.95rem;
-    height: 0.95rem;
-    fill: currentColor;
-    flex: none;
   }
 
   @media (max-width: 760px) {

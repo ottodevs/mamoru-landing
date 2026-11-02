@@ -146,6 +146,11 @@ export const OPEN_COPY = {
         q: "Is there a token?",
         a: ["No."],
       },
+      {
+        q: "Is Mamoru open source?",
+        a: ["Yes. The code is public under the MIT license, so anyone can review how Mamoru works."],
+        link: { label: "See the code on GitHub", href: "https://github.com/ottodevs/mamoru" },
+      },
     ],
   },
   footer: {
@@ -153,5 +158,10 @@ export const OPEN_COPY = {
     line: "Non-custodial. No token.",
     email: "hi@mamoru.lol",
     x: { handle: "@entermamoru", href: "https://x.com/entermamoru" },
+    legal: [
+      { label: "Terms", href: "/terms" },
+      { label: "Privacy", href: "/privacy" },
+      { label: "Risks", href: "/risks" },
+    ],
   },
 } as const;
