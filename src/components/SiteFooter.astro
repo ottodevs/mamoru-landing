@@ -24,6 +24,9 @@ const emailHref = `mailto:${copy.footer.email}`;
     <img class="seal" src="/seal-mamoru.png" width="40" height="40" alt="" />
     <span class="seal-word">{copy.footer.name}</span>
   </p>
+  <nav class="legal" aria-label="Legal">
+    {copy.footer.legal.map((item) => <a href={item.href}>{item.label}</a>)}
+  </nav>
 </footer>
 
 <style>
@@ -87,7 +90,27 @@ const emailHref = `mailto:${copy.footer.email}`;
     text-transform: uppercase;
     color: var(--stone);
   }
-  .mail:focus-visible {
+  /* Terms, privacy and risks: small and quiet under the seal, where the sector puts them. */
+  .legal {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.4rem 1.25rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+  }
+  .legal a {
+    color: var(--stone);
+    text-decoration: none;
+  }
+  .legal a:hover {
+    color: var(--ink);
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+  }
+  .mail:focus-visible,
+  .legal a:focus-visible {
     outline: 2px solid var(--emerald);
     outline-offset: 3px;
   }
