@@ -87,6 +87,7 @@ const emailHref = `mailto:${copy.footer.email}`;
   </dialog>
 
   <footer class="foot">
+    <p class="body">{copy.footer.line}</p>
     <div class="foot-links">
       <a class="mail" href={emailHref}>{copy.footer.email}</a>
       <a
@@ -102,7 +103,6 @@ const emailHref = `mailto:${copy.footer.email}`;
         <span>{copy.footer.x.handle}</span>
       </a>
     </div>
-    <p class="body">{copy.footer.line}</p>
     <p class="foot-sign">
       <img class="seal" src="/seal-mamoru.png" width="40" height="40" alt="" />
       <span class="seal-word">{copy.footer.name}</span>
@@ -450,6 +450,10 @@ const emailHref = `mailto:${copy.footer.email}`;
     width: 100%;
     padding: clamp(4rem, 9vw, 6.5rem) clamp(1.15rem, 5vw, 4.5rem);
     box-sizing: border-box;
+  }
+  /* The FAQs are the last band: the footer starts closer, without a rule of its own. */
+  #questions {
+    padding-bottom: clamp(2rem, 4vw, 3rem);
   }
   .wrap {
     max-width: 68rem;
