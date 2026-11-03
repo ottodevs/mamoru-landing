@@ -7,7 +7,7 @@
  * only marks what changed as it is typed: without JavaScript the form works the same.
  */
 
-import { BOUNDS, DEFAULT_CAP_USDC, DEFAULT_SETTINGS, RECOMMENDED_MAX_PER_WEEK, RECOMMENDED_SETTINGS, pctOf, usdcOf, type EngineSettings } from "./engine-settings-model";
+import { BOUNDS, DEFAULT_CAP_USDC, DEFAULT_SETTINGS, RECOMMENDED_MAX_PER_WEEK, RECOMMENDED_SETTINGS, canonicalJson, pctOf, usdcOf, type EngineSettings } from "./engine-settings-model";
 import type { Env, InEffect, TemplateRow, VersionRow } from "./engine-settings-store";
 import { csrfField, maskEmail, noticeHtml, pageHead, type SectionView } from "./ops";
 import { esc } from "./text";
@@ -358,9 +358,9 @@ function hiddenFields(env: Env, template: string, s: EngineSettings, canary: str
     h("eth_vol_pct", pctOf(s.guard.eth.volBps)),
     h("min_entry_on", s.minEntry ? "1" : "0"),
     h("min_entry_gas", s.minEntry ? String(s.minEntry.gasMultiple) : ""),
-    h("rerange_field", "1"),
-    h("rerange_cap_on", weeklyOf(s) === null ? "0" : "1"),
-    h("rerange_max_week", weeklyOf(s) === null ? "" : String(weeklyOf(s))),
+    // What the form has no full field for, exactly as checked: confirming writes this set, nothing is merged again.
+    h("kept_carried", "1"),
+    h("kept_json", s.rerange === undefined && s.bridgeOut === undefined ? "" : canonicalJson({ ...(s.rerange === undefined ? {} : { rerange: s.rerange }), ...(s.bridgeOut === undefined ? {} : { bridgeOut: s.bridgeOut }) } as EngineSettings)),
     h("canary", canary),
     h("reason", reason),
   ].join("");

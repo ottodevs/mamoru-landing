@@ -154,14 +154,30 @@ export const KEPT_KEYS = ["rerange", "bridgeOut"] as const;
  * What the accounts a write targets run now: for a canary whose accounts all sit in the canary in effect, that canary;
  * otherwise (env-wide, or accounts outside it) the env-wide version.
  */
-export function keptFrom(now: InEffect | undefined, accountKeys: string[] | null): EngineSettings | null {
+export type KeptOptions = {
+  /** Keys the draft already carries: no source is needed for them, so they never conflict. */
+  carried?: readonly string[];
+  /** The draft sets `rerange.maxPerWeek` itself (otto/mamoru-astro#45): accounts that differ only in it agree. */
+  ownMaxPerWeek?: boolean;
+};
+
+/** A kept setting as the operator reads it: a bare `{ mode: "eager" }` is the same as none. */
+function hiddenOf(s: EngineSettings, k: (typeof KEPT_KEYS)[number], o: KeptOptions): unknown {
+  const v = (s as Record<string, unknown>)[k];
+  if (k !== "rerange" || !v) return v ?? null;
+  const { maxPerWeek, ...rest } = v as Record<string, unknown>;
+  const r = o.ownMaxPerWeek || maxPerWeek === undefined ? rest : { ...rest, maxPerWeek };
+  return Object.keys(r).length === 1 && r.mode === "eager" ? null : canonicalJson(r as unknown as EngineSettings);
+}
+
+export function keptFrom(now: InEffect | undefined, accountKeys: string[] | null, o: KeptOptions = {}): EngineSettings | null {
   const keys = accountKeys?.map((k) => k.toLowerCase()) ?? [];
   const inCanary = new Set((now?.canary?.accountKeys ?? []).map((k) => k.toLowerCase()));
   if (keys.length && now?.canary && keys.every((k) => inCanary.has(k))) return now.canary.settings;
   // Some accounts in the canary in effect and some not: if those two run different hidden settings, no single version
   // keeps both, and picking one would change the others without a field saying so (review r3). Refused instead.
   if (keys.some((k) => inCanary.has(k)) && now?.canary) {
-    const hidden = (s: EngineSettings) => JSON.stringify(KEPT_KEYS.map((k) => (s as Record<string, unknown>)[k] ?? null));
+    const hidden = (s: EngineSettings) => JSON.stringify(KEPT_KEYS.filter((k) => !o.carried?.includes(k)).map((k) => hiddenOf(s, k, o)));
     if (hidden(now.canary.settings) !== hidden(now.wide?.settings ?? ({} as EngineSettings))) throw new Error("these accounts run different re-range or bridge-out settings today; write the canary for the accounts of the current canary and the others separately");
   }
   return now?.wide?.settings ?? null;
@@ -193,7 +209,7 @@ export type NewVersion = { env: Env; accountKeys: string[] | null; template: str
  */
 export async function appendVersion(db: D1Db, v: NewVersion & { expectedMaxId: number }, now: Date = new Date()): Promise<number> {
   // otto/mamoru#218: the form has no field for these, so a form write keeps what the env runs. A rollback writes its target as is.
-  if (!v.rollbackOf) v = { ...v, settings: keepUnedited(v.settings, keptFrom((await inEffect(db))[v.env], v.accountKeys)) };
+  if (!v.rollbackOf) v = { ...v, settings: keepUnedited(v.settings, keptFrom((await inEffect(db))[v.env], v.accountKeys, { carried: KEPT_KEYS.filter((k) => k in v.settings) })) };
   const errors = validateSettings(v.settings);
   if (errors.length) throw new Error(errors.join("; "));
   if (!v.reason.trim()) throw new Error("a reason is required");
