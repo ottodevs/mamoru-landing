@@ -1,10 +1,8 @@
-# Mamoru landing
+# Mamoru website
 
-Coming-soon page for [mamoru.lol](https://mamoru.lol). One screen on rice paper: the Mamoru lockup, `APY. DELIVERED.`, a countdown to the opening after ETHGlobal Tokyo, and an email bar. The next site lives behind `/ops/landing` until `OPEN_AT`.
+Source of [mamoru.lol](https://mamoru.lol), the website of [Mamoru](https://github.com/ottodevs/mamoru): automated, non-custodial savings. It serves the landing page, the deck (`/deck`), the legal pages (`/terms`, `/privacy`, `/risks`) and a private ops console at `/ops` (Google sign-in, allowlist only). The app itself is [app.mamoru.lol](https://app.mamoru.lol), code in [ottodevs/mamoru](https://github.com/ottodevs/mamoru).
 
-Built with [Astro](https://astro.build). Served by a Cloudflare Worker that also handles `POST /api/notify`.
-
-A push to `main` deploys this page to [mamoru.lol](https://mamoru.lol).
+Built with [Astro](https://astro.build) and served by a Cloudflare Worker. A push to `main` deploys to mamoru.lol.
 
 ## Channels: prod (main) / staging (staging → /ops/preview)
 
@@ -54,11 +52,12 @@ bun run build && bunx wrangler dev
 
 | Path | What it is |
 |---|---|
-| `src/pages/index.astro` | The screen: lockup, hero, teaser, countdown, email bar |
-| `src/pages/open.astro` | Next landing, gated at `/ops/landing` until open |
+| `src/pages/open.astro`, `src/open-copy.ts` | The live landing at `/`: hero, how it works, FAQ, footer. All its words are in `open-copy.ts` |
+| `src/pages/terms.astro`, `privacy.astro`, `risks.astro` | Legal pages (`LegalPage`, `SiteFooter`) |
+| `src/pages/deck.astro` | The deck at `/deck` |
+| `src/pages/index.astro` | The coming-soon page of September (countdown, email bar), no longer served at `/` |
 | `src/pages/app/*.astro` | UI mockup, private at `/ops/app` (Google, same allowlist). The real app is `ottodevs/mamoru` on app.mamoru.lol |
-| `src/components/Countdown.astro` | Countdown to `2026-09-27T09:00:00+09:00` |
-| `src/components/EmailBar.astro` | Email bar and the on-the-list follow-up |
+| `src/components/Countdown.astro`, `EmailBar.astro` | Parts of the old coming-soon page |
 | `src/styles/global.css` | Rice paper field, ink, Noto Serif |
 | `src/worker.ts` | Assets, `POST /api/notify`, and the private panel at `/ops` |
 | `src/ops-infra.ts`, `src/infra-snapshot.ts` | `/ops/money/funding` (was `/ops/infra`): relayer status, Funding per chain, cost per new account; the Ethereum holdings per account are in `src/ops-outside.ts`, shown on `/ops/accounts` (same Google allowlist as `/ops`). Nav (otto/mamoru-astro#35): Pulse, Yield, Accounts, Engine (`/ops/engine`, `/settings`, `/functions`), Money (`/ops/money`, `/funding`); the old `/ops/settings`, `/functions`, `/costs`, `/infra` redirect (301) |
