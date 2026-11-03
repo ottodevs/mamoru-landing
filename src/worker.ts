@@ -985,11 +985,6 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
       const scope = (keys: readonly string[] | null) => JSON.stringify(keys && keys.length ? [...new Set(keys.map((k) => k.toLowerCase()))].sort() : null);
       const draftKeys = draft.canary.split(/\s+/).map((k) => k.trim()).filter(Boolean);
       if (target && target.env === draft.env && scope(target.accountKeys) === scope(draftKeys) && canonicalJson(target.settings) === canonicalJson(draft.settings)) rollbackOf = back;
-      // An edited template is recorded as such, never under the name of a preset it no longer matches. A name this
-      // code already wrote ("custom (from X)") comes back from the confirm screen and is kept as it is.
-      const named = templates.find((t) => t.name === draft.template);
-      const alreadyCustom = draft.template === "custom" || draft.template.startsWith("custom (from ");
-      if (!rollbackOf && !alreadyCustom && (!named || canonicalJson(named.settings) !== canonicalJson(draft.settings))) draft = { ...draft, template: named ? `custom (from ${named.name})`.slice(0, 120) : "custom" };
       // otto/mamoru-astro#45: the set is checked and confirmed as it will be written. What the form does not carry
       // (re-range, bridge-out) comes from what the targeted accounts run now, and the weekly re-range cap goes into
       // that re-range. The confirm screen carries the result as is (kept_json), so a confirm never merges again. A
@@ -1004,6 +999,12 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
           return respond(await settingsView({ draft, notice: { text: `Not applied: ${(e as Error).message}.`, tone: "bad" } }, 400));
         }
         draft = { ...draft, settings: keepUnedited(withMaxPerWeek(draft.settings, weekly, "rerange" in draft.settings ? draft.settings.rerange : base?.rerange), base) };
+        // An edited template is recorded as such, never under the name of a preset it no longer matches: compared as
+        // that preset would be written (with what it does not carry kept), so the first POST and the confirm agree.
+        // A name this code already wrote ("custom (from X)") comes back from the confirm screen and is kept as it is.
+        const named = templates.find((t) => t.name === draft.template);
+        const alreadyCustom = draft.template === "custom" || draft.template.startsWith("custom (from ");
+        if (!alreadyCustom && (!named || canonicalJson(keepUnedited(named.settings, base)) !== canonicalJson(draft.settings))) draft = { ...draft, template: named ? `custom (from ${named.name})`.slice(0, 120) : "custom" };
       }
     }
     const errors = validateSettings(draft.settings);
