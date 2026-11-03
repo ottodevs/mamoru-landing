@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import type { D1Db } from "../src/d1-infra";
-import { BOUNDS, DEFAULT_SETTINGS, canonicalJson, pctOf, riskyChanges, settingsFromForm, validateSettings, type EngineSettings } from "../src/engine-settings-model";
+import { BOUNDS, DEFAULT_SETTINGS, canonicalJson, maxPerWeekFromForm, pctOf, riskyChanges, settingsFromForm, validateSettings, withMaxPerWeek, type EngineSettings } from "../src/engine-settings-model";
 import { appendVersion, listVersions, maxIdOf, SettingsConflict, type NewVersion } from "../src/engine-settings-store";
 import { sealSession } from "../src/ops";
 import worker, { type Env } from "../src/worker";
@@ -84,6 +84,7 @@ describe("engine settings model (copy of packages/policy/src/engine-settings.ts)
       fallBps: { min: 100, max: 3000 },
       volBps: { min: 1000, max: 50_000 },
       gasMultiple: { min: 1, max: 50 },
+      maxPerWeek: { min: 1, max: 50 },
     });
     expect(canonicalJson(DEFAULT_SETTINGS)).toBe('{"capUsdc":null,"depth":null,"guard":{"btc":{"fallBps":700,"volBps":8000},"enabled":false,"eth":{"fallBps":900,"volBps":10000}}}');
   });
@@ -502,5 +503,67 @@ describe('/ops never drops settings it has no field for (otto/mamoru#218)', () =
     await seed(db, { env: 'prod', accountKeys: null, template: 'lazy', settings: WITH_LAZY, author: 'x', reason: 'r' })
     await seed(db, { env: 'prod', accountKeys: null, template: 'plain', settings: DEFAULT_SETTINGS, author: 'x', reason: 'back', rollbackOf: plain })
     expect((await stored(db)).rerange).toBeUndefined()
+  })
+})
+
+describe('re-ranges per week from /ops (otto/mamoru-astro#45, D13)', () => {
+  const LAZY = { mode: 'lazy', edgeBufferTicks: 100, minDwellSeconds: 1800, horizonSeconds: 86_400, lvrWeightBps: 10_000 }
+  const WITH_LAZY = { ...DEFAULT_SETTINGS, rerange: LAZY } as unknown as EngineSettings
+  const newest = async (db: D1Db) => (await listVersions(db))![0]!.settings as unknown as Record<string, unknown>
+  const form = (o: Record<string, string>) => { const f = new FormData(); for (const [k, v] of Object.entries(o)) f.set(k, v); return f }
+
+  test('the form field: absent on an old page, off, a number, a typo', () => {
+    expect(maxPerWeekFromForm(form({}))).toBeUndefined()
+    expect(maxPerWeekFromForm(form({ rerange_field: '1' }))).toBeNull()
+    expect(maxPerWeekFromForm(form({ rerange_field: '1', rerange_cap_on: '1', rerange_max_week: '2' }))).toBe(2)
+    expect(maxPerWeekFromForm(form({ rerange_field: '1', rerange_cap_on: '1', rerange_max_week: '2.5' }))).toBeNaN()
+    expect(maxPerWeekFromForm(form({ rerange_field: '1', rerange_cap_on: '1', rerange_max_week: '' }))).toBeNaN()
+  })
+
+  test('the cap goes into what runs: lazy parameters kept, eager default when none, off removes only the cap', () => {
+    expect(withMaxPerWeek(DEFAULT_SETTINGS, 2, LAZY as EngineSettings['rerange']).rerange).toEqual({ ...LAZY, maxPerWeek: 2 })
+    expect(withMaxPerWeek(DEFAULT_SETTINGS, 2, undefined).rerange).toEqual({ mode: 'eager', maxPerWeek: 2 })
+    expect(withMaxPerWeek(DEFAULT_SETTINGS, null, { ...LAZY, maxPerWeek: 2 } as EngineSettings['rerange']).rerange).toEqual(LAZY)
+    expect('rerange' in withMaxPerWeek(DEFAULT_SETTINGS, null, undefined)).toBe(false)
+    expect(withMaxPerWeek(DEFAULT_SETTINGS, undefined, LAZY as EngineSettings['rerange'])).toBe(DEFAULT_SETTINGS)
+  })
+
+  test('bounds as the operator (1 to 50), and raising or removing it is risky; adding or lowering it is not', () => {
+    expect(BOUNDS.maxPerWeek).toEqual({ min: 1, max: 50 })
+    for (const n of [0, 51, 2.5, Number.NaN]) expect(validateSettings({ ...DEFAULT_SETTINGS, rerange: { mode: 'eager', maxPerWeek: n } })).toContain('rerange.maxPerWeek must be a whole number from 1 to 50')
+    expect(validateSettings({ ...DEFAULT_SETTINGS, rerange: { mode: 'eager', maxPerWeek: 2 } })).toEqual([])
+    const at = (n?: number): EngineSettings => ({ ...DEFAULT_SETTINGS, rerange: n === undefined ? { mode: 'eager' } : { mode: 'eager', maxPerWeek: n } })
+    expect(riskyChanges(at(), at(2))).toEqual([])
+    expect(riskyChanges(at(3), at(2))).toEqual([])
+    expect(riskyChanges(at(2), at(4))).toEqual(['more re-ranges per week are allowed'])
+    expect(riskyChanges(at(2), at())).toEqual(['more re-ranges per week are allowed'])
+    // A set that does not say how it re-ranges keeps what runs: nothing to warn about.
+    expect(riskyChanges(at(2), DEFAULT_SETTINGS)).toEqual([])
+  })
+
+  test('set from the page: written into the lazy setting in effect, removed only after the confirm screen', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'lazy', settings: WITH_LAZY, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const page = await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text()
+    expect(page).toContain('name="rerange_field" value="1"')
+    expect(page).toContain('Now no cap')
+    const csrf = csrfOf(page)
+    // Adding the cap is not risky: written at once.
+    const on = await (await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, rerange_field: '1', rerange_cap_on: '1', rerange_max_week: '2' }), cookie), env)).text()
+    expect(on).not.toContain('Confirm this change')
+    expect((await newest(db)).rerange).toEqual({ ...LAZY, maxPerWeek: 2 })
+    expect(on).toContain('At most 2 a week per pool')
+    // A page without the field (rendered before it existed) leaves it as it runs.
+    await worker.fetch(post('/ops/settings/apply', formFor({ ...DEFAULT_SETTINGS, capUsdc: 90 }, { csrf }), cookie), env)
+    expect((await newest(db)).capUsdc).toBe(90)
+    expect((await newest(db)).rerange).toEqual({ ...LAZY, maxPerWeek: 2 })
+    // Switching it off asks first, and the confirm screen carries the field through.
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor({ ...DEFAULT_SETTINGS, capUsdc: 90 }, { csrf, rerange_field: '1' }), cookie), env)).text()
+    expect(ask).toContain('Confirm this change')
+    expect(ask).toContain('more re-ranges per week are allowed')
+    expect((await newest(db)).rerange).toEqual({ ...LAZY, maxPerWeek: 2 })
+    await worker.fetch(post('/ops/settings/apply', confirmBodyOf(ask), cookie), env)
+    expect((await newest(db)).rerange).toEqual(LAZY)
   })
 })
