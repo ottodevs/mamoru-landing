@@ -84,7 +84,13 @@ describe("engine settings model (copy of packages/policy/src/engine-settings.ts)
       fallBps: { min: 100, max: 3000 },
       volBps: { min: 1000, max: 50_000 },
       gasMultiple: { min: 1, max: 50 },
+      edgeBufferTicks: { min: 0, max: 1000 },
+      minDwellSeconds: { min: 0, max: 86_400 },
+      horizonSeconds: { min: 3_600, max: 604_800 },
+      lvrWeightBps: { min: 0, max: 20_000 },
       maxPerWeek: { min: 1, max: 50 },
+      edgeBufferBps: { min: 0, max: 10_000 },
+      maxWaitSeconds: { min: 1_800, max: 604_800 },
     });
     expect(canonicalJson(DEFAULT_SETTINGS)).toBe('{"capUsdc":null,"depth":null,"guard":{"btc":{"fallBps":700,"volBps":8000},"enabled":false,"eth":{"fallBps":900,"volBps":10000}}}');
   });
@@ -537,8 +543,15 @@ describe('re-ranges per week from /ops (otto/mamoru-astro#45, D13)', () => {
     expect(riskyChanges(at(3), at(2))).toEqual([])
     expect(riskyChanges(at(2), at(4))).toEqual(['more re-ranges per week are allowed'])
     expect(riskyChanges(at(2), at())).toEqual(['more re-ranges per week are allowed'])
-    // A set that does not say how it re-ranges keeps what runs: nothing to warn about.
-    expect(riskyChanges(at(2), DEFAULT_SETTINGS)).toEqual([])
+    // As the operator: a set without the cap removes it (the worker fills what the form does not carry first).
+    expect(riskyChanges(at(2), DEFAULT_SETTINGS)).toEqual(['more re-ranges per week are allowed'])
+    // Validation as the operator's: mode, lazy numbers, unknown keys, bridgeOut.
+    expect(validateSettings({ ...DEFAULT_SETTINGS, rerange: { mode: 'lazy' } })).toContain('rerange.edgeBufferTicks must be a whole number from 0 to 1000')
+    expect(validateSettings({ ...DEFAULT_SETTINGS, rerange: { mode: 'fast', maxPerWeek: 2 } })).toContain("rerange.mode must be 'eager' or 'lazy'")
+    expect(validateSettings({ ...DEFAULT_SETTINGS, rerange: { mode: 'eager', foo: 1 } })).toContain('unknown rerange setting foo')
+    expect(validateSettings({ ...DEFAULT_SETTINGS, rerange: { ...LAZY, maxWaitSeconds: 1800, minDwellSeconds: 3600 } })).toContain('rerange.maxWaitSeconds must be at least rerange.minDwellSeconds')
+    expect(validateSettings({ ...DEFAULT_SETTINGS, bridgeOut: { enabled: 'yes' } as never })).toContain('bridgeOut must be { enabled: true | false }')
+    expect(validateSettings({ ...DEFAULT_SETTINGS, rerange: { ...LAZY, maxPerWeek: 2, costTest: 'veto' }, bridgeOut: { enabled: true } })).toEqual([])
   })
 
   test('set from the page: written into the lazy setting in effect, removed only after the confirm screen', async () => {
@@ -565,5 +578,99 @@ describe('re-ranges per week from /ops (otto/mamoru-astro#45, D13)', () => {
     expect((await newest(db)).rerange).toEqual({ ...LAZY, maxPerWeek: 2 })
     await worker.fetch(post('/ops/settings/apply', confirmBodyOf(ask), cookie), env)
     expect((await newest(db)).rerange).toEqual(LAZY)
+  })
+})
+
+describe('re-ranges per week: confirm round trip, rollbacks, canaries (PR #47 review r1)', () => {
+  const LAZY = { mode: 'lazy', edgeBufferTicks: 100, minDwellSeconds: 1800, horizonSeconds: 86_400, lvrWeightBps: 10_000 }
+  const newest = async (db: D1Db) => (await listVersions(db))![0]!
+  const A = '11111111-aaaa-4bbb-8ccc-00000000000a'
+  const B = '11111111-aaaa-4bbb-8ccc-00000000000b'
+  const page = async (env: Env, cookie: string) => csrfOf(await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text())
+
+  test('P0: confirming a risky rollback writes the target as is, re-range included', async () => {
+    const db = memoryDb()
+    const v1 = await seed(db, { env: 'prod', accountKeys: null, template: 'v1', settings: { ...DEFAULT_SETTINGS, capUsdc: 100 }, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: null, template: 'v2', settings: { ...DEFAULT_SETTINGS, capUsdc: 50, rerange: { ...LAZY, maxPerWeek: 2 } }, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = await page(env, cookie)
+    const ask = await (await worker.fetch(post('/ops/settings/rollback', new URLSearchParams({ csrf, id: String(v1), reason: 'back' }), cookie), env)).text()
+    expect(ask).toContain('Confirm this change')
+    expect(ask).toContain('more re-ranges per week are allowed')
+    await worker.fetch(post('/ops/settings/apply', confirmBodyOf(ask), cookie), env)
+    const v = await newest(db)
+    expect(v.rollbackOf).toBe(v1)
+    expect(v.settings).toEqual({ ...DEFAULT_SETTINGS, capUsdc: 100 })
+  })
+
+  test('P1: a stale page with a risky change keeps the weekly cap through the confirm screen', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'v', settings: { ...DEPTH, capUsdc: 50, rerange: { ...LAZY, maxPerWeek: 2 } }, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = await page(env, cookie)
+    // No rerange_field: a page rendered before #45. Raising the cap is risky.
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor({ ...DEPTH, capUsdc: 100 }, { csrf }), cookie), env)).text()
+    expect(ask).toContain('Confirm this change')
+    expect(ask).not.toContain('more re-ranges per week are allowed')
+    await worker.fetch(post('/ops/settings/apply', confirmBodyOf(ask), cookie), env)
+    const v = await newest(db)
+    expect(v.settings.capUsdc).toBe(100)
+    expect(v.settings.rerange).toEqual({ ...LAZY, maxPerWeek: 2 })
+  })
+
+  test('P1: removing a canary cap from an env-wide write is risky for the canary accounts', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'wide', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: [A], template: 'canary', settings: { ...DEFAULT_SETTINGS, rerange: { mode: 'eager', maxPerWeek: 2 } }, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = await page(env, cookie)
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, rerange_field: '1' }), cookie), env)).text()
+    expect(ask).toContain('more re-ranges per week are allowed (accounts of the current canary)')
+  })
+
+  test('P1: accounts that differ only in the weekly cap (or eager vs none) can share a canary that sets it', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'wide', settings: { ...DEFAULT_SETTINGS, rerange: { ...LAZY, maxPerWeek: 2 } }, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: [A], template: 'canary', settings: { ...DEFAULT_SETTINGS, rerange: { ...LAZY, maxPerWeek: 4 } }, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = await page(env, cookie)
+    // 3 a week is more than B runs (2): it asks first, for B only.
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, canary: `${A}\n${B}`, rerange_field: '1', rerange_cap_on: '1', rerange_max_week: '3' }), cookie), env)).text()
+    expect(ask).toContain('more re-ranges per week are allowed (canary accounts)')
+    expect(ask).not.toContain('already in the current canary')
+    await worker.fetch(post('/ops/settings/apply', confirmBodyOf(ask), cookie), env)
+    const v = await newest(db)
+    expect(v.accountKeys).toEqual([A, B])
+    expect(v.settings.rerange).toEqual({ ...LAZY, maxPerWeek: 3 })
+    // Without the field, the same canary still refuses: the accounts run different caps and nothing says which.
+    const db2 = memoryDb()
+    await seed(db2, { env: 'prod', accountKeys: null, template: 'wide', settings: { ...DEFAULT_SETTINGS, rerange: { ...LAZY, maxPerWeek: 2 } }, author: 'x', reason: 'r' })
+    await seed(db2, { env: 'prod', accountKeys: [A], template: 'canary', settings: { ...DEFAULT_SETTINGS, rerange: { ...LAZY, maxPerWeek: 4 } }, author: 'x', reason: 'r' })
+    const o2 = await opsEnv(db2)
+    const html = await (await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf: await page(o2.env, o2.cookie), canary: `${A}\n${B}` }), o2.cookie), o2.env)).text()
+    expect(html).toContain('different re-range')
+    // A bare eager re-range is the same as none.
+    const db3 = memoryDb()
+    await seed(db3, { env: 'prod', accountKeys: null, template: 'wide', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    await seed(db3, { env: 'prod', accountKeys: [A], template: 'canary', settings: { ...DEFAULT_SETTINGS, rerange: { mode: 'eager' } }, author: 'x', reason: 'r' })
+    await seed(db3, { env: 'prod', accountKeys: [A, B], template: 'both', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    expect((await newest(db3)).accountKeys).toEqual([A, B])
+  })
+
+  test('the confirm screen carries re-range and bridge-out as checked; a tampered copy fails the token', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'v', settings: { ...DEFAULT_SETTINGS, rerange: { ...LAZY, maxPerWeek: 2 }, bridgeOut: { enabled: true } }, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = await page(env, cookie)
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor(DEPTH, { csrf, rerange_field: '1', rerange_cap_on: '1', rerange_max_week: '2' }), cookie), env)).text()
+    const body = confirmBodyOf(ask)
+    expect(JSON.parse(body.get('kept_json')!)).toEqual({ bridgeOut: { enabled: true }, rerange: { ...LAZY, maxPerWeek: 2 } })
+    const tampered = new URLSearchParams(body)
+    tampered.set('kept_json', JSON.stringify({ rerange: { ...LAZY, maxPerWeek: 50 }, bridgeOut: { enabled: true } }))
+    await worker.fetch(post('/ops/settings/apply', tampered, cookie), env)
+    expect((await listVersions(db))!.length).toBe(1)
+    await worker.fetch(post('/ops/settings/apply', body, cookie), env)
+    const v = await newest(db)
+    expect(v.settings).toEqual({ ...DEPTH, rerange: { ...LAZY, maxPerWeek: 2 }, bridgeOut: { enabled: true } })
   })
 })

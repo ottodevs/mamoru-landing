@@ -90,7 +90,7 @@ import { loadExperimentReports } from "./exp-report";
 import { experimentsSection } from "./ops-experiments";
 import { RECOMMENDED_TEMPLATE, settingsSection, type SettingsPage } from "./ops-settings";
 import { checkConfirmToken, issueConfirmToken, risksOf } from "./engine-settings-confirm";
-import { inEffect, appendVersion, keptFrom, maxIdOf, SettingsConflict, SettingsOutcomeUnknown, listTemplates, listVersions, versionById, type Env as SettingsEnv, type TemplateRow } from "./engine-settings-store";
+import { inEffect, appendVersion, keepUnedited, keptFrom, KEPT_KEYS, maxIdOf, SettingsConflict, SettingsOutcomeUnknown, listTemplates, listVersions, versionById, type Env as SettingsEnv, type TemplateRow } from "./engine-settings-store";
 import { DEFAULT_SETTINGS, RECOMMENDED_SETTINGS, canonicalJson, maxPerWeekFromForm, settingsFromForm, validateSettings, withMaxPerWeek } from "./engine-settings-model";
 import { functionsSection, type FunctionsPage } from "./ops-functions";
 import { isOpsFlagName, OPS_FLAGS, OPS_FLAG_NAMES } from "./ops-flags-model";
@@ -979,18 +979,6 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     } else {
       const envField: SettingsEnv = form.get("env") === "beta" ? "beta" : "prod";
       draft = { env: envField, template: String(form.get("template") ?? "custom").slice(0, 120), settings: settingsFromForm(form), canary: String(form.get("canary") ?? ""), reason: String(form.get("reason") ?? "") };
-      // otto/mamoru-astro#45: the weekly re-range cap goes into the re-range setting the targeted accounts run now.
-      const weekly = maxPerWeekFromForm(form);
-      if (weekly !== undefined) {
-        const keys = draft.canary.split(/\s+/).map((k) => k.trim()).filter(Boolean);
-        let base: ReturnType<typeof keptFrom>;
-        try {
-          base = keptFrom((await inEffect(db))[draft.env], keys.length ? keys : null);
-        } catch (e) {
-          return respond(await settingsView({ draft, notice: { text: `Not applied: ${(e as Error).message}.`, tone: "bad" } }, 400));
-        }
-        draft = { ...draft, settings: withMaxPerWeek(draft.settings, weekly, base?.rerange) };
-      }
       // A rollback confirmed through this form keeps its link only if it is still exactly that version.
       const back = Number(form.get("rollback_of"));
       const target = Number.isSafeInteger(back) && back > 0 ? await versionById(db, back) : null;
@@ -1002,6 +990,21 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
       const named = templates.find((t) => t.name === draft.template);
       const alreadyCustom = draft.template === "custom" || draft.template.startsWith("custom (from ");
       if (!rollbackOf && !alreadyCustom && (!named || canonicalJson(named.settings) !== canonicalJson(draft.settings))) draft = { ...draft, template: named ? `custom (from ${named.name})`.slice(0, 120) : "custom" };
+      // otto/mamoru-astro#45: the set is checked and confirmed as it will be written. What the form does not carry
+      // (re-range, bridge-out) comes from what the targeted accounts run now, and the weekly re-range cap goes into
+      // that re-range. The confirm screen carries the result as is (kept_json), so a confirm never merges again. A
+      // rollback is written as its target.
+      if (!rollbackOf) {
+        const weekly = maxPerWeekFromForm(form);
+        const keys = draft.canary.split(/\s+/).map((k) => k.trim()).filter(Boolean);
+        let base: ReturnType<typeof keptFrom>;
+        try {
+          base = keptFrom((await inEffect(db))[draft.env], keys.length ? keys : null, { carried: KEPT_KEYS.filter((k) => k in draft.settings), ownMaxPerWeek: weekly !== undefined });
+        } catch (e) {
+          return respond(await settingsView({ draft, notice: { text: `Not applied: ${(e as Error).message}.`, tone: "bad" } }, 400));
+        }
+        draft = { ...draft, settings: keepUnedited(withMaxPerWeek(draft.settings, weekly, "rerange" in draft.settings ? draft.settings.rerange : base?.rerange), base) };
+      }
     }
     const errors = validateSettings(draft.settings);
     if (errors.length) return respond(await settingsView({ draft, notice: { text: `Not applied: ${errors.join("; ")}.`, tone: "bad" } }, 400));

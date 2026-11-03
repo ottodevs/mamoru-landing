@@ -31,8 +31,18 @@ export const BOUNDS = {
   fallBps: { min: 100, max: 3000 },
   volBps: { min: 1000, max: 50_000 },
   gasMultiple: { min: 1, max: 50 },
+  // otto/mamoru#172/#218 and the live wait rule: the re-range setting /ops carries as it runs, checked as the operator does.
+  edgeBufferTicks: { min: 0, max: 1000 },
+  minDwellSeconds: { min: 0, max: 86_400 },
+  horizonSeconds: { min: 3_600, max: 604_800 },
+  lvrWeightBps: { min: 0, max: 20_000 },
   maxPerWeek: { min: 1, max: 50 },
+  edgeBufferBps: { min: 0, max: 10_000 },
+  maxWaitSeconds: { min: 1_800, max: 604_800 },
 } as const;
+
+const LAZY_KEYS = ["edgeBufferTicks", "minDwellSeconds", "horizonSeconds", "lvrWeightBps"] as const;
+const LAZY_OPTIONAL = ["edgeBufferBps", "maxWaitSeconds"] as const;
 
 /** otto/mamoru#101 D13: the Packaging rule, at most 2 rebalances a week per pool. What the form proposes when it is off. */
 export const RECOMMENDED_MAX_PER_WEEK = 2;
@@ -86,9 +96,23 @@ export function validateSettings(s: EngineSettings): string[] {
     if (!s.minEntry || typeof s.minEntry !== "object") errors.push("minEntry must be { gasMultiple }");
     else inRange(errors, "minEntry.gasMultiple", s.minEntry.gasMultiple, BOUNDS.gasMultiple);
   }
+  // The same checks as the operator's validateEngineSettings, so /ops never writes a re-range it would refuse.
   if (s.rerange !== undefined) {
-    if (!s.rerange || typeof s.rerange !== "object" || typeof s.rerange.mode !== "string") errors.push("rerange must have a mode");
-    else if (s.rerange.maxPerWeek !== undefined) inRange(errors, "rerange.maxPerWeek", s.rerange.maxPerWeek, BOUNDS.maxPerWeek);
+    if (!s.rerange || typeof s.rerange !== "object" || Array.isArray(s.rerange)) errors.push("rerange must be an object");
+    else {
+      const r = s.rerange as Record<string, unknown>;
+      for (const k of Object.keys(r)) if (!["mode", "maxPerWeek", "costTest", ...LAZY_KEYS, ...LAZY_OPTIONAL].includes(k)) errors.push(`unknown rerange setting ${k}`);
+      if (r.mode !== "eager" && r.mode !== "lazy") errors.push("rerange.mode must be 'eager' or 'lazy'");
+      for (const k of LAZY_KEYS) if (r.mode === "lazy" || r[k] !== undefined) inRange(errors, `rerange.${k}`, r[k], BOUNDS[k]);
+      if (r.maxPerWeek !== undefined) inRange(errors, "rerange.maxPerWeek", r.maxPerWeek, BOUNDS.maxPerWeek);
+      for (const k of LAZY_OPTIONAL) if (r[k] !== undefined) inRange(errors, `rerange.${k}`, r[k], BOUNDS[k]);
+      if (r.costTest !== undefined && r.costTest !== "veto" && r.costTest !== "off") errors.push("rerange.costTest must be 'veto' or 'off'");
+      if (isInt(r.maxWaitSeconds) && isInt(r.minDwellSeconds) && r.maxWaitSeconds < r.minDwellSeconds) errors.push("rerange.maxWaitSeconds must be at least rerange.minDwellSeconds");
+    }
+  }
+  if (s.bridgeOut !== undefined) {
+    const b = s.bridgeOut as Record<string, unknown> | null;
+    if (!b || typeof b !== "object" || Array.isArray(b) || Object.keys(b).some((k) => k !== "enabled") || typeof b.enabled !== "boolean") errors.push("bridgeOut must be { enabled: true | false }");
   }
   for (const side of ["btc", "eth"] as const) {
     inRange(errors, `guard.${side}.fallBps`, s.guard[side].fallBps, BOUNDS.fallBps);
@@ -111,9 +135,11 @@ export function riskyChanges(from: EngineSettings, to: EngineSettings): string[]
   }
   if (from.depth && !to.depth) out.push("depth sizing turns off");
   if (from.minEntry && (!to.minEntry || to.minEntry.gasMultiple < from.minEntry.gasMultiple)) out.push("smaller entries go through, where gas is a larger share of what they place");
-  // Only a set that says how it re-ranges is compared: one without `rerange` keeps what runs (KEPT_KEYS).
-  const weekly = (s: EngineSettings) => s.rerange?.maxPerWeek ?? Infinity;
-  if (to.rerange !== undefined && weekly(to) > weekly(from)) out.push("more re-ranges per week are allowed");
+  // As the operator: a higher cap, or none, lets more re-ranges through. `to` is the set as it will be written
+  // (the worker fills what the form does not carry before it asks).
+  const cf = from.rerange?.maxPerWeek;
+  const ct = to.rerange?.maxPerWeek;
+  if (cf !== undefined && (ct === undefined || ct > cf)) out.push("more re-ranges per week are allowed");
   if (from.depth && to.depth) {
     if (to.depth.impactBps > from.depth.impactBps) out.push("entries may move the pool price more");
     if (to.depth.shareBps > from.depth.shareBps) out.push("entries may take a bigger share of a pool");
@@ -173,6 +199,10 @@ function pct(form: FormData, name: string): number | null {
  * write basis points read as percent.
  */
 export function settingsFromForm(form: FormData): EngineSettings {
+  return { ...fieldsFromForm(form), ...carriedFromForm(form) };
+}
+
+function fieldsFromForm(form: FormData): EngineSettings {
   const depthOn = form.get("depth_on") === "1";
   const stables = pct(form, "depth_stables_pct");
   // Off is its own switch, so a multiple typed while it is off is not applied.
@@ -196,8 +226,26 @@ export function settingsFromForm(form: FormData): EngineSettings {
  * otto/mamoru#218: the weekly re-range cap the form asks for. `undefined` when the page has no such field (rendered
  * before it existed): then nothing about re-ranging changes. `null` is off; a typo is NaN (refused by validate).
  */
+/**
+ * The settings /ops has no full field for (rerange, bridgeOut), as the confirm screen carries them: exactly the set
+ * that was checked, so confirming never merges anything again. Empty or absent: none carried. Unreadable JSON gives a
+ * re-range that validate refuses.
+ */
+export function carriedFromForm(form: FormData): Pick<EngineSettings, "rerange" | "bridgeOut"> {
+  const raw = String(form.get("kept_json") ?? "").trim();
+  if (form.get("kept_carried") !== "1" || raw === "") return {};
+  try {
+    const o = JSON.parse(raw) as Record<string, unknown>;
+    if (!o || typeof o !== "object" || Array.isArray(o) || Object.keys(o).some((k) => k !== "rerange" && k !== "bridgeOut")) return { rerange: { mode: "" } };
+    return o as Pick<EngineSettings, "rerange" | "bridgeOut">;
+  } catch {
+    return { rerange: { mode: "" } };
+  }
+}
+
 export function maxPerWeekFromForm(form: FormData): number | null | undefined {
-  if (form.get("rerange_field") !== "1") return undefined;
+  // The confirm screen carries the whole re-range as checked (kept_json): nothing to merge into it again.
+  if (form.get("rerange_field") !== "1" || form.get("kept_carried") === "1") return undefined;
   return form.get("rerange_cap_on") === "1" ? (int(form, "rerange_max_week") ?? Number.NaN) : null;
 }
 
