@@ -393,7 +393,7 @@ export async function insertQueuedJobIfEligible(
 /** The oldest queued/running job already covering this spec_key, if any (B-04 dedupe against in-flight work). */
 export async function activeJobBySpecKey(db: D1Db, key: string): Promise<JobRow | null> {
   const row = await db
-    .prepare(`SELECT ${JOB_COLUMNS} FROM lab_jobs WHERE spec_key = ? AND status IN ('queued', 'running') ORDER BY created_at ASC LIMIT 1`)
+    .prepare(`SELECT ${JOB_COLUMNS} FROM lab_jobs WHERE spec_key = ? AND status IN ('queued', 'running') ORDER BY created_at ASC, rowid ASC LIMIT 1`)
     .bind(key)
     .first<LabJobRaw>();
   return row ? toJob(row) : null;
@@ -654,10 +654,11 @@ export interface AgentJobRow {
 }
 
 /** AL-50: a thread's latest `limit` turns, oldest first (a chat transcript reads top to bottom); `truncated` when older turns were cut. */
+// created_at is to the millisecond, so two turns can tie: rowid (insertion order) breaks it (otto/mamoru-astro#46).
 export async function agentJobsByThread(db: D1Db, threadId: string, limit = 50): Promise<{ jobs: AgentJobRow[]; truncated: boolean }> {
   const { results } = await db
     .prepare(
-      "SELECT id, question, status, answer_json, verifier_json, cost_json, error_code, created_at, updated_at FROM lab_jobs WHERE thread_id = ? AND kind = 'agent' ORDER BY created_at DESC LIMIT ?",
+      "SELECT id, question, status, answer_json, verifier_json, cost_json, error_code, created_at, updated_at FROM lab_jobs WHERE thread_id = ? AND kind = 'agent' ORDER BY created_at DESC, rowid DESC LIMIT ?",
     )
     .bind(threadId, limit + 1)
     .all<{
@@ -696,7 +697,7 @@ export async function agentThreadHistory(
   threadId: string,
 ): Promise<{ question: string; answer: unknown; runs: { resultHash: string; specKey: string }[] }[]> {
   const { results } = await db
-    .prepare("SELECT id, question, answer_json FROM lab_jobs WHERE thread_id = ? AND kind = 'agent' AND status = 'done' ORDER BY created_at ASC")
+    .prepare("SELECT id, question, answer_json FROM lab_jobs WHERE thread_id = ? AND kind = 'agent' AND status = 'done' ORDER BY created_at ASC, rowid ASC")
     .bind(threadId)
     .all<{ id: string; question: string | null; answer_json: string | null }>();
   const runRows = await db
