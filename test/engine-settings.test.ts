@@ -674,3 +674,35 @@ describe('re-ranges per week: confirm round trip, rollbacks, canaries (PR #47 re
     expect(v.settings).toEqual({ ...DEPTH, rerange: { ...LAZY, maxPerWeek: 2 }, bridgeOut: { enabled: true } })
   })
 })
+
+describe('re-ranges per week: template names (PR #47 review r2)', () => {
+  const LAZY = { mode: 'lazy', edgeBufferTicks: 100, minDwellSeconds: 1800, horizonSeconds: 86_400, lvrWeightBps: 10_000 }
+  const newest = async (db: D1Db) => (await listVersions(db))![0]!
+  const T = 'conservador + depth 30/500/5, cap 1000'
+  const TSET: EngineSettings = { ...DEFAULT_SETTINGS, capUsdc: 1000, depth: { impactBps: 30, shareBps: 500, stablesImpactBps: 5 } }
+
+  test('a preset with only the weekly cap changed is recorded as custom (from it)', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'v', settings: { ...TSET, rerange: LAZY }, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text())
+    await worker.fetch(post('/ops/settings/apply', formFor(TSET, { csrf, template: T, rerange_field: '1', rerange_cap_on: '1', rerange_max_week: '2' }), cookie), env)
+    const v = await newest(db)
+    expect(v.settings.rerange).toEqual({ ...LAZY, maxPerWeek: 2 })
+    expect(v.template).toBe(`custom (from ${T})`)
+  })
+
+  test('an unedited preset keeps its name, and a risky one confirms at the first click when re-range is kept', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'v', settings: { ...DEFAULT_SETTINGS, capUsdc: 100, rerange: LAZY, bridgeOut: { enabled: true } }, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text())
+    // Cap 100 -> 1000 is risky; the field says what runs (no cap).
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor(TSET, { csrf, template: T, rerange_field: '1' }), cookie), env)).text()
+    expect(ask).toContain('Confirm this change')
+    await worker.fetch(post('/ops/settings/apply', confirmBodyOf(ask), cookie), env)
+    const v = await newest(db)
+    expect(v.template).toBe(T)
+    expect(v.settings).toEqual({ ...TSET, rerange: LAZY, bridgeOut: { enabled: true } })
+  })
+})
