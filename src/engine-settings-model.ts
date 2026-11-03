@@ -12,6 +12,13 @@ export type EngineSettings = {
   guard: { enabled: boolean; btc: { fallBps: number; volBps: number }; eth: { fallBps: number; volBps: number } };
   /** otto/mamoru#195: the smallest entry also covers this many times its swap and mint gas. Absent = off. */
   minEntry?: { gasMultiple: number };
+  /**
+   * otto/mamoru#218: how the engine re-ranges (mode and lazy parameters stay the operator's business here: /ops edits
+   * only `maxPerWeek`, at most this many re-ranges per pool in 7 days; absent = no cap). Otherwise carried as it runs.
+   */
+  rerange?: { mode: string; maxPerWeek?: number; [k: string]: unknown };
+  /** Move to Base for USDC found on Ethereum (#133). No field: carried as it runs. */
+  bridgeOut?: { enabled: boolean };
 };
 
 export const DEFAULT_CAP_USDC = 100;
@@ -24,7 +31,11 @@ export const BOUNDS = {
   fallBps: { min: 100, max: 3000 },
   volBps: { min: 1000, max: 50_000 },
   gasMultiple: { min: 1, max: 50 },
+  maxPerWeek: { min: 1, max: 50 },
 } as const;
+
+/** otto/mamoru#101 D13: the Packaging rule, at most 2 rebalances a week per pool. What the form proposes when it is off. */
+export const RECOMMENDED_MAX_PER_WEEK = 2;
 
 export const DEFAULT_SETTINGS: EngineSettings = {
   depth: null,
@@ -75,6 +86,10 @@ export function validateSettings(s: EngineSettings): string[] {
     if (!s.minEntry || typeof s.minEntry !== "object") errors.push("minEntry must be { gasMultiple }");
     else inRange(errors, "minEntry.gasMultiple", s.minEntry.gasMultiple, BOUNDS.gasMultiple);
   }
+  if (s.rerange !== undefined) {
+    if (!s.rerange || typeof s.rerange !== "object" || typeof s.rerange.mode !== "string") errors.push("rerange must have a mode");
+    else if (s.rerange.maxPerWeek !== undefined) inRange(errors, "rerange.maxPerWeek", s.rerange.maxPerWeek, BOUNDS.maxPerWeek);
+  }
   for (const side of ["btc", "eth"] as const) {
     inRange(errors, `guard.${side}.fallBps`, s.guard[side].fallBps, BOUNDS.fallBps);
     inRange(errors, `guard.${side}.volBps`, s.guard[side].volBps, BOUNDS.volBps);
@@ -96,6 +111,9 @@ export function riskyChanges(from: EngineSettings, to: EngineSettings): string[]
   }
   if (from.depth && !to.depth) out.push("depth sizing turns off");
   if (from.minEntry && (!to.minEntry || to.minEntry.gasMultiple < from.minEntry.gasMultiple)) out.push("smaller entries go through, where gas is a larger share of what they place");
+  // Only a set that says how it re-ranges is compared: one without `rerange` keeps what runs (KEPT_KEYS).
+  const weekly = (s: EngineSettings) => s.rerange?.maxPerWeek ?? Infinity;
+  if (to.rerange !== undefined && weekly(to) > weekly(from)) out.push("more re-ranges per week are allowed");
   if (from.depth && to.depth) {
     if (to.depth.impactBps > from.depth.impactBps) out.push("entries may move the pool price more");
     if (to.depth.shareBps > from.depth.shareBps) out.push("entries may take a bigger share of a pool");
@@ -172,6 +190,26 @@ export function settingsFromForm(form: FormData): EngineSettings {
     // Off is left out of the JSON so the stored set (and its hash) stays as before #195.
     ...(gas === null ? {} : { minEntry: { gasMultiple: gas } }),
   };
+}
+
+/**
+ * otto/mamoru#218: the weekly re-range cap the form asks for. `undefined` when the page has no such field (rendered
+ * before it existed): then nothing about re-ranging changes. `null` is off; a typo is NaN (refused by validate).
+ */
+export function maxPerWeekFromForm(form: FormData): number | null | undefined {
+  if (form.get("rerange_field") !== "1") return undefined;
+  return form.get("rerange_cap_on") === "1" ? (int(form, "rerange_max_week") ?? Number.NaN) : null;
+}
+
+/**
+ * Puts the weekly cap into what the accounts run now (`base`, see keptFrom): the mode and lazy parameters stay as they
+ * are; with no re-range setting running, the cap goes on the eager default. Off removes only the cap.
+ */
+export function withMaxPerWeek(s: EngineSettings, cap: number | null | undefined, base: EngineSettings["rerange"]): EngineSettings {
+  if (cap === undefined) return s;
+  const { maxPerWeek: _, ...kept } = base ?? { mode: "eager" };
+  if (cap === null) return base ? { ...s, rerange: kept as EngineSettings["rerange"] & object } : s;
+  return { ...s, rerange: { ...kept, maxPerWeek: cap } as EngineSettings["rerange"] & object };
 }
 
 /** Parses a stored settings_json; null when the row is unreadable. */
