@@ -7,7 +7,7 @@
  * only marks what changed as it is typed: without JavaScript the form works the same.
  */
 
-import { BOUNDS, DEFAULT_CAP_USDC, DEFAULT_SETTINGS, RECOMMENDED_MAX_PER_WEEK, RECOMMENDED_SETTINGS, canonicalJson, pctOf, usdcOf, type EngineSettings } from "./engine-settings-model";
+import { BOUNDS, DEFAULT_BRIDGE_STUCK_AFTER_MIN, DEFAULT_CAP_USDC, DEFAULT_SETTINGS, RECOMMENDED_MAX_PER_WEEK, RECOMMENDED_SETTINGS, bridgeStuckAfterOf, canonicalJson, pctOf, usdcOf, type EngineSettings } from "./engine-settings-model";
 import type { Env, InEffect, TemplateRow, VersionRow } from "./engine-settings-store";
 import { csrfField, maskEmail, noticeHtml, pageHead, type SectionView } from "./ops";
 import { esc } from "./text";
@@ -38,6 +38,10 @@ function sentences(s: EngineSettings): Array<[string, string]> {
     ["Smallest entry", s.minEntry ? `At least ${s.minEntry.gasMultiple} times what its swap and mint cost in gas, and never under 0.10 USDC.` : "0.10 USDC, whatever the gas."],
     ["Re-ranges", weeklyOf(s) === null ? "No weekly cap: a pool re-ranges whenever its price leaves the range." : `At most ${weeklyOf(s)} a week per pool; past that the position waits out of range.`],
     [
+      "Bridge to Monad",
+      `A burn is flagged stuck, and ops paged once, after ${bridgeStuckAfterOf(s).sending} min sending or ${bridgeStuckAfterOf(s).burned} min burned${s.bridge === undefined ? " (the code defaults)" : ""}.`,
+    ],
+    [
       "Fall guard",
       s.guard.enabled
         ? `No new money into BTC after a ${pct(s.guard.btc.fallBps)} fall in 24 h at ${pct(s.guard.btc.volBps)} volatility, or into ETH after ${pct(s.guard.eth.fallBps)} at ${pct(s.guard.eth.volBps)}.`
@@ -54,6 +58,7 @@ function shorts(s: EngineSettings): Array<[string, string]> {
     ["Depth", d ? `${pct(d.impactBps)} impact, ${pct(d.shareBps)} of a pool, stables ${pct(d.stablesImpactBps ?? d.impactBps)}` : "off"],
     ["Smallest entry", s.minEntry ? `${s.minEntry.gasMultiple}× its gas` : "0.10 USDC"],
     ["Re-ranges", weeklyOf(s) === null ? "no weekly cap" : `${weeklyOf(s)} a week per pool`],
+    ["Bridge stuck after", `${bridgeStuckAfterOf(s).sending} min sending, ${bridgeStuckAfterOf(s).burned} min burned${s.bridge === undefined ? " (default)" : ""}`],
     ["Fall guard", s.guard.enabled ? `BTC ${pct(s.guard.btc.fallBps)} at ${pct(s.guard.btc.volBps)} vol, ETH ${pct(s.guard.eth.fallBps)} at ${pct(s.guard.eth.volBps)}` : "off"],
   ];
 }
@@ -61,7 +66,7 @@ function shorts(s: EngineSettings): Array<[string, string]> {
 /** One line a person reads: what this set makes the engine do. */
 export function describeSettings(s: EngineSettings): string {
   // A set that does not say how it re-ranges (a template) keeps what runs: it says nothing about it.
-  return shorts(s).filter(([k]) => k !== "Re-ranges" || s.rerange !== undefined).map(([k, v]) => `${k} ${v}`).join("; ") + ".";
+  return shorts(s).filter(([k]) => (k !== "Re-ranges" || s.rerange !== undefined) && (k !== "Bridge stuck after" || s.bridge !== undefined)).map(([k, v]) => `${k} ${v}`).join("; ") + ".";
 }
 
 /** What changes between two sets, as [what, before, after]. */
@@ -292,11 +297,45 @@ function editForm(csrf: string, templates: readonly TemplateRow[], draft: Draft,
     toggle("rerange_cap_on", wk !== null, rw !== null, "weekly re-range cap"),
   );
 
+  // Like the re-range field: a draft that does not say (a template) shows what runs. Blank = the operator's defaults.
+  const D = DEFAULT_BRIDGE_STUCK_AFTER_MIN;
+  const bs = (s.bridge ?? running.bridge)?.stuckAfterMin;
+  const br = running.bridge?.stuckAfterMin;
+  const effNow = bridgeStuckAfterOf(running);
+  const bField = (name: string, label: string, key: keyof typeof D, hint: string) =>
+    field({
+      name,
+      label,
+      unit: "min",
+      value: bs ? String(bs[key]) : "",
+      num: bs ? bs[key] : null,
+      now: br ? String(br[key]) : "",
+      nowText: br ? `${br[key]} min` : `${D[key]} min (default)`,
+      recText: `${D[key]} min (default)`,
+      sc: { min: BOUNDS.stuckAfterMin.min, max: BOUNDS.stuckAfterMin.max, rec: D[key], now: effNow[key] },
+      fmt: (n) => String(n),
+      kind: "int",
+      placeholder: `${D[key]} (default)`,
+      note: hint,
+    });
+  const bridge = group(
+    "bridge",
+    5,
+    "Bridge to Monad: flag stuck after",
+    "A burn that stays in one state longer than this is flagged stuck and ops is paged once. It is only a flag: the burn keeps counting in the cap and keeps being retried. Blank means the operator's default. A later deadline pages later, so raising one asks first.",
+    `<input type="hidden" name="bridge_field" value="1" />
+    <input type="hidden" name="bridge_init" value="${esc(br ? `${br.sending},${br.burned}` : ",")}" />
+    <div class="set-grid two">
+      ${bField("bridge_sending", "Sending", "sending", "The burn is sent, not yet done.")}
+      ${bField("bridge_burned", "Burned", "burned", "The burn is done, the mint on Monad is pending.")}
+    </div>`,
+  );
+
   const g = s.guard;
   const rg = running.guard;
   const guard = group(
     "guard",
-    5,
+    6,
     "Fall guard",
     "Pauses new money into BTC or ETH while it falls this much in 24 h with volatility above this. Money already placed stays.",
     `<div class="set-grid two">
@@ -308,7 +347,7 @@ function editForm(csrf: string, templates: readonly TemplateRow[], draft: Draft,
     toggle("guard_on", g.enabled, rg.enabled, "fall guard"),
   );
 
-  const n = changesOf(running, s.rerange === undefined && running.rerange !== undefined ? { ...s, rerange: running.rerange } : s).length;
+  const n = changesOf(running, { ...s, ...(s.rerange === undefined && running.rerange !== undefined ? { rerange: running.rerange } : {}), ...(s.bridge === undefined && running.bridge !== undefined ? { bridge: running.bridge } : {}) }).length;
   return `<section class="sec set-edit" aria-labelledby="set-edit">
   <div class="sec-head"><h2 id="set-edit">Change ${draft.env}</h2><nav class="set-seg" aria-label="Environment">${envLinks}</nav></div>
   <p class="set-lead soft">Start from what runs, the recommended set or a template. Only what you change moves.</p>
@@ -317,7 +356,7 @@ function editForm(csrf: string, templates: readonly TemplateRow[], draft: Draft,
     ${csrfField(csrf)}
     <input type="hidden" name="env" value="${draft.env}" />
     <input type="hidden" name="template" value="${esc(draft.template)}" />
-    ${cap}${depth}${minEntry}${weekly}${guard}
+    ${cap}${depth}${minEntry}${weekly}${bridge}${guard}
     <details class="set-more"${draft.canary ? " open" : ""}><summary>Try it on some accounts first (canary)</summary>
       <label for="f-canary">Account keys, one per line</label>
       <textarea id="f-canary" name="canary" rows="3" spellcheck="false">${esc(draft.canary)}</textarea>
@@ -360,7 +399,7 @@ function hiddenFields(env: Env, template: string, s: EngineSettings, canary: str
     h("min_entry_gas", s.minEntry ? String(s.minEntry.gasMultiple) : ""),
     // What the form has no full field for, exactly as checked: confirming writes this set, nothing is merged again.
     h("kept_carried", "1"),
-    h("kept_json", s.rerange === undefined && s.bridgeOut === undefined ? "" : canonicalJson({ ...(s.rerange === undefined ? {} : { rerange: s.rerange }), ...(s.bridgeOut === undefined ? {} : { bridgeOut: s.bridgeOut }) } as EngineSettings)),
+    h("kept_json", s.rerange === undefined && s.bridgeOut === undefined && s.bridge === undefined ? "" : canonicalJson({ ...(s.rerange === undefined ? {} : { rerange: s.rerange }), ...(s.bridgeOut === undefined ? {} : { bridgeOut: s.bridgeOut }), ...(s.bridge === undefined ? {} : { bridge: s.bridge }) } as EngineSettings)),
     h("canary", canary),
     h("reason", reason),
   ].join("");

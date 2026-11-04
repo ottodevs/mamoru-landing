@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import type { D1Db } from "../src/d1-infra";
-import { BOUNDS, DEFAULT_SETTINGS, canonicalJson, maxPerWeekFromForm, pctOf, riskyChanges, settingsFromForm, validateSettings, withMaxPerWeek, type EngineSettings } from "../src/engine-settings-model";
+import { BOUNDS, DEFAULT_SETTINGS, bridgeFromForm, bridgeStuckAfterOf, canonicalJson, maxPerWeekFromForm, pctOf, riskyChanges, settingsFromForm, validateSettings, withBridge, withMaxPerWeek, type EngineSettings } from "../src/engine-settings-model";
 import { appendVersion, listVersions, maxIdOf, SettingsConflict, type NewVersion } from "../src/engine-settings-store";
 import { sealSession } from "../src/ops";
 import worker, { type Env } from "../src/worker";
@@ -91,6 +91,7 @@ describe("engine settings model (copy of packages/policy/src/engine-settings.ts)
       maxPerWeek: { min: 1, max: 50 },
       edgeBufferBps: { min: 0, max: 10_000 },
       maxWaitSeconds: { min: 1_800, max: 604_800 },
+      stuckAfterMin: { min: 20, max: 1440 },
     });
     expect(canonicalJson(DEFAULT_SETTINGS)).toBe('{"capUsdc":null,"depth":null,"guard":{"btc":{"fallBps":700,"volBps":8000},"enabled":false,"eth":{"fallBps":900,"volBps":10000}}}');
   });
@@ -704,5 +705,162 @@ describe('re-ranges per week: template names (PR #47 review r2)', () => {
     const v = await newest(db)
     expect(v.template).toBe(T)
     expect(v.settings).toEqual({ ...TSET, rerange: LAZY, bridgeOut: { enabled: true } })
+  })
+})
+
+describe('bridge to Monad: flag stuck after (otto/mamoru-astro#48, leg B2 of otto/mamoru#245)', () => {
+  const LAZY = { mode: 'lazy', edgeBufferTicks: 100, minDwellSeconds: 1800, horizonSeconds: 86_400, lvrWeightBps: 10_000 }
+  const br = (sending: number, burned: number) => ({ stuckAfterMin: { sending, burned } })
+  const WITH_BRIDGE = { ...DEFAULT_SETTINGS, rerange: LAZY, bridge: br(25, 40) } as unknown as EngineSettings
+  const WITH_LAZY = { ...DEFAULT_SETTINGS, rerange: LAZY } as unknown as EngineSettings
+  const newest = async (db: D1Db) => (await listVersions(db))![0]!.settings as unknown as Record<string, unknown>
+  const form = (o: Record<string, string>) => { const f = new FormData(); for (const [k, v] of Object.entries(o)) f.set(k, v); return f }
+  const field = (sending: string, burned: string, init = ',') => ({ bridge_field: '1', bridge_init: init, bridge_sending: sending, bridge_burned: burned })
+
+  test('bounds as the operator (20 to 1440, whole numbers); versions that hold bridge pass; unknown keys do not', () => {
+    expect(BOUNDS.stuckAfterMin).toEqual({ min: 20, max: 1440 })
+    expect(validateSettings({ ...DEFAULT_SETTINGS, bridge: br(30, 45) })).toEqual([])
+    expect(validateSettings({ ...DEFAULT_SETTINGS, bridge: br(20, 1440) })).toEqual([])
+    for (const n of [19, 1441, 30.5, Number.NaN]) {
+      expect(validateSettings({ ...DEFAULT_SETTINGS, bridge: br(n, 45) })).toContain('bridge.stuckAfterMin.sending must be a whole number from 20 to 1440')
+      expect(validateSettings({ ...DEFAULT_SETTINGS, bridge: br(30, n) })).toContain('bridge.stuckAfterMin.burned must be a whole number from 20 to 1440')
+    }
+    const bad = (b: unknown) => validateSettings({ ...DEFAULT_SETTINGS, bridge: b } as unknown as EngineSettings)
+    expect(bad({ stuckAfterMin: { sending: 30 } })).toContain('bridge.stuckAfterMin.burned must be a whole number from 20 to 1440')
+    expect(bad({ stuckAfterMin: { sending: 30, burned: 45, other: 1 } })).toEqual(['bridge must be { stuckAfterMin: { sending, burned } }'])
+    expect(bad({ stuckAfterMin: br(30, 45).stuckAfterMin, extra: 1 })).toEqual(['bridge must be { stuckAfterMin: { sending, burned } }'])
+    expect(bad(null)).toEqual(['bridge must be { stuckAfterMin: { sending, burned } }'])
+  })
+
+  test('the deadlines in force are clamped per field, absent is 30 and 45', () => {
+    expect(bridgeStuckAfterOf(DEFAULT_SETTINGS)).toEqual({ sending: 30, burned: 45 })
+    expect(bridgeStuckAfterOf({ ...DEFAULT_SETTINGS, bridge: br(25, 40) })).toEqual({ sending: 25, burned: 40 })
+    expect(bridgeStuckAfterOf({ ...DEFAULT_SETTINGS, bridge: br(5, 40) })).toEqual({ sending: 30, burned: 40 })
+  })
+
+  test('raising either deadline, or leaving it absent above a lower one, is risky; lowering or adding a lower one is not', () => {
+    const at = (b?: ReturnType<typeof br>): EngineSettings => ({ ...DEFAULT_SETTINGS, ...(b ? { bridge: b } : {}) })
+    const line = ['a stuck bridge to Monad is flagged and paged later']
+    expect(riskyChanges(at(), at(br(30, 45)))).toEqual([])
+    expect(riskyChanges(at(), at(br(25, 40)))).toEqual([])
+    expect(riskyChanges(at(), at(br(31, 45)))).toEqual(line)
+    expect(riskyChanges(at(), at(br(30, 46)))).toEqual(line)
+    expect(riskyChanges(at(br(25, 40)), at(br(30, 40)))).toEqual(line)
+    expect(riskyChanges(at(br(25, 40)), at())).toEqual(line)
+    expect(riskyChanges(at(br(60, 90)), at())).toEqual([])
+    expect(riskyChanges(at(br(25, 40)), at(br(20, 40)))).toEqual([])
+  })
+
+  test('the form field: absent on an old page, untouched, blank, numbers, a typo', () => {
+    expect(bridgeFromForm(form({}))).toBeUndefined()
+    expect(bridgeFromForm(form(field('', '')))).toBeUndefined()
+    expect(bridgeFromForm(form(field('25', '40', '25,40')))).toBeUndefined()
+    expect(bridgeFromForm(form({ ...field('25', '40'), kept_carried: '1' }))).toBeUndefined()
+    expect(bridgeFromForm(form(field('', '', '25,40')))).toEqual({ sending: null, burned: null })
+    expect(bridgeFromForm(form(field('60', '', ',')))).toEqual({ sending: 60, burned: null })
+    expect(bridgeFromForm(form(field('3.5', 'x')))).toEqual({ sending: Number.NaN, burned: Number.NaN })
+  })
+
+  test('withBridge: never invents the key, one blank field takes the default, blank over a running key writes the default', () => {
+    expect(withBridge(DEFAULT_SETTINGS, undefined, WITH_BRIDGE)).toBe(DEFAULT_SETTINGS)
+    expect(withBridge(DEFAULT_SETTINGS, { sending: null, burned: null }, null)).toBe(DEFAULT_SETTINGS)
+    expect(withBridge(DEFAULT_SETTINGS, { sending: null, burned: null }, WITH_LAZY)).toBe(DEFAULT_SETTINGS)
+    expect(withBridge(DEFAULT_SETTINGS, { sending: 60, burned: null }, null).bridge).toEqual(br(60, 45))
+    expect(withBridge(DEFAULT_SETTINGS, { sending: null, burned: null }, WITH_BRIDGE).bridge).toEqual(br(30, 45))
+  })
+
+  test('the store keeps bridge as it runs, absent included, when a form write does not carry it', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'bridge', settings: WITH_BRIDGE, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: null, template: 'custom', settings: { ...DEFAULT_SETTINGS, capUsdc: 90 }, author: 'x', reason: 'cap' })
+    expect((await newest(db)).bridge).toEqual(br(25, 40))
+    const db2 = memoryDb()
+    await seed(db2, { env: 'prod', accountKeys: null, template: 'lazy', settings: WITH_LAZY, author: 'x', reason: 'r' })
+    await seed(db2, { env: 'prod', accountKeys: null, template: 'custom', settings: { ...DEFAULT_SETTINGS, capUsdc: 90 }, author: 'x', reason: 'cap' })
+    expect('bridge' in (await newest(db2))).toBe(false)
+  })
+
+  test('on the page: placeholders show the defaults; an edit elsewhere carries bridge as it runs; lowering needs no confirm', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'lazy', settings: WITH_LAZY, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const page = await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text()
+    expect(page).toContain('Bridge to Monad: flag stuck after')
+    expect(page).toContain('name="bridge_field" value="1"')
+    expect(page).toContain('name="bridge_init" value=","')
+    expect(page).toContain('placeholder="30 (default)"')
+    expect(page).toContain('placeholder="45 (default)"')
+    expect(page).toContain('Now 30 min (default)')
+    const csrf = csrfOf(page)
+    // Left as the page showed it (blank): a cap-only edit writes no bridge key at all.
+    await worker.fetch(post('/ops/settings/apply', formFor({ ...DEFAULT_SETTINGS, capUsdc: 90 }, { csrf, ...field('', '') }), cookie), env)
+    expect((await newest(db)).capUsdc).toBe(90)
+    expect('bridge' in (await newest(db))).toBe(false)
+    expect((await newest(db)).rerange).toEqual(LAZY)
+    // An old page, with no group: also no bridge key.
+    await worker.fetch(post('/ops/settings/apply', formFor({ ...DEFAULT_SETTINGS, capUsdc: 80 }, { csrf }), cookie), env)
+    expect('bridge' in (await newest(db))).toBe(false)
+    // Lower than the defaults: written at once, both fields (one blank takes its default).
+    const low = await (await worker.fetch(post('/ops/settings/apply', formFor({ ...DEFAULT_SETTINGS, capUsdc: 80 }, { csrf, ...field('25', '') }), cookie), env)).text()
+    expect(low).not.toContain('Confirm this change')
+    expect((await newest(db)).bridge).toEqual(br(25, 45))
+    expect((await newest(db)).rerange).toEqual(LAZY)
+    expect(low).toContain('25 min sending, 45 min burned')
+  })
+
+  test('a page left open never overwrites a deadline set meanwhile; raising asks first and the confirm carries it', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'bridge', settings: WITH_BRIDGE, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const page = await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text()
+    expect(page).toContain('name="bridge_init" value="25,40"')
+    expect(page).toContain('value="25"')
+    const csrf = csrfOf(page)
+    // Someone else raises it after the page was rendered; this page's fields still hold 25 and 40 (untouched).
+    await seed(db, { env: 'prod', accountKeys: null, template: 'other', settings: { ...WITH_BRIDGE, bridge: br(35, 50) } as EngineSettings, author: 'y', reason: 'later' })
+    await worker.fetch(post('/ops/settings/apply', formFor({ ...DEFAULT_SETTINGS, capUsdc: 90 }, { csrf, ...field('25', '40', '25,40') }), cookie), env)
+    expect((await newest(db)).capUsdc).toBe(90)
+    expect((await newest(db)).bridge).toEqual(br(35, 50))
+    // Raising burned from the 50 that runs: asks first, nothing written yet.
+    const before = (await listVersions(db))!.length
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor({ ...DEFAULT_SETTINGS, capUsdc: 90 }, { csrf, ...field('35', '60', '35,50') }), cookie), env)).text()
+    expect(ask).toContain('Confirm this change')
+    expect(ask).toContain('a stuck bridge to Monad is flagged and paged later')
+    expect((await listVersions(db))!.length).toBe(before)
+    await worker.fetch(post('/ops/settings/apply', confirmBodyOf(ask), cookie), env)
+    expect((await newest(db)).bridge).toEqual(br(35, 60))
+    expect((await newest(db)).rerange).toEqual(LAZY)
+    expect((await listVersions(db))![0]!.template).toContain('custom')
+  })
+
+  test('absent and raised above the default: confirm first; out of bounds is refused', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'plain', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text())
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, ...field('60', '') }), cookie), env)).text()
+    expect(ask).toContain('Confirm this change')
+    expect('bridge' in (await newest(db))).toBe(false)
+    await worker.fetch(post('/ops/settings/apply', confirmBodyOf(ask), cookie), env)
+    expect((await newest(db)).bridge).toEqual(br(60, 45))
+    const bad = await (await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, ...field('19', '45', '60,45') }), cookie), env)).text()
+    expect(bad).toContain('bridge.stuckAfterMin.sending must be a whole number from 20 to 1440')
+    expect((await newest(db)).bridge).toEqual(br(60, 45))
+  })
+
+  test('the template name is decided on the set as written: a bridge-only edit is custom, an untouched group keeps the preset name', async () => {
+    const db = memoryDb()
+    db.raw.exec(`INSERT INTO engine_settings_templates VALUES ('plain', '${canonicalJson(DEFAULT_SETTINGS)}', 'seed', null, 'm', '2026-10-16T00:00:00Z')`)
+    await seed(db, { env: 'prod', accountKeys: null, template: 'bridge', settings: WITH_BRIDGE, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text())
+    // The preset says nothing about bridge: untouched, it keeps what runs and stays "plain".
+    await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, template: 'plain', ...field('25', '40', '25,40') }), cookie), env)
+    expect((await listVersions(db))![0]!.template).toBe('plain')
+    expect((await newest(db)).bridge).toEqual(br(25, 40))
+    // Editing the group makes it custom.
+    await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, template: 'plain', ...field('22', '40', '25,40') }), cookie), env)
+    expect((await listVersions(db))![0]!.template).toBe('custom (from plain)')
+    expect((await newest(db)).bridge).toEqual(br(22, 40))
   })
 })

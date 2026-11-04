@@ -91,7 +91,7 @@ import { experimentsSection } from "./ops-experiments";
 import { RECOMMENDED_TEMPLATE, settingsSection, type SettingsPage } from "./ops-settings";
 import { checkConfirmToken, issueConfirmToken, risksOf } from "./engine-settings-confirm";
 import { inEffect, appendVersion, keepUnedited, keptFrom, KEPT_KEYS, maxIdOf, SettingsConflict, SettingsOutcomeUnknown, listTemplates, listVersions, versionById, type Env as SettingsEnv, type TemplateRow } from "./engine-settings-store";
-import { DEFAULT_SETTINGS, RECOMMENDED_SETTINGS, canonicalJson, maxPerWeekFromForm, settingsFromForm, validateSettings, withMaxPerWeek } from "./engine-settings-model";
+import { DEFAULT_SETTINGS, RECOMMENDED_SETTINGS, bridgeFromForm, canonicalJson, maxPerWeekFromForm, settingsFromForm, validateSettings, withBridge, withMaxPerWeek } from "./engine-settings-model";
 import { functionsSection, type FunctionsPage } from "./ops-functions";
 import { isOpsFlagName, OPS_FLAGS, OPS_FLAG_NAMES } from "./ops-flags-model";
 import { checkFlagConfirmToken, issueFlagConfirmToken } from "./ops-flags-confirm";
@@ -991,14 +991,17 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
       // rollback is written as its target.
       if (!rollbackOf) {
         const weekly = maxPerWeekFromForm(form);
+        // otto/mamoru-astro#48: the bridge deadlines, only when the field was edited; otherwise carried as they run.
+        const bridgeIn = bridgeFromForm(form);
+        const setsBridge = bridgeIn !== undefined && !(bridgeIn.sending === null && bridgeIn.burned === null);
         const keys = draft.canary.split(/\s+/).map((k) => k.trim()).filter(Boolean);
         let base: ReturnType<typeof keptFrom>;
         try {
-          base = keptFrom((await inEffect(db))[draft.env], keys.length ? keys : null, { carried: KEPT_KEYS.filter((k) => k in draft.settings), ownMaxPerWeek: weekly !== undefined });
+          base = keptFrom((await inEffect(db))[draft.env], keys.length ? keys : null, { carried: [...KEPT_KEYS.filter((k) => k in draft.settings), ...(setsBridge ? ["bridge"] : [])], ownMaxPerWeek: weekly !== undefined });
         } catch (e) {
           return respond(await settingsView({ draft, notice: { text: `Not applied: ${(e as Error).message}.`, tone: "bad" } }, 400));
         }
-        draft = { ...draft, settings: keepUnedited(withMaxPerWeek(draft.settings, weekly, "rerange" in draft.settings ? draft.settings.rerange : base?.rerange), base) };
+        draft = { ...draft, settings: keepUnedited(withBridge(withMaxPerWeek(draft.settings, weekly, "rerange" in draft.settings ? draft.settings.rerange : base?.rerange), bridgeIn, base), base) };
         // An edited template is recorded as such, never under the name of a preset it no longer matches: compared as
         // that preset would be written (with what it does not carry kept), so the first POST and the confirm agree.
         // A name this code already wrote ("custom (from X)") comes back from the confirm screen and is kept as it is.
