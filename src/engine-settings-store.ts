@@ -148,7 +148,7 @@ export async function maxIdOf(db: D1Db, env: Env): Promise<number> {
  * (what the targeted accounts run now, see `keptFrom`) when the draft does not carry them. A form cannot express
  * removing them; removal is a rollback to a version without them, which is written as is.
  */
-export const KEPT_KEYS = ["rerange", "bridgeOut"] as const;
+export const KEPT_KEYS = ["rerange", "bridgeOut", "bridge"] as const;
 
 /**
  * What the accounts a write targets run now: for a canary whose accounts all sit in the canary in effect, that canary;
@@ -164,7 +164,8 @@ export type KeptOptions = {
 /** A kept setting as the operator reads it: a bare `{ mode: "eager" }` is the same as none. */
 function hiddenOf(s: EngineSettings, k: (typeof KEPT_KEYS)[number], o: KeptOptions): unknown {
   const v = (s as Record<string, unknown>)[k];
-  if (k !== "rerange" || !v) return v ?? null;
+  if (k !== "rerange") return v ? canonicalJson(v as EngineSettings) : null;
+  if (!v) return null;
   const { maxPerWeek, ...rest } = v as Record<string, unknown>;
   const r = o.ownMaxPerWeek || maxPerWeek === undefined ? rest : { ...rest, maxPerWeek };
   return Object.keys(r).length === 1 && r.mode === "eager" ? null : canonicalJson(r as unknown as EngineSettings);
@@ -178,7 +179,7 @@ export function keptFrom(now: InEffect | undefined, accountKeys: string[] | null
   // keeps both, and picking one would change the others without a field saying so (review r3). Refused instead.
   if (keys.some((k) => inCanary.has(k)) && now?.canary) {
     const hidden = (s: EngineSettings) => JSON.stringify(KEPT_KEYS.filter((k) => !o.carried?.includes(k)).map((k) => hiddenOf(s, k, o)));
-    if (hidden(now.canary.settings) !== hidden(now.wide?.settings ?? ({} as EngineSettings))) throw new Error("these accounts run different re-range or bridge-out settings today; write the canary for the accounts of the current canary and the others separately");
+    if (hidden(now.canary.settings) !== hidden(now.wide?.settings ?? ({} as EngineSettings))) throw new Error("these accounts run different re-range, bridge-out or bridge-deadline settings today; write the canary for the accounts of the current canary and the others separately");
   }
   return now?.wide?.settings ?? null;
 }

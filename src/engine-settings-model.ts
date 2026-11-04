@@ -19,7 +19,19 @@ export type EngineSettings = {
   rerange?: { mode: string; maxPerWeek?: number; [k: string]: unknown };
   /** Move to Base for USDC found on Ethereum (#133). No field: carried as it runs. */
   bridgeOut?: { enabled: boolean };
+  /**
+   * otto/mamoru#245: minutes a CCTP burn to Monad may stay 'sending' or 'burned' before the operator flags it stuck and
+   * pages ops once. A flag only. Absent = the operator's defaults (DEFAULT_BRIDGE_STUCK_AFTER_MIN). /ops edits it
+   * through a field (otto/mamoru-astro#48); a version never gains or loses the key unless that field was edited.
+   */
+  bridge?: { stuckAfterMin: BridgeStuckAfterMin };
 };
+
+/** otto/mamoru#245: per journal state, minutes until a burn to Monad is flagged stuck. */
+export type BridgeStuckAfterMin = { sending: number; burned: number };
+
+/** The deadlines the operator runs when the setting is absent (DEFAULT_BRIDGE_STUCK_AFTER_MIN in packages/policy). */
+export const DEFAULT_BRIDGE_STUCK_AFTER_MIN: BridgeStuckAfterMin = { sending: 30, burned: 45 };
 
 export const DEFAULT_CAP_USDC = 100;
 
@@ -39,6 +51,8 @@ export const BOUNDS = {
   maxPerWeek: { min: 1, max: 50 },
   edgeBufferBps: { min: 0, max: 10_000 },
   maxWaitSeconds: { min: 1_800, max: 604_800 },
+  // otto/mamoru#245: minutes before a burn to Monad is flagged stuck, per state.
+  stuckAfterMin: { min: 20, max: 1440 },
 } as const;
 
 const LAZY_KEYS = ["edgeBufferTicks", "minDwellSeconds", "horizonSeconds", "lvrWeightBps"] as const;
@@ -75,6 +89,20 @@ const isInt = (n: unknown): n is number => typeof n === "number" && Number.isInt
 
 function inRange(errors: string[], field: string, v: unknown, b: { min: number; max: number }): void {
   if (!isInt(v) || v < b.min || v > b.max) errors.push(`${field} must be a whole number from ${b.min} to ${b.max}`);
+}
+
+/**
+ * The deadlines in force under these settings, as the operator reads them: per field, a value that is not a whole
+ * number within the bounds is that field's default.
+ */
+export function bridgeStuckAfterOf(s: EngineSettings): BridgeStuckAfterMin {
+  const m = s.bridge?.stuckAfterMin as Record<string, unknown> | undefined;
+  const { min, max } = BOUNDS.stuckAfterMin;
+  const pick = (k: keyof BridgeStuckAfterMin): number => {
+    const v = m && typeof m === "object" ? m[k] : undefined;
+    return typeof v === "number" && Number.isInteger(v) && v >= min && v <= max ? v : DEFAULT_BRIDGE_STUCK_AFTER_MIN[k];
+  };
+  return { sending: pick("sending"), burned: pick("burned") };
 }
 
 export function validateSettings(s: EngineSettings): string[] {
@@ -114,6 +142,17 @@ export function validateSettings(s: EngineSettings): string[] {
     const b = s.bridgeOut as Record<string, unknown> | null;
     if (!b || typeof b !== "object" || Array.isArray(b) || Object.keys(b).some((k) => k !== "enabled") || typeof b.enabled !== "boolean") errors.push("bridgeOut must be { enabled: true | false }");
   }
+  // The same checks as the operator: a version that already holds `bridge` passes, unknown keys inside it do not.
+  if (s.bridge !== undefined) {
+    const b = s.bridge as Record<string, unknown> | null;
+    const m = b && typeof b === "object" && !Array.isArray(b) ? (b.stuckAfterMin as Record<string, unknown> | null) : null;
+    if (!b || typeof b !== "object" || Array.isArray(b) || Object.keys(b).some((k) => k !== "stuckAfterMin") || !m || typeof m !== "object" || Array.isArray(m) || Object.keys(m).some((k) => k !== "sending" && k !== "burned"))
+      errors.push("bridge must be { stuckAfterMin: { sending, burned } }");
+    else {
+      inRange(errors, "bridge.stuckAfterMin.sending", m.sending, BOUNDS.stuckAfterMin);
+      inRange(errors, "bridge.stuckAfterMin.burned", m.burned, BOUNDS.stuckAfterMin);
+    }
+  }
   for (const side of ["btc", "eth"] as const) {
     inRange(errors, `guard.${side}.fallBps`, s.guard[side].fallBps, BOUNDS.fallBps);
     inRange(errors, `guard.${side}.volBps`, s.guard[side].volBps, BOUNDS.volBps);
@@ -140,6 +179,10 @@ export function riskyChanges(from: EngineSettings, to: EngineSettings): string[]
   const cf = from.rerange?.maxPerWeek;
   const ct = to.rerange?.maxPerWeek;
   if (cf !== undefined && (ct === undefined || ct > cf)) out.push("more re-ranges per week are allowed");
+  // otto/mamoru#245: a later deadline pages ops later about a stuck bridge (absent counts as the defaults).
+  const sf = bridgeStuckAfterOf(from);
+  const st = bridgeStuckAfterOf(to);
+  if (st.sending > sf.sending || st.burned > sf.burned) out.push("a stuck bridge to Monad is flagged and paged later");
   if (from.depth && to.depth) {
     if (to.depth.impactBps > from.depth.impactBps) out.push("entries may move the pool price more");
     if (to.depth.shareBps > from.depth.shareBps) out.push("entries may take a bigger share of a pool");
@@ -231,13 +274,13 @@ function fieldsFromForm(form: FormData): EngineSettings {
  * that was checked, so confirming never merges anything again. Empty or absent: none carried. Unreadable JSON gives a
  * re-range that validate refuses.
  */
-export function carriedFromForm(form: FormData): Pick<EngineSettings, "rerange" | "bridgeOut"> {
+export function carriedFromForm(form: FormData): Pick<EngineSettings, "rerange" | "bridgeOut" | "bridge"> {
   const raw = String(form.get("kept_json") ?? "").trim();
   if (form.get("kept_carried") !== "1" || raw === "") return {};
   try {
     const o = JSON.parse(raw) as Record<string, unknown>;
-    if (!o || typeof o !== "object" || Array.isArray(o) || Object.keys(o).some((k) => k !== "rerange" && k !== "bridgeOut")) return { rerange: { mode: "" } };
-    return o as Pick<EngineSettings, "rerange" | "bridgeOut">;
+    if (!o || typeof o !== "object" || Array.isArray(o) || Object.keys(o).some((k) => k !== "rerange" && k !== "bridgeOut" && k !== "bridge")) return { rerange: { mode: "" } };
+    return o as Pick<EngineSettings, "rerange" | "bridgeOut" | "bridge">;
   } catch {
     return { rerange: { mode: "" } };
   }
@@ -258,6 +301,33 @@ export function withMaxPerWeek(s: EngineSettings, cap: number | null | undefined
   const { maxPerWeek: _, ...kept } = base ?? { mode: "eager" };
   if (cap === null) return base ? { ...s, rerange: kept as EngineSettings["rerange"] & object } : s;
   return { ...s, rerange: { ...kept, maxPerWeek: cap } as EngineSettings["rerange"] & object };
+}
+
+/**
+ * otto/mamoru-astro#48: the bridge deadlines the form asks for, `{ sending, burned }` in minutes (null = blank, NaN =
+ * a typo, refused by validate). `undefined` when nothing is to change: the page has no such group (rendered before it
+ * existed), the confirm screen carries the set as checked, or the fields still hold exactly what ran when the page was
+ * rendered (`bridge_init`): then `bridge` is carried as it runs, absent included, and a page left open can never
+ * overwrite a deadline someone set meanwhile.
+ */
+export function bridgeFromForm(form: FormData): { sending: number | null; burned: number | null } | undefined {
+  if (form.get("bridge_field") !== "1" || form.get("kept_carried") === "1") return undefined;
+  const sending = String(form.get("bridge_sending") ?? "").trim();
+  const burned = String(form.get("bridge_burned") ?? "").trim();
+  if (form.get("bridge_init") !== null && `${sending},${burned}` === String(form.get("bridge_init"))) return undefined;
+  return { sending: int(form, "bridge_sending"), burned: int(form, "bridge_burned") };
+}
+
+/**
+ * Puts the deadlines the form asked for into the set. Both blank leaves `bridge` absent when nothing runs it (never
+ * invented); when something does run it, blank means the default, written as the default (a form cannot express
+ * removing a key; a rollback to a version without it does). One blank field takes the default: the operator needs both.
+ */
+export function withBridge(s: EngineSettings, input: ReturnType<typeof bridgeFromForm>, base: EngineSettings | null): EngineSettings {
+  if (input === undefined) return s;
+  if (input.sending === null && input.burned === null && base?.bridge === undefined) return s;
+  const d = DEFAULT_BRIDGE_STUCK_AFTER_MIN;
+  return { ...s, bridge: { stuckAfterMin: { sending: input.sending ?? d.sending, burned: input.burned ?? d.burned } } };
 }
 
 /** Parses a stored settings_json; null when the row is unreadable. */
