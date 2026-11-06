@@ -4,11 +4,11 @@ import { DECK } from "../../deck-copy";
 import { OPEN_COPY } from "../../open-copy";
 import { WHITECHAIN } from "../../deck-whitechain-copy";
 
-// Slides 01–05 are the main deck's (deck.astro), kept as they are at /deck. From 06 on: the go-to-market pitch to Whitechain.
-const { problem, loop, trust, built } = DECK;
-const { traction, market, segment, channels, offer, rollout, ask, close } = WHITECHAIN;
+// Slides 01–04 are the main deck's (deck.astro), kept as they are at /deck. From 05 on: the go-to-market pitch to Whitechain.
+const { problem, loop, trust } = DECK;
+const { traction, market, segment, channels, offer, close } = WHITECHAIN;
 const cover = OPEN_COPY.hero;
-const total = 13;
+const total = 10;
 
 // 02 Problem: the bait rate, sampled as it falls from `from` to zero. The line and the number read the same samples.
 const SAMPLES = 120;
@@ -102,41 +102,8 @@ const askAt = [
       </div>
     </section>
 
-    <!-- 05 How it's built -->
-    <section class="slide built" data-slide="5" aria-roledescription="slide" aria-label={built.heading}>
-      <div class="wide">
-        <p class="eyebrow rise" style="--d:0">{built.eyebrow}</p>
-        <h2 class="rise" style="--d:1">{built.heading}</h2>
-        <ol class="layers">
-          {built.layers.map((l, i) => (
-            <li class="rise" style={`--d:${i + 2}`}>
-              <span class="who">{l.who}</span>
-              <span class="what">{l.what}</span>
-            </li>
-          ))}
-        </ol>
-      </div>
-    </section>
-
-    <!-- 06 Traction: the product is already in people's hands -->
-    <section class="slide traction" data-slide="6" aria-roledescription="slide" aria-label={traction.heading.join(" ")}>
-      <div class="wide">
-        <p class="eyebrow rise" style="--d:0">{traction.eyebrow}</p>
-        <h2 class="rise" style="--d:1">{traction.heading.map((l) => <span>{l}</span>)}</h2>
-        <dl class="figures">
-          {traction.figures.map((f, i) => (
-            <div class="rise" style={`--d:${i + 2}`}>
-              <dt>{f.value}</dt>
-              <dd>{f.label}</dd>
-            </div>
-          ))}
-        </dl>
-        <p class="source rise" style={`--d:${traction.figures.length + 2}`}>{traction.note}</p>
-      </div>
-    </section>
-
-    <!-- 07 Market: three bad options, then ours -->
-    <section class="slide market" data-slide="7" aria-roledescription="slide" aria-label={market.heading.join(" ")}>
+    <!-- 05 Market: three bad options, then ours -->
+    <section class="slide market" data-slide="5" aria-roledescription="slide" aria-label={market.heading.join(" ")}>
       <div class="wide">
         <p class="eyebrow rise" style="--d:0">{market.eyebrow}</p>
         <h2 class="rise" style="--d:1">{market.heading.map((l) => <span>{l}</span>)}</h2>
@@ -156,17 +123,16 @@ const askAt = [
       </div>
     </section>
 
-    <!-- 08 Segment: who we win first, and where the volume is -->
-    <section class="slide segment" data-slide="8" aria-roledescription="slide" aria-label={segment.heading.join(" ")}>
+    <!-- 06 Segment: who is already in, and who comes next -->
+    <section class="slide segment" data-slide="6" aria-roledescription="slide" aria-label={segment.heading}>
       <div class="wide">
         <p class="eyebrow rise" style="--d:0">{segment.eyebrow}</p>
-        <h2 class="rise" style="--d:1">{segment.heading.map((l) => <span>{l}</span>)}</h2>
+        <h2 class="rise" style="--d:1">{segment.heading}</h2>
         <ul class="pair">
           {segment.rows.map((r, i) => (
             <li class="rise" style={`--d:${i + 2}`}>
               <span class="tag">{r.tag}</span>
               <span class="who">{r.who}</span>
-              <span class="size">{r.size}</span>
               <span class="what">{r.what}</span>
             </li>
           ))}
@@ -174,8 +140,25 @@ const askAt = [
       </div>
     </section>
 
-    <!-- 09 Channels: what we already run, each with its proof -->
-    <section class="slide channels" data-slide="9" aria-roledescription="slide" aria-label={channels.heading}>
+    <!-- 07 Traction: the product is already in people's hands -->
+    <section class="slide traction" data-slide="7" aria-roledescription="slide" aria-label={traction.heading.join(" ")}>
+      <div class="wide">
+        <p class="eyebrow rise" style="--d:0">{traction.eyebrow}</p>
+        <h2 class="rise" style="--d:1">{traction.heading.map((l) => <span>{l}</span>)}</h2>
+        <dl class="figures">
+          {traction.figures.map((f, i) => (
+            <div class="rise" style={`--d:${i + 2}`}>
+              <dt>{f.value}</dt>
+              <dd>{f.label}</dd>
+            </div>
+          ))}
+        </dl>
+        <p class="source rise" style={`--d:${traction.figures.length + 2}`}>{traction.note}</p>
+      </div>
+    </section>
+
+    <!-- 08 Channels: what we already run, each with its proof -->
+    <section class="slide channels" data-slide="8" aria-roledescription="slide" aria-label={channels.heading}>
       <div class="wide">
         <p class="eyebrow rise" style="--d:0">{channels.eyebrow}</p>
         <h2 class="rise" style="--d:1">{channels.heading}</h2>
@@ -194,8 +177,8 @@ const askAt = [
       </div>
     </section>
 
-    <!-- 10 The offer: both sides of the first liquidity -->
-    <section class="slide offer" data-slide="10" aria-roledescription="slide" aria-label={offer.heading.join(" ")}>
+    <!-- 09 The offer: they have the liquidity, we bring the users -->
+    <section class="slide offer" data-slide="9" aria-roledescription="slide" aria-label={offer.heading.join(" ")}>
       <div class="wide">
         <p class="eyebrow rise" style="--d:0">{offer.eyebrow}</p>
         <h2 class="rise" style="--d:1">{offer.heading.map((l) => <span>{l}</span>)}</h2>
@@ -211,45 +194,8 @@ const askAt = [
       </div>
     </section>
 
-    <!-- 11 Rollout: four steps, each with the number that opens the next -->
-    <section class="slide rollout" data-slide="11" aria-roledescription="slide" aria-label={rollout.heading}>
-      <div class="wide">
-        <p class="eyebrow rise" style="--d:0">{rollout.eyebrow}</p>
-        <h2 class="rise" style="--d:1">{rollout.heading}</h2>
-        <ol class="steps4">
-          {rollout.steps.map((s, i) => (
-            <li class="rise" style={`--d:${i + 2}`}>
-              <span class="n">{s.n}</span>
-              <span class="who">{s.who}</span>
-              <span class="what">{s.what}</span>
-              <span class="kpi">{s.kpi}</span>
-            </li>
-          ))}
-        </ol>
-      </div>
-    </section>
-
-    <!-- 12 The ask (class deal: .ask belongs to the problem slide), and what Whitechain gets back -->
-    <section class="slide deal" data-slide="12" aria-roledescription="slide" aria-label={ask.heading}>
-      <div class="wide">
-        <p class="eyebrow rise" style="--d:0">{ask.eyebrow}</p>
-        <h2 class="rise" style="--d:1">{ask.heading}</h2>
-        <div class="trade">
-          <ol class="asks rise" style="--d:2">
-            {ask.asks.map((a) => <li>{a}</li>)}
-          </ol>
-          <div class="gives rise" style="--d:3">
-            <p class="sub">{ask.giveHeading}</p>
-            <ul>
-              {ask.gives.map((g) => <li>{g}</li>)}
-            </ul>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- 13 Close: the next step, and the app on their phone -->
-    <section class="slide close" data-slide="13" aria-roledescription="slide" aria-label={close.heading.join(" ")}>
+    <!-- 10 Close: the next step, and the app on their phone -->
+    <section class="slide close" data-slide="10" aria-roledescription="slide" aria-label={close.heading.join(" ")}>
       <div class="center">
         <p class="eyebrow rise" style="--d:0">{close.eyebrow}</p>
         <h2 class="rise" style="--d:1">{close.heading.map((l) => <span>{l}</span>)}</h2>
@@ -1014,7 +960,7 @@ const askAt = [
     color: var(--muted);
   }
 
-  /* 13 Close: the app on their phone. */
+  /* 10 Close: the button and the QR. */
   .cta {
     display: inline-flex;
     align-items: center;
@@ -1060,7 +1006,7 @@ const askAt = [
     height: 6rem;
     image-rendering: pixelated;
   }
-  /* 13 Close: the next step, the app and the links. */
+  /* 10 Close: the restart and the links under them. */
   .outro-foot {
     display: flex;
     flex-wrap: wrap;
@@ -1085,10 +1031,10 @@ const askAt = [
     color: var(--emerald);
   }
 
-  /* 06 Traction: four figures in serif, each over a hairline, and where they were read. */
+  /* 07 Traction: three figures in serif, each over a hairline, and where they were read. */
   .figures {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: clamp(1.25rem, 3vw, 2.5rem);
     margin: clamp(2rem, 6vh, 3.5rem) 0 0;
   }
@@ -1119,7 +1065,7 @@ const askAt = [
     color: var(--stone);
   }
 
-  /* 07 Market: the three options in grey, ours in ink and emerald. */
+  /* 05 Market: the three options in grey, ours in ink and emerald. */
   .layers .ours .who {
     color: var(--emerald);
   }
@@ -1133,7 +1079,7 @@ const askAt = [
     font-size: 0.85rem;
   }
 
-  /* 08 Segment: who comes first and who comes next, side by side. */
+  /* 06 Segment: who is already in, and who comes next, two by two. */
   .pair {
     list-style: none;
     margin: clamp(2rem, 6vh, 3.5rem) 0 0;
@@ -1151,29 +1097,22 @@ const askAt = [
   }
   .tag,
   .n,
-  .kpi,
-  .proof,
-  .sub {
+  .proof {
     font-family: var(--font-mono);
     font-size: 0.72rem;
     letter-spacing: 0.2em;
     text-transform: uppercase;
     color: var(--stone);
   }
-  .pair li:first-child .tag {
+  .pair li:last-child .tag {
     color: var(--emerald);
   }
   .pair .who {
     font-size: clamp(1.4rem, 2.5vw, 2.1rem);
     line-height: 1.15;
   }
-  .size {
-    font-size: clamp(1.1rem, 1.8vw, 1.4rem);
-    font-variant-numeric: tabular-nums;
-    color: var(--emerald);
-  }
 
-  /* 09 Channels: number, what we do, and the proof on the right. */
+  /* 08 Channels: number, what we do, and the proof on the right. */
   .rows {
     list-style: none;
     margin: clamp(1.75rem, 5vh, 3rem) 0 0;
@@ -1198,7 +1137,7 @@ const askAt = [
     color: var(--emerald);
   }
 
-  /* 10 The offer: three parts, read at once. */
+  /* 09 The offer: three parts, read at once. */
   .wide-lede {
     max-width: 44ch;
     margin-top: clamp(1rem, 2.5vh, 1.5rem);
@@ -1214,93 +1153,7 @@ const askAt = [
     transform: none;
   }
 
-  /* 11 Rollout: four steps in a row, each ending in the number it is judged by. */
-  .steps4 {
-    list-style: none;
-    margin: clamp(2rem, 6vh, 3.5rem) 0 0;
-    padding: 0;
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: clamp(1rem, 2.5vw, 2rem);
-  }
-  .steps4 li {
-    display: flex;
-    flex-direction: column;
-    gap: 0.55rem;
-    padding-top: clamp(0.8rem, 2vh, 1.1rem);
-    border-top: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
-  }
-  .steps4 li:nth-child(2) {
-    border-top-color: var(--emerald);
-  }
-  .steps4 .what {
-    flex: 1;
-    font-size: clamp(0.92rem, 1.25vw, 1.02rem);
-  }
-  .steps4 .kpi {
-    color: var(--emerald);
-  }
-
-  /* 12 The ask: what we ask in large type, what they get beside it. */
-  .trade {
-    display: grid;
-    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
-    gap: clamp(2rem, 6vw, 5rem);
-    margin: clamp(2rem, 6vh, 3.5rem) 0 0;
-    align-items: start;
-  }
-  .asks {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    counter-reset: ask;
-    border-top: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
-  }
-  .asks li {
-    counter-increment: ask;
-    display: flex;
-    gap: 1.25rem;
-    align-items: baseline;
-    padding: clamp(0.8rem, 2vh, 1.15rem) 0;
-    border-bottom: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
-    font-size: clamp(1.4rem, 2.6vw, 2.1rem);
-    line-height: 1.15;
-  }
-  .asks li::before {
-    content: counter(ask, decimal-leading-zero);
-    font-family: var(--font-mono);
-    font-size: 0.72rem;
-    letter-spacing: 0.2em;
-    color: var(--stone);
-  }
-  .gives .sub {
-    margin: 0 0 0.75rem;
-    color: var(--emerald);
-  }
-  .gives ul {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: grid;
-    gap: 0.7rem;
-  }
-  .gives li {
-    position: relative;
-    padding-left: 1.6rem;
-    font-size: clamp(1.05rem, 1.7vw, 1.3rem);
-    line-height: 1.4;
-  }
-  .gives li::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 0.72em;
-    width: 0.7rem;
-    height: 1px;
-    background: var(--emerald);
-  }
-
-  /* 13 Close */
+  /* 10 Close */
   .close h2 span:last-child {
     color: var(--emerald);
   }
@@ -1386,9 +1239,7 @@ const askAt = [
       gap: 1.25rem 1rem;
     }
     .claims.three,
-    .pair,
-    .steps4,
-    .trade {
+    .pair {
       grid-template-columns: 1fr;
       gap: 1rem;
     }
@@ -1400,7 +1251,7 @@ const askAt = [
       grid-column: 2;
       text-align: left;
     }
-    /* Thirteen stones are wider than eight: smaller ones keep clear of the seal and the counter. */
+    /* Ten stones are wider than eight: smaller ones keep clear of the seal and the counter. */
     .dots {
       gap: 0;
     }
