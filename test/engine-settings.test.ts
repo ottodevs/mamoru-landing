@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import type { D1Db } from "../src/d1-infra";
-import { BOUNDS, DEFAULT_SETTINGS, canonicalJson, pctOf, riskyChanges, settingsFromForm, validateSettings, type EngineSettings } from "../src/engine-settings-model";
+import { BOUNDS, DEFAULT_SETTINGS, bridgeFromForm, bridgeStuckAfterOf, canonicalJson, maxPerWeekFromForm, pctOf, riskyChanges, settingsFromForm, validateSettings, withBridge, withMaxPerWeek, type EngineSettings } from "../src/engine-settings-model";
 import { appendVersion, listVersions, maxIdOf, SettingsConflict, type NewVersion } from "../src/engine-settings-store";
 import { sealSession } from "../src/ops";
 import worker, { type Env } from "../src/worker";
@@ -84,6 +84,14 @@ describe("engine settings model (copy of packages/policy/src/engine-settings.ts)
       fallBps: { min: 100, max: 3000 },
       volBps: { min: 1000, max: 50_000 },
       gasMultiple: { min: 1, max: 50 },
+      edgeBufferTicks: { min: 0, max: 1000 },
+      minDwellSeconds: { min: 0, max: 86_400 },
+      horizonSeconds: { min: 3_600, max: 604_800 },
+      lvrWeightBps: { min: 0, max: 20_000 },
+      maxPerWeek: { min: 1, max: 50 },
+      edgeBufferBps: { min: 0, max: 10_000 },
+      maxWaitSeconds: { min: 1_800, max: 604_800 },
+      stuckAfterMin: { min: 20, max: 1440 },
     });
     expect(canonicalJson(DEFAULT_SETTINGS)).toBe('{"capUsdc":null,"depth":null,"guard":{"btc":{"fallBps":700,"volBps":8000},"enabled":false,"eth":{"fallBps":900,"volBps":10000}}}');
   });
@@ -502,5 +510,357 @@ describe('/ops never drops settings it has no field for (otto/mamoru#218)', () =
     await seed(db, { env: 'prod', accountKeys: null, template: 'lazy', settings: WITH_LAZY, author: 'x', reason: 'r' })
     await seed(db, { env: 'prod', accountKeys: null, template: 'plain', settings: DEFAULT_SETTINGS, author: 'x', reason: 'back', rollbackOf: plain })
     expect((await stored(db)).rerange).toBeUndefined()
+  })
+})
+
+describe('re-ranges per week from /ops (otto/mamoru-astro#45, D13)', () => {
+  const LAZY = { mode: 'lazy', edgeBufferTicks: 100, minDwellSeconds: 1800, horizonSeconds: 86_400, lvrWeightBps: 10_000 }
+  const WITH_LAZY = { ...DEFAULT_SETTINGS, rerange: LAZY } as unknown as EngineSettings
+  const newest = async (db: D1Db) => (await listVersions(db))![0]!.settings as unknown as Record<string, unknown>
+  const form = (o: Record<string, string>) => { const f = new FormData(); for (const [k, v] of Object.entries(o)) f.set(k, v); return f }
+
+  test('the form field: absent on an old page, off, a number, a typo', () => {
+    expect(maxPerWeekFromForm(form({}))).toBeUndefined()
+    expect(maxPerWeekFromForm(form({ rerange_field: '1' }))).toBeNull()
+    expect(maxPerWeekFromForm(form({ rerange_field: '1', rerange_cap_on: '1', rerange_max_week: '2' }))).toBe(2)
+    expect(maxPerWeekFromForm(form({ rerange_field: '1', rerange_cap_on: '1', rerange_max_week: '2.5' }))).toBeNaN()
+    expect(maxPerWeekFromForm(form({ rerange_field: '1', rerange_cap_on: '1', rerange_max_week: '' }))).toBeNaN()
+  })
+
+  test('the cap goes into what runs: lazy parameters kept, eager default when none, off removes only the cap', () => {
+    expect(withMaxPerWeek(DEFAULT_SETTINGS, 2, LAZY as EngineSettings['rerange']).rerange).toEqual({ ...LAZY, maxPerWeek: 2 })
+    expect(withMaxPerWeek(DEFAULT_SETTINGS, 2, undefined).rerange).toEqual({ mode: 'eager', maxPerWeek: 2 })
+    expect(withMaxPerWeek(DEFAULT_SETTINGS, null, { ...LAZY, maxPerWeek: 2 } as EngineSettings['rerange']).rerange).toEqual(LAZY)
+    expect('rerange' in withMaxPerWeek(DEFAULT_SETTINGS, null, undefined)).toBe(false)
+    expect(withMaxPerWeek(DEFAULT_SETTINGS, undefined, LAZY as EngineSettings['rerange'])).toBe(DEFAULT_SETTINGS)
+  })
+
+  test('bounds as the operator (1 to 50), and raising or removing it is risky; adding or lowering it is not', () => {
+    expect(BOUNDS.maxPerWeek).toEqual({ min: 1, max: 50 })
+    for (const n of [0, 51, 2.5, Number.NaN]) expect(validateSettings({ ...DEFAULT_SETTINGS, rerange: { mode: 'eager', maxPerWeek: n } })).toContain('rerange.maxPerWeek must be a whole number from 1 to 50')
+    expect(validateSettings({ ...DEFAULT_SETTINGS, rerange: { mode: 'eager', maxPerWeek: 2 } })).toEqual([])
+    const at = (n?: number): EngineSettings => ({ ...DEFAULT_SETTINGS, rerange: n === undefined ? { mode: 'eager' } : { mode: 'eager', maxPerWeek: n } })
+    expect(riskyChanges(at(), at(2))).toEqual([])
+    expect(riskyChanges(at(3), at(2))).toEqual([])
+    expect(riskyChanges(at(2), at(4))).toEqual(['more re-ranges per week are allowed'])
+    expect(riskyChanges(at(2), at())).toEqual(['more re-ranges per week are allowed'])
+    // As the operator: a set without the cap removes it (the worker fills what the form does not carry first).
+    expect(riskyChanges(at(2), DEFAULT_SETTINGS)).toEqual(['more re-ranges per week are allowed'])
+    // Validation as the operator's: mode, lazy numbers, unknown keys, bridgeOut.
+    expect(validateSettings({ ...DEFAULT_SETTINGS, rerange: { mode: 'lazy' } })).toContain('rerange.edgeBufferTicks must be a whole number from 0 to 1000')
+    expect(validateSettings({ ...DEFAULT_SETTINGS, rerange: { mode: 'fast', maxPerWeek: 2 } })).toContain("rerange.mode must be 'eager' or 'lazy'")
+    expect(validateSettings({ ...DEFAULT_SETTINGS, rerange: { mode: 'eager', foo: 1 } })).toContain('unknown rerange setting foo')
+    expect(validateSettings({ ...DEFAULT_SETTINGS, rerange: { ...LAZY, maxWaitSeconds: 1800, minDwellSeconds: 3600 } })).toContain('rerange.maxWaitSeconds must be at least rerange.minDwellSeconds')
+    expect(validateSettings({ ...DEFAULT_SETTINGS, bridgeOut: { enabled: 'yes' } as never })).toContain('bridgeOut must be { enabled: true | false }')
+    expect(validateSettings({ ...DEFAULT_SETTINGS, rerange: { ...LAZY, maxPerWeek: 2, costTest: 'veto' }, bridgeOut: { enabled: true } })).toEqual([])
+  })
+
+  test('set from the page: written into the lazy setting in effect, removed only after the confirm screen', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'lazy', settings: WITH_LAZY, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const page = await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text()
+    expect(page).toContain('name="rerange_field" value="1"')
+    expect(page).toContain('Now no cap')
+    const csrf = csrfOf(page)
+    // Adding the cap is not risky: written at once.
+    const on = await (await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, rerange_field: '1', rerange_cap_on: '1', rerange_max_week: '2' }), cookie), env)).text()
+    expect(on).not.toContain('Confirm this change')
+    expect((await newest(db)).rerange).toEqual({ ...LAZY, maxPerWeek: 2 })
+    expect(on).toContain('At most 2 a week per pool')
+    // A page without the field (rendered before it existed) leaves it as it runs.
+    await worker.fetch(post('/ops/settings/apply', formFor({ ...DEFAULT_SETTINGS, capUsdc: 90 }, { csrf }), cookie), env)
+    expect((await newest(db)).capUsdc).toBe(90)
+    expect((await newest(db)).rerange).toEqual({ ...LAZY, maxPerWeek: 2 })
+    // Switching it off asks first, and the confirm screen carries the field through.
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor({ ...DEFAULT_SETTINGS, capUsdc: 90 }, { csrf, rerange_field: '1' }), cookie), env)).text()
+    expect(ask).toContain('Confirm this change')
+    expect(ask).toContain('more re-ranges per week are allowed')
+    expect((await newest(db)).rerange).toEqual({ ...LAZY, maxPerWeek: 2 })
+    await worker.fetch(post('/ops/settings/apply', confirmBodyOf(ask), cookie), env)
+    expect((await newest(db)).rerange).toEqual(LAZY)
+  })
+})
+
+describe('re-ranges per week: confirm round trip, rollbacks, canaries (PR #47 review r1)', () => {
+  const LAZY = { mode: 'lazy', edgeBufferTicks: 100, minDwellSeconds: 1800, horizonSeconds: 86_400, lvrWeightBps: 10_000 }
+  const newest = async (db: D1Db) => (await listVersions(db))![0]!
+  const A = '11111111-aaaa-4bbb-8ccc-00000000000a'
+  const B = '11111111-aaaa-4bbb-8ccc-00000000000b'
+  const page = async (env: Env, cookie: string) => csrfOf(await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text())
+
+  test('P0: confirming a risky rollback writes the target as is, re-range included', async () => {
+    const db = memoryDb()
+    const v1 = await seed(db, { env: 'prod', accountKeys: null, template: 'v1', settings: { ...DEFAULT_SETTINGS, capUsdc: 100 }, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: null, template: 'v2', settings: { ...DEFAULT_SETTINGS, capUsdc: 50, rerange: { ...LAZY, maxPerWeek: 2 } }, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = await page(env, cookie)
+    const ask = await (await worker.fetch(post('/ops/settings/rollback', new URLSearchParams({ csrf, id: String(v1), reason: 'back' }), cookie), env)).text()
+    expect(ask).toContain('Confirm this change')
+    expect(ask).toContain('more re-ranges per week are allowed')
+    await worker.fetch(post('/ops/settings/apply', confirmBodyOf(ask), cookie), env)
+    const v = await newest(db)
+    expect(v.rollbackOf).toBe(v1)
+    expect(v.settings).toEqual({ ...DEFAULT_SETTINGS, capUsdc: 100 })
+  })
+
+  test('P1: a stale page with a risky change keeps the weekly cap through the confirm screen', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'v', settings: { ...DEPTH, capUsdc: 50, rerange: { ...LAZY, maxPerWeek: 2 } }, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = await page(env, cookie)
+    // No rerange_field: a page rendered before #45. Raising the cap is risky.
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor({ ...DEPTH, capUsdc: 100 }, { csrf }), cookie), env)).text()
+    expect(ask).toContain('Confirm this change')
+    expect(ask).not.toContain('more re-ranges per week are allowed')
+    await worker.fetch(post('/ops/settings/apply', confirmBodyOf(ask), cookie), env)
+    const v = await newest(db)
+    expect(v.settings.capUsdc).toBe(100)
+    expect(v.settings.rerange).toEqual({ ...LAZY, maxPerWeek: 2 })
+  })
+
+  test('P1: removing a canary cap from an env-wide write is risky for the canary accounts', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'wide', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: [A], template: 'canary', settings: { ...DEFAULT_SETTINGS, rerange: { mode: 'eager', maxPerWeek: 2 } }, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = await page(env, cookie)
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, rerange_field: '1' }), cookie), env)).text()
+    expect(ask).toContain('more re-ranges per week are allowed (accounts of the current canary)')
+  })
+
+  test('P1: accounts that differ only in the weekly cap (or eager vs none) can share a canary that sets it', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'wide', settings: { ...DEFAULT_SETTINGS, rerange: { ...LAZY, maxPerWeek: 2 } }, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: [A], template: 'canary', settings: { ...DEFAULT_SETTINGS, rerange: { ...LAZY, maxPerWeek: 4 } }, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = await page(env, cookie)
+    // 3 a week is more than B runs (2): it asks first, for B only.
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, canary: `${A}\n${B}`, rerange_field: '1', rerange_cap_on: '1', rerange_max_week: '3' }), cookie), env)).text()
+    expect(ask).toContain('more re-ranges per week are allowed (canary accounts)')
+    expect(ask).not.toContain('already in the current canary')
+    await worker.fetch(post('/ops/settings/apply', confirmBodyOf(ask), cookie), env)
+    const v = await newest(db)
+    expect(v.accountKeys).toEqual([A, B])
+    expect(v.settings.rerange).toEqual({ ...LAZY, maxPerWeek: 3 })
+    // Without the field, the same canary still refuses: the accounts run different caps and nothing says which.
+    const db2 = memoryDb()
+    await seed(db2, { env: 'prod', accountKeys: null, template: 'wide', settings: { ...DEFAULT_SETTINGS, rerange: { ...LAZY, maxPerWeek: 2 } }, author: 'x', reason: 'r' })
+    await seed(db2, { env: 'prod', accountKeys: [A], template: 'canary', settings: { ...DEFAULT_SETTINGS, rerange: { ...LAZY, maxPerWeek: 4 } }, author: 'x', reason: 'r' })
+    const o2 = await opsEnv(db2)
+    const html = await (await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf: await page(o2.env, o2.cookie), canary: `${A}\n${B}` }), o2.cookie), o2.env)).text()
+    expect(html).toContain('different re-range')
+    // A bare eager re-range is the same as none.
+    const db3 = memoryDb()
+    await seed(db3, { env: 'prod', accountKeys: null, template: 'wide', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    await seed(db3, { env: 'prod', accountKeys: [A], template: 'canary', settings: { ...DEFAULT_SETTINGS, rerange: { mode: 'eager' } }, author: 'x', reason: 'r' })
+    await seed(db3, { env: 'prod', accountKeys: [A, B], template: 'both', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    expect((await newest(db3)).accountKeys).toEqual([A, B])
+  })
+
+  test('the confirm screen carries re-range and bridge-out as checked; a tampered copy fails the token', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'v', settings: { ...DEFAULT_SETTINGS, rerange: { ...LAZY, maxPerWeek: 2 }, bridgeOut: { enabled: true } }, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = await page(env, cookie)
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor(DEPTH, { csrf, rerange_field: '1', rerange_cap_on: '1', rerange_max_week: '2' }), cookie), env)).text()
+    const body = confirmBodyOf(ask)
+    expect(JSON.parse(body.get('kept_json')!)).toEqual({ bridgeOut: { enabled: true }, rerange: { ...LAZY, maxPerWeek: 2 } })
+    const tampered = new URLSearchParams(body)
+    tampered.set('kept_json', JSON.stringify({ rerange: { ...LAZY, maxPerWeek: 50 }, bridgeOut: { enabled: true } }))
+    await worker.fetch(post('/ops/settings/apply', tampered, cookie), env)
+    expect((await listVersions(db))!.length).toBe(1)
+    await worker.fetch(post('/ops/settings/apply', body, cookie), env)
+    const v = await newest(db)
+    expect(v.settings).toEqual({ ...DEPTH, rerange: { ...LAZY, maxPerWeek: 2 }, bridgeOut: { enabled: true } })
+  })
+})
+
+describe('re-ranges per week: template names (PR #47 review r2)', () => {
+  const LAZY = { mode: 'lazy', edgeBufferTicks: 100, minDwellSeconds: 1800, horizonSeconds: 86_400, lvrWeightBps: 10_000 }
+  const newest = async (db: D1Db) => (await listVersions(db))![0]!
+  const T = 'conservador + depth 30/500/5, cap 1000'
+  const TSET: EngineSettings = { ...DEFAULT_SETTINGS, capUsdc: 1000, depth: { impactBps: 30, shareBps: 500, stablesImpactBps: 5 } }
+
+  test('a preset with only the weekly cap changed is recorded as custom (from it)', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'v', settings: { ...TSET, rerange: LAZY }, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text())
+    await worker.fetch(post('/ops/settings/apply', formFor(TSET, { csrf, template: T, rerange_field: '1', rerange_cap_on: '1', rerange_max_week: '2' }), cookie), env)
+    const v = await newest(db)
+    expect(v.settings.rerange).toEqual({ ...LAZY, maxPerWeek: 2 })
+    expect(v.template).toBe(`custom (from ${T})`)
+  })
+
+  test('an unedited preset keeps its name, and a risky one confirms at the first click when re-range is kept', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'v', settings: { ...DEFAULT_SETTINGS, capUsdc: 100, rerange: LAZY, bridgeOut: { enabled: true } }, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text())
+    // Cap 100 -> 1000 is risky; the field says what runs (no cap).
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor(TSET, { csrf, template: T, rerange_field: '1' }), cookie), env)).text()
+    expect(ask).toContain('Confirm this change')
+    await worker.fetch(post('/ops/settings/apply', confirmBodyOf(ask), cookie), env)
+    const v = await newest(db)
+    expect(v.template).toBe(T)
+    expect(v.settings).toEqual({ ...TSET, rerange: LAZY, bridgeOut: { enabled: true } })
+  })
+})
+
+describe('bridge to Monad: flag stuck after (otto/mamoru-astro#48, leg B2 of otto/mamoru#245)', () => {
+  const LAZY = { mode: 'lazy', edgeBufferTicks: 100, minDwellSeconds: 1800, horizonSeconds: 86_400, lvrWeightBps: 10_000 }
+  const br = (sending: number, burned: number) => ({ stuckAfterMin: { sending, burned } })
+  const WITH_BRIDGE = { ...DEFAULT_SETTINGS, rerange: LAZY, bridge: br(25, 40) } as unknown as EngineSettings
+  const WITH_LAZY = { ...DEFAULT_SETTINGS, rerange: LAZY } as unknown as EngineSettings
+  const newest = async (db: D1Db) => (await listVersions(db))![0]!.settings as unknown as Record<string, unknown>
+  const form = (o: Record<string, string>) => { const f = new FormData(); for (const [k, v] of Object.entries(o)) f.set(k, v); return f }
+  const field = (sending: string, burned: string, init = ',') => ({ bridge_field: '1', bridge_init: init, bridge_sending: sending, bridge_burned: burned })
+
+  test('bounds as the operator (20 to 1440, whole numbers); versions that hold bridge pass; unknown keys do not', () => {
+    expect(BOUNDS.stuckAfterMin).toEqual({ min: 20, max: 1440 })
+    expect(validateSettings({ ...DEFAULT_SETTINGS, bridge: br(30, 45) })).toEqual([])
+    expect(validateSettings({ ...DEFAULT_SETTINGS, bridge: br(20, 1440) })).toEqual([])
+    for (const n of [19, 1441, 30.5, Number.NaN]) {
+      expect(validateSettings({ ...DEFAULT_SETTINGS, bridge: br(n, 45) })).toContain('bridge.stuckAfterMin.sending must be a whole number from 20 to 1440')
+      expect(validateSettings({ ...DEFAULT_SETTINGS, bridge: br(30, n) })).toContain('bridge.stuckAfterMin.burned must be a whole number from 20 to 1440')
+    }
+    const bad = (b: unknown) => validateSettings({ ...DEFAULT_SETTINGS, bridge: b } as unknown as EngineSettings)
+    expect(bad({ stuckAfterMin: { sending: 30 } })).toContain('bridge.stuckAfterMin.burned must be a whole number from 20 to 1440')
+    expect(bad({ stuckAfterMin: { sending: 30, burned: 45, other: 1 } })).toEqual(['bridge must be { stuckAfterMin: { sending, burned } }'])
+    expect(bad({ stuckAfterMin: br(30, 45).stuckAfterMin, extra: 1 })).toEqual(['bridge must be { stuckAfterMin: { sending, burned } }'])
+    expect(bad(null)).toEqual(['bridge must be { stuckAfterMin: { sending, burned } }'])
+  })
+
+  test('the deadlines in force are clamped per field, absent is 30 and 45', () => {
+    expect(bridgeStuckAfterOf(DEFAULT_SETTINGS)).toEqual({ sending: 30, burned: 45 })
+    expect(bridgeStuckAfterOf({ ...DEFAULT_SETTINGS, bridge: br(25, 40) })).toEqual({ sending: 25, burned: 40 })
+    expect(bridgeStuckAfterOf({ ...DEFAULT_SETTINGS, bridge: br(5, 40) })).toEqual({ sending: 30, burned: 40 })
+  })
+
+  test('raising either deadline, or leaving it absent above a lower one, is risky; lowering or adding a lower one is not', () => {
+    const at = (b?: ReturnType<typeof br>): EngineSettings => ({ ...DEFAULT_SETTINGS, ...(b ? { bridge: b } : {}) })
+    const line = ['a stuck bridge to Monad is flagged and paged later']
+    expect(riskyChanges(at(), at(br(30, 45)))).toEqual([])
+    expect(riskyChanges(at(), at(br(25, 40)))).toEqual([])
+    expect(riskyChanges(at(), at(br(31, 45)))).toEqual(line)
+    expect(riskyChanges(at(), at(br(30, 46)))).toEqual(line)
+    expect(riskyChanges(at(br(25, 40)), at(br(30, 40)))).toEqual(line)
+    expect(riskyChanges(at(br(25, 40)), at())).toEqual(line)
+    expect(riskyChanges(at(br(60, 90)), at())).toEqual([])
+    expect(riskyChanges(at(br(25, 40)), at(br(20, 40)))).toEqual([])
+  })
+
+  test('the form field: absent on an old page, untouched, blank, numbers, a typo', () => {
+    expect(bridgeFromForm(form({}))).toBeUndefined()
+    expect(bridgeFromForm(form(field('', '')))).toBeUndefined()
+    expect(bridgeFromForm(form(field('25', '40', '25,40')))).toBeUndefined()
+    expect(bridgeFromForm(form({ ...field('25', '40'), kept_carried: '1' }))).toBeUndefined()
+    expect(bridgeFromForm(form(field('', '', '25,40')))).toEqual({ sending: null, burned: null })
+    expect(bridgeFromForm(form(field('60', '', ',')))).toEqual({ sending: 60, burned: null })
+    expect(bridgeFromForm(form(field('3.5', 'x')))).toEqual({ sending: Number.NaN, burned: Number.NaN })
+  })
+
+  test('withBridge: never invents the key, one blank field takes the default, blank over a running key writes the default', () => {
+    expect(withBridge(DEFAULT_SETTINGS, undefined, WITH_BRIDGE)).toBe(DEFAULT_SETTINGS)
+    expect(withBridge(DEFAULT_SETTINGS, { sending: null, burned: null }, null)).toBe(DEFAULT_SETTINGS)
+    expect(withBridge(DEFAULT_SETTINGS, { sending: null, burned: null }, WITH_LAZY)).toBe(DEFAULT_SETTINGS)
+    expect(withBridge(DEFAULT_SETTINGS, { sending: 60, burned: null }, null).bridge).toEqual(br(60, 45))
+    expect(withBridge(DEFAULT_SETTINGS, { sending: null, burned: null }, WITH_BRIDGE).bridge).toEqual(br(30, 45))
+  })
+
+  test('the store keeps bridge as it runs, absent included, when a form write does not carry it', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'bridge', settings: WITH_BRIDGE, author: 'x', reason: 'r' })
+    await seed(db, { env: 'prod', accountKeys: null, template: 'custom', settings: { ...DEFAULT_SETTINGS, capUsdc: 90 }, author: 'x', reason: 'cap' })
+    expect((await newest(db)).bridge).toEqual(br(25, 40))
+    const db2 = memoryDb()
+    await seed(db2, { env: 'prod', accountKeys: null, template: 'lazy', settings: WITH_LAZY, author: 'x', reason: 'r' })
+    await seed(db2, { env: 'prod', accountKeys: null, template: 'custom', settings: { ...DEFAULT_SETTINGS, capUsdc: 90 }, author: 'x', reason: 'cap' })
+    expect('bridge' in (await newest(db2))).toBe(false)
+  })
+
+  test('on the page: placeholders show the defaults; an edit elsewhere carries bridge as it runs; lowering needs no confirm', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'lazy', settings: WITH_LAZY, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const page = await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text()
+    expect(page).toContain('Bridge to Monad: flag stuck after')
+    expect(page).toContain('name="bridge_field" value="1"')
+    expect(page).toContain('name="bridge_init" value=","')
+    expect(page).toContain('placeholder="30 (default)"')
+    expect(page).toContain('placeholder="45 (default)"')
+    expect(page).toContain('Now 30 min (default)')
+    const csrf = csrfOf(page)
+    // Left as the page showed it (blank): a cap-only edit writes no bridge key at all.
+    await worker.fetch(post('/ops/settings/apply', formFor({ ...DEFAULT_SETTINGS, capUsdc: 90 }, { csrf, ...field('', '') }), cookie), env)
+    expect((await newest(db)).capUsdc).toBe(90)
+    expect('bridge' in (await newest(db))).toBe(false)
+    expect((await newest(db)).rerange).toEqual(LAZY)
+    // An old page, with no group: also no bridge key.
+    await worker.fetch(post('/ops/settings/apply', formFor({ ...DEFAULT_SETTINGS, capUsdc: 80 }, { csrf }), cookie), env)
+    expect('bridge' in (await newest(db))).toBe(false)
+    // Lower than the defaults: written at once, both fields (one blank takes its default).
+    const low = await (await worker.fetch(post('/ops/settings/apply', formFor({ ...DEFAULT_SETTINGS, capUsdc: 80 }, { csrf, ...field('25', '') }), cookie), env)).text()
+    expect(low).not.toContain('Confirm this change')
+    expect((await newest(db)).bridge).toEqual(br(25, 45))
+    expect((await newest(db)).rerange).toEqual(LAZY)
+    expect(low).toContain('25 min sending, 45 min burned')
+  })
+
+  test('a page left open never overwrites a deadline set meanwhile; raising asks first and the confirm carries it', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'bridge', settings: WITH_BRIDGE, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const page = await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text()
+    expect(page).toContain('name="bridge_init" value="25,40"')
+    expect(page).toContain('value="25"')
+    const csrf = csrfOf(page)
+    // Someone else raises it after the page was rendered; this page's fields still hold 25 and 40 (untouched).
+    await seed(db, { env: 'prod', accountKeys: null, template: 'other', settings: { ...WITH_BRIDGE, bridge: br(35, 50) } as EngineSettings, author: 'y', reason: 'later' })
+    await worker.fetch(post('/ops/settings/apply', formFor({ ...DEFAULT_SETTINGS, capUsdc: 90 }, { csrf, ...field('25', '40', '25,40') }), cookie), env)
+    expect((await newest(db)).capUsdc).toBe(90)
+    expect((await newest(db)).bridge).toEqual(br(35, 50))
+    // Raising burned from the 50 that runs: asks first, nothing written yet.
+    const before = (await listVersions(db))!.length
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor({ ...DEFAULT_SETTINGS, capUsdc: 90 }, { csrf, ...field('35', '60', '35,50') }), cookie), env)).text()
+    expect(ask).toContain('Confirm this change')
+    expect(ask).toContain('a stuck bridge to Monad is flagged and paged later')
+    expect((await listVersions(db))!.length).toBe(before)
+    await worker.fetch(post('/ops/settings/apply', confirmBodyOf(ask), cookie), env)
+    expect((await newest(db)).bridge).toEqual(br(35, 60))
+    expect((await newest(db)).rerange).toEqual(LAZY)
+    expect((await listVersions(db))![0]!.template).toContain('custom')
+  })
+
+  test('absent and raised above the default: confirm first; out of bounds is refused', async () => {
+    const db = memoryDb()
+    await seed(db, { env: 'prod', accountKeys: null, template: 'plain', settings: DEFAULT_SETTINGS, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text())
+    const ask = await (await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, ...field('60', '') }), cookie), env)).text()
+    expect(ask).toContain('Confirm this change')
+    expect('bridge' in (await newest(db))).toBe(false)
+    await worker.fetch(post('/ops/settings/apply', confirmBodyOf(ask), cookie), env)
+    expect((await newest(db)).bridge).toEqual(br(60, 45))
+    const bad = await (await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, ...field('19', '45', '60,45') }), cookie), env)).text()
+    expect(bad).toContain('bridge.stuckAfterMin.sending must be a whole number from 20 to 1440')
+    expect((await newest(db)).bridge).toEqual(br(60, 45))
+  })
+
+  test('the template name is decided on the set as written: a bridge-only edit is custom, an untouched group keeps the preset name', async () => {
+    const db = memoryDb()
+    db.raw.exec(`INSERT INTO engine_settings_templates VALUES ('plain', '${canonicalJson(DEFAULT_SETTINGS)}', 'seed', null, 'm', '2026-10-16T00:00:00Z')`)
+    await seed(db, { env: 'prod', accountKeys: null, template: 'bridge', settings: WITH_BRIDGE, author: 'x', reason: 'r' })
+    const { env, cookie } = await opsEnv(db)
+    const csrf = csrfOf(await (await worker.fetch(get('/ops/engine/settings', cookie), env)).text())
+    // The preset says nothing about bridge: untouched, it keeps what runs and stays "plain".
+    await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, template: 'plain', ...field('25', '40', '25,40') }), cookie), env)
+    expect((await listVersions(db))![0]!.template).toBe('plain')
+    expect((await newest(db)).bridge).toEqual(br(25, 40))
+    // Editing the group makes it custom.
+    await worker.fetch(post('/ops/settings/apply', formFor(DEFAULT_SETTINGS, { csrf, template: 'plain', ...field('22', '40', '25,40') }), cookie), env)
+    expect((await listVersions(db))![0]!.template).toBe('custom (from plain)')
+    expect((await newest(db)).bridge).toEqual(br(22, 40))
   })
 })

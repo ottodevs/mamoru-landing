@@ -8,6 +8,7 @@ import { motionHeadScript, opsClientScript } from "./ops-client";
 import { LAB_STYLE } from "./lab-style";
 import { SETTINGS_STYLE } from "./settings-style";
 import { FUNDING_STYLE } from "./funding-style";
+import { REGISTRY_STYLE } from "./registry-style";
 import { esc, sameSecret } from "./text";
 
 const COOKIE = "mamoru_list";
@@ -191,7 +192,7 @@ export const FLASH_COPY: Record<Exclude<Flash, "">, string> = {
   bad: "That did not go through. Try again.",
 };
 
-export type SectionId = "overview" | "yield" | "accounts" | "engine" | "money" | "costs" | "more" | "mails" | "infra" | "experiments" | "settings" | "functions" | "archive" | "lab" | "gate";
+export type SectionId = "overview" | "yield" | "accounts" | "engine" | "money" | "costs" | "more" | "mails" | "infra" | "registry" | "experiments" | "settings" | "functions" | "archive" | "lab" | "gate";
 
 export type OpsSection = {
   id: string;
@@ -225,6 +226,7 @@ export const OPS_SUBNAV: Readonly<Record<string, { label: string; items: readonl
     items: [
       { id: "costs", label: "Costs", href: "/ops/money" },
       { id: "infra", label: "Funding", href: "/ops/money/funding" },
+      { id: "registry", label: "Registry", href: "/ops/money/registry" },
     ],
   },
 };
@@ -261,9 +263,9 @@ export const OPS_SECTIONS: readonly OpsSection[] = [
   { id: "overview", label: "Pulse", href: "/ops", tab: "Pulse" },
   { id: "yield", label: "Yield", href: "/ops/yield", tab: "Yield" },
   { id: "accounts", label: "Accounts", href: "/ops/accounts", tab: "Accounts" },
-  // otto/mamoru-astro#35: Engine = Status, Settings, Functions; Money = Costs, Funding. See OPS_SUBNAV.
+  // otto/mamoru-astro#35: Engine = Status, Settings, Functions; Money = Costs, Funding, Registry. See OPS_SUBNAV.
   { id: "engine", label: "Engine", href: "/ops/engine", tab: "Engine", also: ["settings", "functions"] },
-  { id: "money", label: "Money", href: "/ops/money", tab: "Money", also: ["costs", "infra"] },
+  { id: "money", label: "Money", href: "/ops/money", tab: "Money", also: ["costs", "infra", "registry"] },
   { id: "mails", label: "Waitlist and mail", href: "/ops/mails", group: "Grow" },
   { id: "experiments", label: "Experiments", href: "/ops/experiments", group: "Grow" },
   // otto/mamoru-astro#28 (spec 008 phase 1): the strategy bench. Grouped with Experiments, not a primary tab —
@@ -805,7 +807,7 @@ export function renderDocument(
   <link rel="icon" href="/mark-two-stones.png" type="image/png" />
   <title>${esc(view.title)}${TITLE_SUFFIX}</title>
   ${themeHeadScript(opts.nonce)}
-  <style>${OPS_STYLE}${CONSOLE_STYLE}${LAB_STYLE}${SETTINGS_STYLE}${FUNDING_STYLE}</style>
+  <style>${OPS_STYLE}${CONSOLE_STYLE}${LAB_STYLE}${SETTINGS_STYLE}${FUNDING_STYLE}${REGISTRY_STYLE}</style>
   ${motionHeadScript(opts.nonce)}
 </head>
 <body>

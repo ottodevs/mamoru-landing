@@ -79,6 +79,8 @@ import { infraSection } from "./ops-infra";
 import { withOutside } from "./ops-outside";
 import type { InfraSnapshot } from "./infra-snapshot";
 import { loadInfraReading } from "./infra-cache";
+import { loadRegistry } from "./registry-load";
+import { parseChain, registrySection } from "./ops-registry";
 import { captureDaily } from "./metrics-store";
 import type { D1Db } from "./d1-infra";
 import { homeDocument, isOpen } from "./open-at";
@@ -88,8 +90,8 @@ import { loadExperimentReports } from "./exp-report";
 import { experimentsSection } from "./ops-experiments";
 import { RECOMMENDED_TEMPLATE, settingsSection, type SettingsPage } from "./ops-settings";
 import { checkConfirmToken, issueConfirmToken, risksOf } from "./engine-settings-confirm";
-import { inEffect, appendVersion, maxIdOf, SettingsConflict, SettingsOutcomeUnknown, listTemplates, listVersions, versionById, type Env as SettingsEnv, type TemplateRow } from "./engine-settings-store";
-import { DEFAULT_SETTINGS, RECOMMENDED_SETTINGS, canonicalJson, settingsFromForm, validateSettings } from "./engine-settings-model";
+import { inEffect, appendVersion, keepUnedited, keptFrom, KEPT_KEYS, maxIdOf, SettingsConflict, SettingsOutcomeUnknown, listTemplates, listVersions, versionById, type Env as SettingsEnv, type TemplateRow } from "./engine-settings-store";
+import { DEFAULT_SETTINGS, RECOMMENDED_SETTINGS, bridgeFromForm, canonicalJson, maxPerWeekFromForm, settingsFromForm, validateSettings, withBridge, withMaxPerWeek } from "./engine-settings-model";
 import { functionsSection, type FunctionsPage } from "./ops-functions";
 import { isOpsFlagName, OPS_FLAGS, OPS_FLAG_NAMES } from "./ops-flags-model";
 import { checkFlagConfirmToken, issueFlagConfirmToken } from "./ops-flags-confirm";
@@ -400,7 +402,7 @@ function withNotice(view: SectionView, text: string, tone: "plain" | "bad" = "pl
 }
 
 /** Sections a stranger is sent to Google from, and returned to after signing in. */
-const SECTION_PATHS = new Set(["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/functions", "/ops/archive", "/ops/lab", "/ops/money", "/ops/money/funding", "/ops/engine/settings", "/ops/engine/functions"]);
+const SECTION_PATHS = new Set(["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/functions", "/ops/archive", "/ops/lab", "/ops/money", "/ops/money/funding", "/ops/money/registry", "/ops/engine/settings", "/ops/engine/functions"]);
 
 /**
  * otto/mamoru-astro#35: Engine (Status, Settings, Functions) and Money (Costs, Funding) replaced five sections.
@@ -708,6 +710,10 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
     return flashed(await infraView(url.searchParams.get("fresh") === "1"));
   }
 
+  if (sectionPath === "/ops/money/registry" && request.method === "GET") {
+    return flashed(registrySection(await loadRegistry(env), Math.floor(Date.now() / 1000), parseChain(url.searchParams.get("chain"))));
+  }
+
   if (sectionPath === "/ops/experiments" && request.method === "GET") {
     return flashed(await experimentsView());
   }
@@ -979,11 +985,30 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
       const scope = (keys: readonly string[] | null) => JSON.stringify(keys && keys.length ? [...new Set(keys.map((k) => k.toLowerCase()))].sort() : null);
       const draftKeys = draft.canary.split(/\s+/).map((k) => k.trim()).filter(Boolean);
       if (target && target.env === draft.env && scope(target.accountKeys) === scope(draftKeys) && canonicalJson(target.settings) === canonicalJson(draft.settings)) rollbackOf = back;
-      // An edited template is recorded as such, never under the name of a preset it no longer matches. A name this
-      // code already wrote ("custom (from X)") comes back from the confirm screen and is kept as it is.
-      const named = templates.find((t) => t.name === draft.template);
-      const alreadyCustom = draft.template === "custom" || draft.template.startsWith("custom (from ");
-      if (!rollbackOf && !alreadyCustom && (!named || canonicalJson(named.settings) !== canonicalJson(draft.settings))) draft = { ...draft, template: named ? `custom (from ${named.name})`.slice(0, 120) : "custom" };
+      // otto/mamoru-astro#45: the set is checked and confirmed as it will be written. What the form does not carry
+      // (re-range, bridge-out) comes from what the targeted accounts run now, and the weekly re-range cap goes into
+      // that re-range. The confirm screen carries the result as is (kept_json), so a confirm never merges again. A
+      // rollback is written as its target.
+      if (!rollbackOf) {
+        const weekly = maxPerWeekFromForm(form);
+        // otto/mamoru-astro#48: the bridge deadlines, only when the field was edited; otherwise carried as they run.
+        const bridgeIn = bridgeFromForm(form);
+        const setsBridge = bridgeIn !== undefined && !(bridgeIn.sending === null && bridgeIn.burned === null);
+        const keys = draft.canary.split(/\s+/).map((k) => k.trim()).filter(Boolean);
+        let base: ReturnType<typeof keptFrom>;
+        try {
+          base = keptFrom((await inEffect(db))[draft.env], keys.length ? keys : null, { carried: [...KEPT_KEYS.filter((k) => k in draft.settings), ...(setsBridge ? ["bridge"] : [])], ownMaxPerWeek: weekly !== undefined });
+        } catch (e) {
+          return respond(await settingsView({ draft, notice: { text: `Not applied: ${(e as Error).message}.`, tone: "bad" } }, 400));
+        }
+        draft = { ...draft, settings: keepUnedited(withBridge(withMaxPerWeek(draft.settings, weekly, "rerange" in draft.settings ? draft.settings.rerange : base?.rerange), bridgeIn, base), base) };
+        // An edited template is recorded as such, never under the name of a preset it no longer matches: compared as
+        // that preset would be written (with what it does not carry kept), so the first POST and the confirm agree.
+        // A name this code already wrote ("custom (from X)") comes back from the confirm screen and is kept as it is.
+        const named = templates.find((t) => t.name === draft.template);
+        const alreadyCustom = draft.template === "custom" || draft.template.startsWith("custom (from ");
+        if (!alreadyCustom && (!named || canonicalJson(keepUnedited(named.settings, base)) !== canonicalJson(draft.settings))) draft = { ...draft, template: named ? `custom (from ${named.name})`.slice(0, 120) : "custom" };
+      }
     }
     const errors = validateSettings(draft.settings);
     if (errors.length) return respond(await settingsView({ draft, notice: { text: `Not applied: ${errors.join("; ")}.`, tone: "bad" } }, 400));
@@ -1228,6 +1253,7 @@ const RETURN_TO = new Set([
   "https://mamoru.lol/ops/infra",
   "https://mamoru.lol/ops/money",
   "https://mamoru.lol/ops/money/funding",
+  "https://mamoru.lol/ops/money/registry",
   "https://mamoru.lol/ops/engine/settings",
   "https://mamoru.lol/ops/engine/functions",
   "https://mamoru.lol/ops/experiments",

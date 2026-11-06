@@ -69,6 +69,7 @@ const SECTIONS = [
   { path: "/ops/money", section: "costs", title: "Money", marker: "Break-even" },
   { path: "/ops/mails", section: "mails", title: "Mails", marker: "On the list" },
   { path: "/ops/money/funding", section: "infra", title: "Funding", marker: "Relayer balance" },
+  { path: "/ops/money/registry", section: "registry", title: "Registry", marker: "Registry not deployed yet" },
   { path: "/ops/experiments", section: "experiments", title: "Experiments", marker: "hero_cta" },
   { path: "/ops/engine/functions", section: "functions", title: "Functions", marker: "Yield ledger" },
   { path: "/ops/engine/settings", section: "settings", title: "Engine settings", marker: "Engine settings" },
@@ -569,8 +570,9 @@ describe("Engine and Money sections (otto/mamoru-astro#35)", () => {
       ["/ops/engine", "engine", ["/ops/engine", "/ops/engine/settings", "/ops/engine/functions"]],
       ["/ops/engine/settings", "settings", ["/ops/engine", "/ops/engine/settings", "/ops/engine/functions"]],
       ["/ops/engine/functions", "functions", ["/ops/engine", "/ops/engine/settings", "/ops/engine/functions"]],
-      ["/ops/money", "costs", ["/ops/money", "/ops/money/funding"]],
-      ["/ops/money/funding", "infra", ["/ops/money", "/ops/money/funding"]],
+      ["/ops/money", "costs", ["/ops/money", "/ops/money/funding", "/ops/money/registry"]],
+      ["/ops/money/funding", "infra", ["/ops/money", "/ops/money/funding", "/ops/money/registry"]],
+      ["/ops/money/registry", "registry", ["/ops/money", "/ops/money/funding", "/ops/money/registry"]],
     ];
     for (const [path, section, hrefs] of want) {
       const html = await (await worker.fetch(get(path, { cookie }), env)).text();

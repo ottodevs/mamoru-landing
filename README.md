@@ -1,10 +1,8 @@
-# Mamoru landing
+# Mamoru website
 
-Coming-soon page for [mamoru.lol](https://mamoru.lol). One screen on rice paper: the Mamoru lockup, `APY. DELIVERED.`, a countdown to the opening after ETHGlobal Tokyo, and an email bar. The next site lives behind `/ops/landing` until `OPEN_AT`.
+Source of [mamoru.lol](https://mamoru.lol), the website of [Mamoru](https://github.com/ottodevs/mamoru): automated, non-custodial savings. It serves the landing page, the deck (`/deck`), the legal pages (`/terms`, `/privacy`, `/risks`) and a private ops console at `/ops` (Google sign-in, allowlist only). The app itself is [app.mamoru.lol](https://app.mamoru.lol), code in [ottodevs/mamoru](https://github.com/ottodevs/mamoru).
 
-Built with [Astro](https://astro.build). Served by a Cloudflare Worker that also handles `POST /api/notify`.
-
-A push to `main` deploys this page to [mamoru.lol](https://mamoru.lol).
+Built with [Astro](https://astro.build) and served by a Cloudflare Worker. A push to `main` deploys to mamoru.lol.
 
 ## Channels: prod (main) / staging (staging → /ops/preview)
 
@@ -54,11 +52,12 @@ bun run build && bunx wrangler dev
 
 | Path | What it is |
 |---|---|
-| `src/pages/index.astro` | The screen: lockup, hero, teaser, countdown, email bar |
-| `src/pages/open.astro` | Next landing, gated at `/ops/landing` until open |
+| `src/pages/open.astro`, `src/open-copy.ts` | The live landing at `/`: hero, how it works, FAQ, footer. All its words are in `open-copy.ts` |
+| `src/pages/terms.astro`, `privacy.astro`, `risks.astro` | Legal pages (`LegalPage`, `SiteFooter`) |
+| `src/pages/deck.astro` | The deck at `/deck` |
+| `src/pages/index.astro` | The coming-soon page of September (countdown, email bar), no longer served at `/` |
 | `src/pages/app/*.astro` | UI mockup, private at `/ops/app` (Google, same allowlist). The real app is `ottodevs/mamoru` on app.mamoru.lol |
-| `src/components/Countdown.astro` | Countdown to `2026-09-27T09:00:00+09:00` |
-| `src/components/EmailBar.astro` | Email bar and the on-the-list follow-up |
+| `src/components/Countdown.astro`, `EmailBar.astro` | Parts of the old coming-soon page |
 | `src/styles/global.css` | Rice paper field, ink, Noto Serif |
 | `src/worker.ts` | Assets, `POST /api/notify`, and the private panel at `/ops` |
 | `src/ops-infra.ts`, `src/infra-snapshot.ts` | `/ops/money/funding` (was `/ops/infra`): relayer status, Funding per chain, cost per new account; the Ethereum holdings per account are in `src/ops-outside.ts`, shown on `/ops/accounts` (same Google allowlist as `/ops`). Nav (otto/mamoru-astro#35): Pulse, Yield, Accounts, Engine (`/ops/engine`, `/settings`, `/functions`), Money (`/ops/money`, `/funding`); the old `/ops/settings`, `/functions`, `/costs`, `/infra` redirect (301) |
@@ -82,3 +81,7 @@ The id itself is a first-party, random, non-identifying 32-byte token in a cooki
 **Events.** Exposure (once per visitor per experiment per day) is written server-side, at the moment a variant is actually served — this row is the authority. Each goal in the registry is tagged `source: "server"` or `"client"`: `waitlist_submit` is `"server"`, hooked into a genuinely new `/api/notify` save server-side so it can never be spoofed by client input; `open_app_click`/`deck_click` are `"client"`, the only goals the beacon is allowed to record. `POST /api/exp/event` is same-origin only (Origin or Sec-Fetch-Site must say so; both absent is refused), nonce-checked, rate-limited per visitor, and — the real guarantee — only ever records a (experiment, visitor, variant) that already has a matching exposure row: proof the server actually showed that variant, not a recomputation that could disagree after a redeploy changes weights or pins a winner. Land in the additive D1 table `exp_events` (`MAMORU_DB`, same binding `/ops/infra` already reads — see `migrations/0004_experiments.sql` in this repo for the file; the canonical copy to apply lives at `migrations/d1/0004_experiments.sql` in `ottodevs/mamoru`, which owns this database's schema). Every read and write degrades silently when `exp_events` is missing, exactly like `metrics_daily`. The staging channel has no D1 binding at all (by design, see below), so experiment writes there are always a no-op — there is no path by which staging can touch prod's `mamoru` database.
 
 A one-paragraph, publish-ready privacy note for a future `/privacy` page: *"We run small experiments on this site to see which wording works better. If you take part, we store a random id in a cookie on your device — never your IP, never anything that identifies you, never shared with anyone else. If your browser sends Global Privacy Control or Do Not Track, we skip this entirely: no cookie, no record, you simply see the default version."*
+
+## License
+
+[MIT](LICENSE)
