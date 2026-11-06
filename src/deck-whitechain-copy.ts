@@ -1,7 +1,7 @@
 /**
  * Words for mamoru.lol/deck/whitechain: the go-to-market pitch to Whitechain (ETHGlobal Mumbai, Nov 2026).
- * Slides 01–05 are the main deck's (deck-copy.ts); everything here comes after them.
- * Figures are read from prod D1 and dated on the slide. Change them only with a new read.
+ * Slides 01–04 are the main deck's (deck-copy.ts); everything here comes after them.
+ * Figures are production only, dated on the slide: Base from D1, Monad read on chain. Change them only with a new read.
  * Source: the Whitechain plan in ottodevs/mamoru docs/ethglobal-mumbai/whitechain-gtm.md.
  */
 
@@ -10,15 +10,14 @@ export const WHITECHAIN = {
   description: "Savings, automated. A go-to-market plan for Whitechain.",
   canonical: "https://mamoru.lol/deck/whitechain",
   traction: {
-    eyebrow: "Already in market",
+    eyebrow: "Live at ETHGlobal Mumbai",
     heading: ["Not an idea.", "A product people use."],
     figures: [
-      { value: "56", label: "people opened an account" },
-      { value: "16", label: "of them on 6 Nov, during Devcon and ETHGlobal Mumbai" },
-      { value: "3.7k", label: "USDC working on Base" },
+      { value: "57", label: "users" },
+      { value: "4.2k", label: "USD of TVL across Base and Monad" },
       { value: "2", label: "chains live: Base and Monad" },
     ],
-    note: "Mainnet, real funds, since ETHGlobal Tokyo on 26 Sep. Read from our production database on 6 Nov 2026, 22:20 UTC.",
+    note: "Mainnet, real funds. Production data on 6 Nov 2026, 23:10 UTC: Base from our database, Monad read on chain.",
   },
   market: {
     eyebrow: "Market",
@@ -36,19 +35,27 @@ export const WHITECHAIN = {
   },
   segment: {
     eyebrow: "Segment",
-    heading: ["People who hold crypto", "and don't know what to do with it."],
+    heading: "Who is already in.",
     rows: [
       {
-        tag: "First",
-        who: "Crypto natives",
-        size: "500 – 1,000 USDC",
-        what: "They read the policy and test it on their own phone. Their trust validates Mamoru for everyone else.",
+        tag: "Onboarded",
+        who: "Founders and builders",
+        what: "In person, at Devcon and ETHGlobal Mumbai. They read the policy before they deposit.",
       },
       {
-        tag: "Then",
-        who: "Holders who are not natives",
-        size: "1,000 – 40,000 idle",
-        what: "Where the volume is. The same people who keep crypto on an exchange: your retail.",
+        tag: "Onboarded",
+        who: "Known names in the ecosystem",
+        what: "People others listen to. Their trust opens the door for everyone else.",
+      },
+      {
+        tag: "Onboarded",
+        who: "People who hold crypto",
+        what: "Not natives, not known names: crypto sitting idle and no time to manage it. Where the volume is: your retail.",
+      },
+      {
+        tag: "Next",
+        who: "Yield seekers",
+        what: "They want the yield without watching positions, ranges and gas every day.",
       },
     ],
   },
@@ -60,7 +67,7 @@ export const WHITECHAIN = {
         n: "01",
         who: "Founder-led, in person",
         what: "Live demos at Devcon and ETHGlobal Mumbai. The account is opened on their phone, then we follow up one by one within a day.",
-        proof: "16 accounts in one day",
+        proof: "Every user so far",
       },
       {
         n: "02",
@@ -78,63 +85,26 @@ export const WHITECHAIN = {
   },
   offer: {
     eyebrow: "The offer",
-    heading: ["Venues without users.", "Users without venues."],
-    lede: "A new chain's hardest problem is the first liquidity. We solve both sides at once.",
+    heading: ["You have the liquidity.", "We bring the users."],
+    lede: "A savings product on Whitechain gives WhiteBIT users a reason to move their capital from the exchange to your chain, and keep it there.",
     parts: [
       {
-        who: "We deploy the AMM",
-        what: "A Uniswap v3 fork: the venue our engine already operates on Base and Monad.",
+        who: "A product that brings users",
+        what: "Mamoru on Whitechain: savings that run themselves, in the stablecoin you choose: USDT, EURC or USDC.",
       },
       {
-        who: "Whitechain seeds it",
-        what: "Launch liquidity in the stablecoin you choose first: USDT, EURC or USDC.",
+        who: "From exchange to chain",
+        what: "The easy path for WhiteBIT users to put their capital on Whitechain. Every deposit is liquidity on your chain.",
       },
       {
-        who: "Mamoru brings demand",
-        what: "Every deposit becomes liquidity in that AMM from day one.",
+        who: "Help with the AMM",
+        what: "More than 10 years in the sector. We can help you build the AMM the engine works on.",
       },
     ],
-  },
-  rollout: {
-    eyebrow: "Rollout",
-    heading: "We grow it on evidence.",
-    steps: [
-      {
-        n: "01",
-        who: "Integrate",
-        what: "Whitechain gets its own chain file in our registry: a new chain is a new file, not a new engine. The AMM goes up, and every leaked-key attack is replayed on a fork.",
-        kpi: "Attacks refused",
-      },
-      {
-        n: "02",
-        who: "Capped pilot",
-        what: "A limit per account, as we started on Monad. Demos to the first users in person, with follow-up one by one.",
-        kpi: "Funded accounts",
-      },
-      {
-        n: "03",
-        who: "Raise the cap",
-        what: "Only as the numbers hold. Mamoru means to protect: the limit is part of the product.",
-        kpi: "Deposits and retention",
-      },
-      {
-        n: "04",
-        who: "Open the path",
-        what: "The engine opens to integrators and agents, and becomes the way WhiteBIT users become Whitechain users.",
-        kpi: "Liquidity in the pool",
-      },
-    ],
-  },
-  ask: {
-    eyebrow: "The ask",
-    heading: "Three things from you.",
-    asks: ["Liquidity for launch", "The stablecoin to start with", "One technical contact"],
-    giveHeading: "What Whitechain gets",
-    gives: ["An AMM on its chain", "A savings product, live", "A team that has already added a chain"],
   },
   close: {
     eyebrow: "Next step",
-    heading: ["A capped pilot", "on Whitechain."],
+    heading: ["Mamoru", "on Whitechain."],
     lede: "Try it now, on your phone.",
     href: "https://app.mamoru.lol",
     hrefLabel: "app.mamoru.lol",
