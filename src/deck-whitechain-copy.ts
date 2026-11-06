@@ -1,7 +1,7 @@
 /**
  * Words for mamoru.lol/deck/whitechain: the go-to-market pitch to Whitechain (ETHGlobal Mumbai, Nov 2026).
  * Slides 01–04 are the main deck's (deck-copy.ts); everything here comes after them.
- * Figures are production only, dated on the slide: Base from D1, Monad read on chain. Change them only with a new read.
+ * Figures come from Mamoru Stats (app.mamoru.lol/stats), dated on the slide. Change them only with a new read.
  * Source: the Whitechain plan in ottodevs/mamoru docs/ethglobal-mumbai/whitechain-gtm.md.
  */
 
@@ -13,11 +13,11 @@ export const WHITECHAIN = {
     eyebrow: "Live at ETHGlobal Mumbai",
     heading: ["Not an idea.", "A product people use."],
     figures: [
-      { value: "57", label: "users" },
-      { value: "4.2k", label: "USD of TVL across Base and Monad" },
+      { value: "65", label: "accounts" },
+      { value: "$4,363", label: "total deposits across Base and Monad" },
       { value: "2", label: "chains live: Base and Monad" },
     ],
-    note: "Mainnet, real funds. Production data on 6 Nov 2026, 23:10 UTC: Base from our database, Monad read on chain.",
+    note: "Mainnet, real funds. From Mamoru Stats, read from Base and Monad at 19:02 UTC, 6 Nov 2026.",
   },
   market: {
     eyebrow: "Market",
