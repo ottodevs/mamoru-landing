@@ -1,0 +1,1427 @@
+---
+import Base from "../../layouts/Base.astro";
+import { DECK } from "../../deck-copy";
+import { OPEN_COPY } from "../../open-copy";
+import { WHITECHAIN } from "../../deck-whitechain-copy";
+
+// Slides 01–05 are the main deck's (deck.astro), kept as they are at /deck. From 06 on: the go-to-market pitch to Whitechain.
+const { problem, loop, trust, built } = DECK;
+const { traction, market, segment, channels, offer, rollout, ask, close } = WHITECHAIN;
+const cover = OPEN_COPY.hero;
+const total = 13;
+
+// 02 Problem: the bait rate, sampled as it falls from `from` to zero. The line and the number read the same samples.
+const SAMPLES = 120;
+const curve = Array.from({ length: SAMPLES + 1 }, (_, i) => {
+  const x = i / SAMPLES;
+  const v = problem.from * (1 - x) ** 1.5 * (1 + 0.1 * Math.sin(9 * x) + 0.05 * Math.sin(23 * x));
+  return Math.round(Math.min(problem.from, Math.max(0, v)) * 10) / 10;
+});
+const askAt = [
+  { x: 34, y: 12 },
+  { x: 56, y: 36 },
+  { x: 77, y: 56 },
+];
+---
+<Base title={WHITECHAIN.title} description={WHITECHAIN.description} canonical={WHITECHAIN.canonical}>
+  <main class="deck" id="deck" aria-roledescription="carousel" aria-label={WHITECHAIN.title}>
+    <header class="lockup">
+      <img src="/mark-two-stones.png" width="26" height="26" alt="" />
+      <span>Mamoru</span>
+    </header>
+    <!-- The 守 seal signs every slide, as it signs the app's dashboard. -->
+    <img class="seal" src="/seal-mamoru.png" width="40" height="40" alt="" />
+
+    <!-- 01 Cover: the landing hero -->
+    <section class="slide cover" data-slide="1" aria-roledescription="slide" aria-label="Mamoru">
+      <div class="center">
+        <img class="mark rise" src="/mark-two-stones.png" width="84" height="84" alt="" style="--d:0" />
+        <h1 class="hero rise" style="--d:1">
+          <span>{cover.line1}</span>
+          <span>{cover.line2}</span>
+        </h1>
+        <p class="lede rise" style="--d:2">
+          {cover.lede.split(". ").filter(Boolean).map((part) => (
+            <span>{part.endsWith(".") ? part : `${part}.`}</span>
+          ))}
+        </p>
+      </div>
+    </section>
+
+    <!-- 02 Problem: a rate falls to zero in ten seconds, the doubts come up, one question is left -->
+    <section class="slide fall" data-slide="2" data-steps="1" aria-roledescription="slide" aria-label={problem.aria}>
+      <p class="label">{problem.eyebrow}</p>
+      <div class="stage" aria-hidden="true" data-curve={JSON.stringify(curve)} data-from={problem.from}>
+        <p class="rate">
+          <span class="js-apy">{problem.from}</span><span class="pct">%</span><span class="doubt">?</span><span class="unit">{problem.unit}</span>
+        </p>
+        <div class="chart">
+          <svg viewBox="0 0 1000 300" preserveAspectRatio="none">
+            <line class="floor" x1="0" y1="290" x2="1000" y2="290" />
+            <path class="line js-line" d="" />
+          </svg>
+          <span class="tip js-tip"></span>
+          <span class="axis">{problem.axis}</span>
+          {problem.asks.map((ask, i) => (
+            <span class="ask" style={`--x:${askAt[i]?.x ?? 50}%;--y:${askAt[i]?.y ?? 50}%`}>{ask}</span>
+          ))}
+        </div>
+      </div>
+      <p class="question">
+        {problem.question.map((line) => <span>{line}</span>)}
+      </p>
+    </section>
+
+    <!-- 03 The solution: the landing's How it works (flow v4) on the deck's clock and its night (Brais, 27 Oct): one deposit of
+         USDC on Base rises into the column, which parts into Growth, Balance and Stables; while you sleep their yield is
+         taken in by Stables. Silent; it plays each time the slide arrives. -->
+    <section class="slide how" data-slide="3" aria-roledescription="slide" aria-label={loop.aria}>
+      <div class="film">
+        <p class="eyebrow rise" style="--d:0">{loop.eyebrow}</p>
+        <div class="print js-print">
+          <video class="js-how" muted playsinline preload="auto" aria-label={loop.aria}>
+            <source src="/deck-media/flow4-deck.webm" type="video/webm" />
+            <source src="/deck-media/flow4-deck.mp4" type="video/mp4" />
+          </video>
+        </div>
+      </div>
+    </section>
+
+    <!-- 04 Why trust Mamoru: six lines to speak to. A click brings up what each one means. -->
+    <section class="slide trust" data-slide="4" data-steps="1" aria-roledescription="slide" aria-label={trust.heading}>
+      <div class="wide">
+        <h2 class="rise" style="--d:0">{trust.heading}</h2>
+        <ul class="claims">
+          {trust.rows.map((r, i) => (
+            <li class="rise" style={`--d:${i + 1}`}>
+              <span class="claim">{r.who}</span>
+              <span class="means">{r.what}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
+
+    <!-- 05 How it's built -->
+    <section class="slide built" data-slide="5" aria-roledescription="slide" aria-label={built.heading}>
+      <div class="wide">
+        <p class="eyebrow rise" style="--d:0">{built.eyebrow}</p>
+        <h2 class="rise" style="--d:1">{built.heading}</h2>
+        <ol class="layers">
+          {built.layers.map((l, i) => (
+            <li class="rise" style={`--d:${i + 2}`}>
+              <span class="who">{l.who}</span>
+              <span class="what">{l.what}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
+
+    <!-- 06 Traction: the product is already in people's hands -->
+    <section class="slide traction" data-slide="6" aria-roledescription="slide" aria-label={traction.heading.join(" ")}>
+      <div class="wide">
+        <p class="eyebrow rise" style="--d:0">{traction.eyebrow}</p>
+        <h2 class="rise" style="--d:1">{traction.heading.map((l) => <span>{l}</span>)}</h2>
+        <dl class="figures">
+          {traction.figures.map((f, i) => (
+            <div class="rise" style={`--d:${i + 2}`}>
+              <dt>{f.value}</dt>
+              <dd>{f.label}</dd>
+            </div>
+          ))}
+        </dl>
+        <p class="source rise" style={`--d:${traction.figures.length + 2}`}>{traction.note}</p>
+      </div>
+    </section>
+
+    <!-- 07 Market: three bad options, then ours -->
+    <section class="slide market" data-slide="7" aria-roledescription="slide" aria-label={market.heading.join(" ")}>
+      <div class="wide">
+        <p class="eyebrow rise" style="--d:0">{market.eyebrow}</p>
+        <h2 class="rise" style="--d:1">{market.heading.map((l) => <span>{l}</span>)}</h2>
+        <ul class="layers">
+          {market.options.map((o, i) => (
+            <li class="rise" style={`--d:${i + 2}`}>
+              <span class="who">{o.who}</span>
+              <span class="what">{o.what}</span>
+            </li>
+          ))}
+          <li class="ours rise" style={`--d:${market.options.length + 2}`}>
+            <span class="who">{market.ours.who}</span>
+            <span class="what">{market.ours.what}</span>
+          </li>
+        </ul>
+        <p class="kicker rise" style={`--d:${market.options.length + 3}`}>{market.model}</p>
+      </div>
+    </section>
+
+    <!-- 08 Segment: who we win first, and where the volume is -->
+    <section class="slide segment" data-slide="8" aria-roledescription="slide" aria-label={segment.heading.join(" ")}>
+      <div class="wide">
+        <p class="eyebrow rise" style="--d:0">{segment.eyebrow}</p>
+        <h2 class="rise" style="--d:1">{segment.heading.map((l) => <span>{l}</span>)}</h2>
+        <ul class="pair">
+          {segment.rows.map((r, i) => (
+            <li class="rise" style={`--d:${i + 2}`}>
+              <span class="tag">{r.tag}</span>
+              <span class="who">{r.who}</span>
+              <span class="size">{r.size}</span>
+              <span class="what">{r.what}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
+
+    <!-- 09 Channels: what we already run, each with its proof -->
+    <section class="slide channels" data-slide="9" aria-roledescription="slide" aria-label={channels.heading}>
+      <div class="wide">
+        <p class="eyebrow rise" style="--d:0">{channels.eyebrow}</p>
+        <h2 class="rise" style="--d:1">{channels.heading}</h2>
+        <ol class="rows">
+          {channels.rows.map((r, i) => (
+            <li class="rise" style={`--d:${i + 2}`}>
+              <span class="n">{r.n}</span>
+              <span class="body">
+                <span class="who">{r.who}</span>
+                <span class="what">{r.what}</span>
+              </span>
+              <span class="proof">{r.proof}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
+
+    <!-- 10 The offer: both sides of the first liquidity -->
+    <section class="slide offer" data-slide="10" aria-roledescription="slide" aria-label={offer.heading.join(" ")}>
+      <div class="wide">
+        <p class="eyebrow rise" style="--d:0">{offer.eyebrow}</p>
+        <h2 class="rise" style="--d:1">{offer.heading.map((l) => <span>{l}</span>)}</h2>
+        <p class="lede wide-lede rise" style="--d:2">{offer.lede}</p>
+        <ol class="claims three">
+          {offer.parts.map((p, i) => (
+            <li class="rise" style={`--d:${i + 3}`}>
+              <span class="claim">{p.who}</span>
+              <span class="means shown">{p.what}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
+
+    <!-- 11 Rollout: four steps, each with the number that opens the next -->
+    <section class="slide rollout" data-slide="11" aria-roledescription="slide" aria-label={rollout.heading}>
+      <div class="wide">
+        <p class="eyebrow rise" style="--d:0">{rollout.eyebrow}</p>
+        <h2 class="rise" style="--d:1">{rollout.heading}</h2>
+        <ol class="steps4">
+          {rollout.steps.map((s, i) => (
+            <li class="rise" style={`--d:${i + 2}`}>
+              <span class="n">{s.n}</span>
+              <span class="who">{s.who}</span>
+              <span class="what">{s.what}</span>
+              <span class="kpi">{s.kpi}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
+
+    <!-- 12 The ask (class deal: .ask belongs to the problem slide), and what Whitechain gets back -->
+    <section class="slide deal" data-slide="12" aria-roledescription="slide" aria-label={ask.heading}>
+      <div class="wide">
+        <p class="eyebrow rise" style="--d:0">{ask.eyebrow}</p>
+        <h2 class="rise" style="--d:1">{ask.heading}</h2>
+        <div class="trade">
+          <ol class="asks rise" style="--d:2">
+            {ask.asks.map((a) => <li>{a}</li>)}
+          </ol>
+          <div class="gives rise" style="--d:3">
+            <p class="sub">{ask.giveHeading}</p>
+            <ul>
+              {ask.gives.map((g) => <li>{g}</li>)}
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 13 Close: the next step, and the app on their phone -->
+    <section class="slide close" data-slide="13" aria-roledescription="slide" aria-label={close.heading.join(" ")}>
+      <div class="center">
+        <p class="eyebrow rise" style="--d:0">{close.eyebrow}</p>
+        <h2 class="rise" style="--d:1">{close.heading.map((l) => <span>{l}</span>)}</h2>
+        <p class="lede rise" style="--d:2">{close.lede}</p>
+        <div class="go rise" style="--d:3">
+          <img class="qr" src="/deck-qr-app.svg" width="96" height="96" alt="QR code for app.mamoru.lol" />
+          <a class="cta" href={close.href} target="_blank" rel="noopener noreferrer">{close.hrefLabel}</a>
+        </div>
+        <div class="outro-foot rise" style="--d:4">
+          <button type="button" class="cta ghost js-restart">{close.restart}</button>
+          <span class="links">
+            {close.links.map((l) => <a href={l.href} target="_blank" rel="noopener noreferrer">{l.label}</a>)}
+          </span>
+        </div>
+      </div>
+    </section>
+
+    <nav class="dots" aria-label="Slides">
+      {Array.from({ length: total }, (_, i) => (
+        <button type="button" class="dot" data-go={i + 1} aria-label={`Slide ${i + 1}`}></button>
+      ))}
+    </nav>
+    <p class="count" aria-live="polite"><span class="js-now">01</span> / {String(total).padStart(2, "0")}</p>
+  </main>
+
+  <script>
+    const deck = document.getElementById("deck")!;
+    const slides = [...deck.querySelectorAll<HTMLElement>(".slide")];
+    const dots = [...deck.querySelectorAll<HTMLButtonElement>(".dot")];
+    const now = deck.querySelector<HTMLElement>(".js-now")!;
+    let at = 0;
+    let step = 0;
+    let shown = -1;
+
+    const fromHash = () => {
+      const n = Number(location.hash.slice(1));
+      return Number.isInteger(n) && n >= 1 && n <= slides.length ? n - 1 : 0;
+    };
+
+    function show(i: number, s = 0) {
+      at = Math.max(0, Math.min(slides.length - 1, i));
+      step = s;
+      slides.forEach((el, k) => {
+        el.classList.toggle("on", k === at);
+        el.classList.toggle("past", k < at);
+        el.dataset.step = k === at ? String(step) : "0";
+        el.inert = k !== at;
+      });
+      const onFall = slides[at]?.classList.contains("fall") === true;
+      // Once the fall has given way to the question, its stage stays out of sight until the fall starts again.
+      if (onFall && step > 0) fall?.classList.add("spent");
+      playFall(onFall && step === 0);
+      if (at !== shown) playHow(slides[at]?.classList.contains("how") === true);
+      shown = at;
+      dots.forEach((d, k) => d.setAttribute("aria-current", k === at ? "step" : "false"));
+      now.textContent = String(at + 1).padStart(2, "0");
+      const hash = `#${at + 1}`;
+      // Inside the staging preview the page has a cross-origin <base>, and the browser refuses the new URL.
+      try {
+        if (location.hash !== hash) history.replaceState(null, "", hash);
+      } catch {}
+    }
+
+    // 02 Problem: 150% holds for ten seconds, then the rate falls to zero, 0%? blinks in red, and the question takes the slide.
+    const FALL_WAIT = 10000;
+    const FALL_FOR = 7200;
+    const BLINK_FOR = 2400;
+    const GREEN = [47, 93, 80];
+    const RED = [155, 44, 44];
+    const ASK_AT = [0.28, 0.5, 0.72];
+    const quiet = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const fall = deck.querySelector<HTMLElement>(".fall");
+    const stage = fall?.querySelector<HTMLElement>(".stage");
+    const apy = fall?.querySelector<HTMLElement>(".js-apy");
+    const line = fall?.querySelector<SVGPathElement>(".js-line");
+    const tip = fall?.querySelector<HTMLElement>(".js-tip");
+    const asks = [...(fall?.querySelectorAll<HTMLElement>(".ask") ?? [])];
+    const curve: number[] = JSON.parse(stage?.dataset.curve ?? "[]");
+    const from = Number(stage?.dataset.from ?? 0) || 1;
+    const yOf = (v: number) => 10 + (1 - v / from) * 280;
+    let fallTimers: number[] = [];
+    let fallFrame = 0;
+
+    function drawFall(p: number) {
+      if (!stage || !apy || !line || !tip || curve.length < 2) return;
+      const last = curve.length - 1;
+      const at = p * last;
+      const i = Math.min(last - 1, Math.floor(at));
+      const v = curve[i]! + (curve[i + 1]! - curve[i]!) * (at - i);
+      const heat = Math.min(1, (1 - v / from) * 1.15);
+      const tone = GREEN.map((g, k) => Math.round(g + (RED[k]! - g) * heat));
+      let d = "";
+      for (let k = 0; k <= i; k++) d += `${k ? "L" : "M"}${((k / last) * 1000).toFixed(1)} ${yOf(curve[k]!).toFixed(1)}`;
+      d += `L${(p * 1000).toFixed(1)} ${yOf(v).toFixed(1)}`;
+      line.setAttribute("d", d);
+      stage.style.setProperty("--tone", `rgb(${tone.join(" ")})`);
+      tip.style.left = `${p * 100}%`;
+      tip.style.top = `${(yOf(v) / 300) * 100}%`;
+      apy.textContent = String(Math.round(v));
+      asks.forEach((a, k) => a.classList.toggle("show", p >= ASK_AT[k]!));
+      stage.classList.toggle("zero", p >= 1);
+    }
+
+    function playFall(on: boolean) {
+      fallTimers.forEach((t) => clearTimeout(t));
+      fallTimers = [];
+      cancelAnimationFrame(fallFrame);
+      // Leave the last frame in place while the stage fades; the rate only goes back to the top when the fall starts again.
+      if (!on) return;
+      fall?.classList.remove("spent");
+      drawFall(0);
+      const here = at;
+      const done = () => {
+        if (at === here && step === 0) show(here, 1);
+      };
+      if (quiet) {
+        fallTimers.push(window.setTimeout(done, 0));
+        return;
+      }
+      fallTimers.push(
+        window.setTimeout(() => {
+          const t0 = performance.now();
+          const tick = (t: number) => {
+            const p = Math.min(1, (t - t0) / FALL_FOR);
+            drawFall(p);
+            if (p < 1) fallFrame = requestAnimationFrame(tick);
+            else fallTimers.push(window.setTimeout(done, BLINK_FOR));
+          };
+          fallFrame = requestAnimationFrame(tick);
+        }, FALL_WAIT),
+      );
+    }
+
+    // 03: the film starts over each time the slide arrives and rests on its last frame. Reduced motion shows that frame.
+    const how = deck.querySelector<HTMLVideoElement>(".js-how");
+    // Its box carries the page's paper: offset by where the box sits once the slide is in place (no slide transform).
+    const print = deck.querySelector<HTMLElement>(".js-print");
+    function registerPaper() {
+      if (!print) return;
+      const r = print.getBoundingClientRect();
+      const slide = print.closest<HTMLElement>(".slide");
+      const shift = slide ? new DOMMatrixReadOnly(getComputedStyle(slide).transform).m41 : 0;
+      print.style.backgroundPosition = `${-(r.left - shift)}px ${-r.top}px`;
+    }
+    registerPaper();
+    window.addEventListener("resize", registerPaper);
+    function playHow(on: boolean) {
+      if (!how) return;
+      if (!on) return how.pause();
+      registerPaper();
+      if (quiet) {
+        const end = () => { how.currentTime = Math.max(0, how.duration - 0.05); };
+        if (how.readyState >= 1) end();
+        else how.addEventListener("loadedmetadata", end, { once: true });
+        return;
+      }
+      how.currentTime = 0;
+      how.play().catch(() => {});
+    }
+
+    function next() {
+      const steps = Number(slides[at]?.dataset.steps ?? 0);
+      if (step < steps) show(at, step + 1);
+      else if (at < slides.length - 1) show(at + 1);
+    }
+    function prev() {
+      if (step > 0) show(at, step - 1);
+      else if (at > 0) {
+        const steps = Number(slides[at - 1]?.dataset.steps ?? 0);
+        show(at - 1, steps);
+      }
+    }
+
+    document.addEventListener("keydown", (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const k = e.key;
+      if (k === "ArrowRight" || k === "PageDown" || k === " " || k === "Enter") {
+        if (k === "Enter" && (e.target as HTMLElement).closest("a,button")) return;
+        e.preventDefault();
+        next();
+      } else if (k === "ArrowLeft" || k === "PageUp" || k === "Backspace") {
+        e.preventDefault();
+        prev();
+      } else if (k === "Home") show(0);
+      else if (k === "End") show(slides.length - 1);
+      else if (k === "f") {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else document.documentElement.requestFullscreen?.();
+      }
+    });
+
+    // Click the right two thirds to advance, the left third to go back.
+    deck.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).closest("a,button")) return;
+      if (e.clientX < window.innerWidth / 3) prev();
+      else next();
+    });
+
+    let x0: number | null = null;
+    deck.addEventListener("touchstart", (e) => { x0 = e.touches[0]?.clientX ?? null; }, { passive: true });
+    deck.addEventListener("touchend", (e) => {
+      const x1 = e.changedTouches[0]?.clientX;
+      if (x0 === null || x1 === undefined) return;
+      const dx = x1 - x0;
+      x0 = null;
+      if (Math.abs(dx) < 48) return;
+      if (dx < 0) next();
+      else prev();
+    });
+
+    dots.forEach((d) => d.addEventListener("click", () => show(Number(d.dataset.go) - 1)));
+    deck.querySelector(".js-restart")?.addEventListener("click", () => show(0));
+    window.addEventListener("hashchange", () => {
+      if (fromHash() !== at) show(fromHash());
+    });
+
+    show(fromHash());
+    requestAnimationFrame(() => deck.classList.add("ready"));
+  </script>
+</Base>
+
+<style>
+  :global(html),
+  :global(body) {
+    height: 100%;
+    overflow: hidden;
+    /* Kami A, the brand's screen paper (the app's dashboard since otto/mamoru#198), on every slide. */
+    background-color: #f1eee5;
+    background-image: url("/kami-a-tile.png");
+    background-image: image-set(url("/kami-a-tile.webp") type("image/webp"), url("/kami-a-tile.png") type("image/png"));
+    background-size: 1024px 1024px;
+  }
+  /* Type grows with the screen, so a projector reads like a laptop. */
+  :global(html) {
+    font-size: clamp(16px, 1.12vw, 26px);
+  }
+
+  .deck {
+    --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --muted: color-mix(in srgb, var(--ink) 60%, var(--paper));
+    position: relative;
+    width: 100vw;
+    height: 100dvh;
+    overflow: hidden;
+    user-select: none;
+    cursor: default;
+  }
+
+  .lockup {
+    position: absolute;
+    top: clamp(1rem, 3vh, 2rem);
+    left: clamp(1rem, 4vw, 3rem);
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-size: 1.05rem;
+    letter-spacing: 0.02em;
+  }
+
+  .seal {
+    position: absolute;
+    left: clamp(1rem, 4vw, 3rem);
+    bottom: clamp(0.9rem, 2.6vh, 1.6rem);
+    z-index: 2;
+    width: 2rem;
+    height: 2rem;
+  }
+
+  /* Slides stack in place and cross-fade. */
+  .slide {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: clamp(4.5rem, 10vh, 7rem) clamp(1.25rem, 7vw, 7rem);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateX(1.5rem);
+    transition:
+      opacity 0.9s var(--ease),
+      transform 1.1s var(--ease),
+      visibility 0s linear 0.9s;
+  }
+  .slide.past {
+    transform: translateX(-1.5rem);
+  }
+  .slide.on {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    transition:
+      opacity 0.9s var(--ease) 0.15s,
+      transform 1.1s var(--ease) 0.15s,
+      visibility 0s;
+  }
+
+  /* Pieces rise in, one after another, when their slide arrives. */
+  .rise {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  .on .rise {
+    opacity: 1;
+    transform: none;
+    transition:
+      opacity 0.8s ease,
+      transform 1s var(--ease);
+    transition-delay: calc(0.35s + var(--d, 0) * 0.14s);
+  }
+
+  .center {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: clamp(0.9rem, 2.2vh, 1.4rem);
+  }
+  .wide {
+    width: min(68rem, 100%);
+  }
+  .split {
+    width: min(72rem, 100%);
+    display: grid;
+    grid-template-columns: minmax(0, 6fr) minmax(0, 5fr);
+    gap: clamp(2rem, 6vw, 5rem);
+    align-items: center;
+  }
+
+  .eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin: 0 0 clamp(1rem, 2.5vh, 1.75rem);
+    font-size: 0.75rem;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--emerald);
+  }
+  .eyebrow::after {
+    content: "";
+    width: 2rem;
+    height: 1px;
+    background: currentColor;
+  }
+  .center .eyebrow {
+    margin: 0;
+  }
+  .center .eyebrow::after {
+    display: none;
+  }
+
+  h1,
+  h2 {
+    margin: 0;
+    font-weight: 400;
+  }
+  h2 {
+    font-size: clamp(2.2rem, 5vw, 3.8rem);
+    line-height: 1.08;
+    letter-spacing: 0.005em;
+  }
+  h2 span {
+    display: block;
+  }
+
+  .lede {
+    margin: 0;
+    max-width: 34ch;
+    font-size: clamp(1.1rem, 2vw, 1.4rem);
+    line-height: 1.45;
+    color: var(--muted);
+  }
+  .kicker {
+    margin: clamp(0.5rem, 2vh, 1.25rem) 0 0;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--stone);
+  }
+
+  .points {
+    list-style: none;
+    margin: clamp(1.5rem, 4vh, 2.5rem) 0 0;
+    padding: 0;
+    display: grid;
+    gap: 0.85rem;
+  }
+  .points li {
+    position: relative;
+    padding-left: 1.6rem;
+    font-size: clamp(1.05rem, 1.7vw, 1.3rem);
+    line-height: 1.4;
+    color: color-mix(in srgb, var(--ink) 80%, var(--paper));
+  }
+  .points li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.72em;
+    width: 0.7rem;
+    height: 1px;
+    background: var(--emerald);
+  }
+
+  /* 01 Cover: the landing hero, with the landing's own proportions (open.astro .hero). */
+  .cover .center {
+    gap: 0;
+  }
+  .cover .mark {
+    width: clamp(4.15rem, 6.25vw, 5.35rem);
+    height: auto;
+  }
+  .cover .hero {
+    display: flex;
+    flex-direction: column;
+    margin: clamp(0.78rem, 2.6vh, 1.22rem) 0 0;
+    font-size: clamp(2.4rem, 8vw, 5.2rem);
+    line-height: 0.95;
+    letter-spacing: 0.04em;
+  }
+  .cover .lede {
+    margin: clamp(1.1rem, 3vh, 1.8rem) 0 0;
+    max-width: none;
+    font-size: clamp(1.05rem, 2vw, 1.3rem);
+    line-height: 1.35;
+    color: var(--ink);
+  }
+  .cover .lede span {
+    display: block;
+  }
+
+  /* 02 Problem: the rate goes from green to red as it falls, and the line falls with it. */
+  /* The slide's name, set like the eyebrow of the solution slide, and there for the fall and the question alike. */
+  .fall .label {
+    position: absolute;
+    top: clamp(4.5rem, 12vh, 7.5rem);
+    left: 0;
+    right: 0;
+    margin: 0;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--emerald);
+  }
+  .fall .stage {
+    --tone: var(--emerald);
+    width: min(64rem, 100%);
+    transition: opacity 0.25s ease;
+  }
+  .fall.spent .stage {
+    opacity: 0;
+  }
+  .rate {
+    margin: 0;
+    font-size: clamp(4rem, 13vw, 10rem);
+    line-height: 1;
+    letter-spacing: 0.01em;
+    color: var(--tone);
+    font-variant-numeric: tabular-nums;
+  }
+  .rate .doubt {
+    display: none;
+  }
+  .zero .rate .doubt {
+    display: inline;
+  }
+  /* The end of the fall: 0%? breathes twice in the alert red the app uses. */
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  .zero .rate {
+    color: #9b2c2c;
+    animation: blink 1.2s ease-in-out 2;
+  }
+  .zero .rate .unit {
+    visibility: hidden;
+  }
+  .rate .unit {
+    margin-left: 0.5em;
+    font-family: var(--font-mono);
+    font-size: 0.2em;
+    letter-spacing: 0.2em;
+    vertical-align: 0.9em;
+  }
+  .chart {
+    position: relative;
+    height: min(18rem, 34vh);
+    margin-top: clamp(1rem, 3vh, 2rem);
+  }
+  .chart svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  .floor {
+    stroke: var(--wash);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+  }
+  .line {
+    fill: none;
+    stroke: var(--tone);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+  }
+  /* Time runs left to right. One word at the end of the floor says so, and no day is counted. */
+  .axis {
+    position: absolute;
+    right: 0;
+    top: calc(100% - 0.2rem);
+    font-family: var(--font-mono);
+    font-size: clamp(0.7rem, 1vw, 0.85rem);
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--stone);
+  }
+  .tip {
+    position: absolute;
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 50%;
+    background: var(--tone);
+    transform: translate(-50%, -50%);
+  }
+  .ask {
+    position: absolute;
+    left: var(--x);
+    top: var(--y);
+    font-size: clamp(1.4rem, 2.8vw, 2.3rem);
+    font-style: italic;
+    opacity: 0;
+    transform: translateY(8px);
+    transition:
+      opacity 0.35s ease,
+      transform 0.35s var(--ease);
+  }
+  .ask.show {
+    opacity: 1;
+    transform: none;
+  }
+  .question {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 0 clamp(1.25rem, 7vw, 7rem);
+    text-align: center;
+    font-size: clamp(2.2rem, 5.6vw, 4.6rem);
+    line-height: 1.1;
+    opacity: 0;
+    transform: translateY(10px);
+    transition:
+      opacity 0.5s ease,
+      transform 0.7s var(--ease);
+  }
+  .question span + span {
+    font-style: italic;
+    color: var(--emerald);
+  }
+  .fall.on[data-step="1"] .question {
+    opacity: 1;
+    transform: none;
+    transition-delay: 0.25s;
+  }
+
+  /* 03 The solution: the film, as large as the slide allows at 16:9, on the same paper. */
+  .slide.how {
+    padding-block: clamp(3rem, 6vh, 4.5rem);
+  }
+  .film {
+    width: min(100%, calc((100dvh - 11rem) * 16 / 9));
+  }
+  /* Printed on the page, as on the landing: the film is drawn on white with its tones divided by Kami (flow-v2 deck.js
+     ?print) and multiplied over the paper. The slide is its own stacking context (opacity, transform), so the box
+     carries the page's Kami A, kept in register with the page by the script: no edge, no second paper. */
+  .print {
+    isolation: isolate;
+    overflow: hidden;
+    background-color: #f1eee5;
+    background-image: url("/kami-a-tile.png");
+    background-image: image-set(url("/kami-a-tile.webp") type("image/webp"), url("/kami-a-tile.png") type("image/png"));
+    background-size: 1024px 1024px;
+  }
+  .print {
+    aspect-ratio: 16 / 9;
+  }
+  /* A pixel past the box on every side: the scaled frame's edge pixel would show as a light hairline. */
+  .film video {
+    display: block;
+    width: calc(100% + 4px);
+    margin: -2px;
+    aspect-ratio: 16 / 9;
+    mix-blend-mode: multiply;
+  }
+
+  .versus {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
+    margin: clamp(1.75rem, 4.5vh, 2.75rem) 0 0;
+    padding-top: 1rem;
+    border-top: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
+  }
+  .versus dt {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--stone);
+  }
+  .versus dd {
+    margin: 0.35rem 0 0;
+    font-size: clamp(0.95rem, 1.3vw, 1.05rem);
+    color: var(--muted);
+  }
+  .versus .ours dt {
+    color: var(--emerald);
+  }
+  .versus .ours dd {
+    color: var(--ink);
+  }
+
+  .solution h2 span:last-child {
+    color: var(--emerald);
+  }
+
+  /* 03 Solution: the mark settles into raked rings. */
+  .garden {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .garden svg {
+    width: 100%;
+    max-width: 26rem;
+    height: auto;
+    overflow: visible;
+  }
+  .garden figcaption {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--stone);
+  }
+  .ring {
+    fill: none;
+    stroke: var(--wash);
+    stroke-width: 1.2;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+  }
+  .on .ring {
+    stroke-dashoffset: 0;
+    transition: stroke-dashoffset 1.8s cubic-bezier(0.6, 0, 0.2, 1);
+    transition-delay: calc(0.9s + var(--r) * 0.16s);
+  }
+  .settle path {
+    fill: var(--ink);
+    opacity: 0;
+    transform: translateY(-16px);
+  }
+  .settle .half {
+    fill: var(--emerald);
+  }
+  .on .settle path {
+    opacity: 1;
+    transform: none;
+    transition:
+      opacity 0.9s ease 0.5s,
+      transform 1.3s var(--ease) 0.5s;
+  }
+  .on .settle .half {
+    transition-delay: 1.1s;
+  }
+  .shadow {
+    fill: var(--ink);
+    opacity: 0;
+    filter: blur(5px);
+  }
+  .on .shadow {
+    opacity: 0.12;
+    transition: opacity 1s ease 0.8s;
+  }
+
+  /* 04 Built: one line per layer. */
+  /* 04 Why trust Mamoru: six claims, large. What each one means stays out of sight until a click. */
+  .claims {
+    list-style: none;
+    margin: clamp(2rem, 6vh, 3.5rem) 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(1.5rem, 5vh, 3rem) clamp(1.5rem, 4vw, 3.5rem);
+  }
+  .claims li {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding-top: clamp(0.8rem, 2vh, 1.1rem);
+    border-top: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
+  }
+  .claim {
+    font-size: clamp(1.4rem, 2.5vw, 2.1rem);
+    line-height: 1.15;
+  }
+  .claims li:nth-child(n + 4) .claim {
+    color: var(--emerald);
+  }
+  .means {
+    font-size: clamp(0.95rem, 1.35vw, 1.1rem);
+    line-height: 1.45;
+    color: var(--muted);
+    opacity: 0;
+    transform: translateY(6px);
+    transition:
+      opacity 0.5s ease,
+      transform 0.6s var(--ease);
+  }
+  .trust.on[data-step="1"] .means {
+    opacity: 1;
+    transform: none;
+  }
+
+  .layers,
+  .futures {
+    list-style: none;
+    margin: clamp(1.75rem, 5vh, 3rem) 0 0;
+    padding: 0;
+    display: grid;
+    border-top: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
+  }
+  .layers li,
+  .futures li {
+    display: grid;
+    grid-template-columns: minmax(10rem, 3fr) minmax(0, 7fr);
+    gap: clamp(1rem, 3vw, 2.5rem);
+    align-items: baseline;
+    padding: clamp(0.8rem, 2vh, 1.15rem) 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
+  }
+  .who {
+    font-size: clamp(1.1rem, 1.8vw, 1.4rem);
+  }
+  .what {
+    font-size: clamp(0.98rem, 1.5vw, 1.15rem);
+    line-height: 1.45;
+    color: var(--muted);
+  }
+
+  /* 13 Close: the app on their phone. */
+  .cta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 3rem;
+    padding: 0.75rem 1.6rem;
+    border: 1px solid var(--ink);
+    border-radius: 0;
+    background: var(--ink);
+    color: var(--paper);
+    font: inherit;
+    font-size: 1rem;
+    letter-spacing: 0.04em;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+  }
+  .cta:hover {
+    background: var(--emerald);
+    border-color: var(--emerald);
+  }
+  .cta:focus-visible,
+  .dot:focus-visible {
+    outline: 2px solid var(--emerald);
+    outline-offset: 3px;
+  }
+  .cta.ghost {
+    background: transparent;
+    color: var(--ink);
+  }
+  .cta.ghost:hover {
+    background: var(--ink);
+    color: var(--paper);
+    border-color: var(--ink);
+  }
+  .go {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+  }
+  .qr {
+    width: 6rem;
+    height: 6rem;
+    image-rendering: pixelated;
+  }
+  /* 13 Close: the next step, the app and the links. */
+  .outro-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem 2rem;
+    margin-top: clamp(1.75rem, 5vh, 3rem);
+  }
+  .outro-foot .links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    letter-spacing: 0.06em;
+  }
+  .outro-foot .links a {
+    color: var(--stone);
+    text-underline-offset: 0.3em;
+  }
+  .outro-foot .links a:hover {
+    color: var(--emerald);
+  }
+
+  /* 06 Traction: four figures in serif, each over a hairline, and where they were read. */
+  .figures {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: clamp(1.25rem, 3vw, 2.5rem);
+    margin: clamp(2rem, 6vh, 3.5rem) 0 0;
+  }
+  .figures div {
+    padding-top: clamp(0.8rem, 2vh, 1.1rem);
+    border-top: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
+  }
+  .figures dt {
+    font-size: clamp(2.6rem, 5.5vw, 4.4rem);
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .figures div:first-child dt {
+    color: var(--emerald);
+  }
+  .figures dd {
+    margin: 0.6rem 0 0;
+    font-size: clamp(0.95rem, 1.35vw, 1.1rem);
+    line-height: 1.4;
+    color: var(--muted);
+  }
+  .source {
+    margin: clamp(1.5rem, 4vh, 2.5rem) 0 0;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    line-height: 1.6;
+    color: var(--stone);
+  }
+
+  /* 07 Market: the three options in grey, ours in ink and emerald. */
+  .layers .ours .who {
+    color: var(--emerald);
+  }
+  .layers .ours .what {
+    color: var(--ink);
+  }
+  .market .kicker {
+    margin-top: clamp(1.25rem, 3.5vh, 2rem);
+    letter-spacing: 0.12em;
+    text-transform: none;
+    font-size: 0.85rem;
+  }
+
+  /* 08 Segment: who comes first and who comes next, side by side. */
+  .pair {
+    list-style: none;
+    margin: clamp(2rem, 6vh, 3.5rem) 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: clamp(1.5rem, 5vw, 4rem);
+  }
+  .pair li {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding-top: clamp(0.8rem, 2vh, 1.1rem);
+    border-top: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
+  }
+  .tag,
+  .n,
+  .kpi,
+  .proof,
+  .sub {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--stone);
+  }
+  .pair li:first-child .tag {
+    color: var(--emerald);
+  }
+  .pair .who {
+    font-size: clamp(1.4rem, 2.5vw, 2.1rem);
+    line-height: 1.15;
+  }
+  .size {
+    font-size: clamp(1.1rem, 1.8vw, 1.4rem);
+    font-variant-numeric: tabular-nums;
+    color: var(--emerald);
+  }
+
+  /* 09 Channels: number, what we do, and the proof on the right. */
+  .rows {
+    list-style: none;
+    margin: clamp(1.75rem, 5vh, 3rem) 0 0;
+    padding: 0;
+    border-top: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
+  }
+  .rows li {
+    display: grid;
+    grid-template-columns: 3rem minmax(0, 1fr) minmax(9rem, 14rem);
+    gap: clamp(1rem, 3vw, 2.5rem);
+    align-items: baseline;
+    padding: clamp(0.9rem, 2.2vh, 1.3rem) 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
+  }
+  .rows .body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .rows .proof {
+    text-align: right;
+    color: var(--emerald);
+  }
+
+  /* 10 The offer: three parts, read at once. */
+  .wide-lede {
+    max-width: 44ch;
+    margin-top: clamp(1rem, 2.5vh, 1.5rem);
+  }
+  .claims.three {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .claims.three li:last-child .claim {
+    color: var(--emerald);
+  }
+  .means.shown {
+    opacity: 1;
+    transform: none;
+  }
+
+  /* 11 Rollout: four steps in a row, each ending in the number it is judged by. */
+  .steps4 {
+    list-style: none;
+    margin: clamp(2rem, 6vh, 3.5rem) 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: clamp(1rem, 2.5vw, 2rem);
+  }
+  .steps4 li {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    padding-top: clamp(0.8rem, 2vh, 1.1rem);
+    border-top: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
+  }
+  .steps4 li:nth-child(2) {
+    border-top-color: var(--emerald);
+  }
+  .steps4 .what {
+    flex: 1;
+    font-size: clamp(0.92rem, 1.25vw, 1.02rem);
+  }
+  .steps4 .kpi {
+    color: var(--emerald);
+  }
+
+  /* 12 The ask: what we ask in large type, what they get beside it. */
+  .trade {
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    gap: clamp(2rem, 6vw, 5rem);
+    margin: clamp(2rem, 6vh, 3.5rem) 0 0;
+    align-items: start;
+  }
+  .asks {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: ask;
+    border-top: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
+  }
+  .asks li {
+    counter-increment: ask;
+    display: flex;
+    gap: 1.25rem;
+    align-items: baseline;
+    padding: clamp(0.8rem, 2vh, 1.15rem) 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
+    font-size: clamp(1.4rem, 2.6vw, 2.1rem);
+    line-height: 1.15;
+  }
+  .asks li::before {
+    content: counter(ask, decimal-leading-zero);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.2em;
+    color: var(--stone);
+  }
+  .gives .sub {
+    margin: 0 0 0.75rem;
+    color: var(--emerald);
+  }
+  .gives ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 0.7rem;
+  }
+  .gives li {
+    position: relative;
+    padding-left: 1.6rem;
+    font-size: clamp(1.05rem, 1.7vw, 1.3rem);
+    line-height: 1.4;
+  }
+  .gives li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.72em;
+    width: 0.7rem;
+    height: 1px;
+    background: var(--emerald);
+  }
+
+  /* 13 Close */
+  .close h2 span:last-child {
+    color: var(--emerald);
+  }
+  .close .outro-foot {
+    justify-content: center;
+  }
+
+  /* Chrome: small stones for position, a counter in the corner. */
+  .dots {
+    position: absolute;
+    left: 50%;
+    bottom: clamp(1rem, 3vh, 1.75rem);
+    z-index: 2;
+    display: flex;
+    gap: 0.35rem;
+    transform: translateX(-50%);
+  }
+  .dot {
+    width: 1.4rem;
+    height: 1.4rem;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+  }
+  .dot::before {
+    content: "";
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: 50%;
+    background: var(--wash);
+    transition: background 0.5s ease, transform 0.5s var(--ease);
+  }
+  .dot[aria-current="step"]::before {
+    background: var(--ink);
+    transform: scale(1.35);
+  }
+  .count {
+    position: absolute;
+    right: clamp(1rem, 4vw, 3rem);
+    bottom: clamp(1.1rem, 3vh, 1.9rem);
+    z-index: 2;
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.16em;
+    color: var(--stone);
+  }
+
+  .deck:not(.ready) .slide {
+    transition: none;
+  }
+
+  @media (max-width: 760px) {
+    .split {
+      grid-template-columns: 1fr;
+      gap: 1.5rem;
+    }
+    .garden {
+      display: none;
+    }
+    .claims {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+    }
+    .layers li,
+    .futures li {
+      grid-template-columns: 1fr;
+      gap: 0.25rem;
+    }
+    .slide {
+      align-items: flex-start;
+      overflow-y: auto;
+      padding-bottom: 5rem;
+    }
+    .slide.how {
+      align-items: center;
+    }
+    .figures {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1.25rem 1rem;
+    }
+    .claims.three,
+    .pair,
+    .steps4,
+    .trade {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+    }
+    .rows li {
+      grid-template-columns: 2rem minmax(0, 1fr);
+      gap: 0.25rem 0.75rem;
+    }
+    .rows .proof {
+      grid-column: 2;
+      text-align: left;
+    }
+    /* Thirteen stones are wider than eight: smaller ones keep clear of the seal and the counter. */
+    .dots {
+      gap: 0;
+    }
+    .dot {
+      width: 1rem;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .slide,
+    .slide.on,
+    .rise,
+    .on .rise,
+    .ask,
+    .means,
+    .question,
+    .zero .rate,
+    .on .ring,
+    .on .settle path {
+      transition: none !important;
+      animation: none !important;
+    }
+  }
+</style>
