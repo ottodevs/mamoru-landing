@@ -13,11 +13,11 @@ export const WHITECHAIN = {
     eyebrow: "Live at ETHGlobal Mumbai",
     heading: ["Not an idea.", "A product people use."],
     figures: [
-      { value: "65", label: "accounts" },
-      { value: "$4,363", label: "total deposits across Base and Monad" },
+      { value: "60", label: "accounts" },
+      { value: "$5,240", label: "total deposits across Base and Monad" },
       { value: "2", label: "chains live: Base and Monad" },
     ],
-    note: "Mainnet, real funds. From Mamoru Stats, read from Base and Monad at 19:02 UTC, 6 Nov 2026.",
+    note: "Mainnet, real funds. From Mamoru Stats, read from Base and Monad at 02:09 UTC, 7 Nov 2026.",
   },
   market: {
     eyebrow: "Market",
