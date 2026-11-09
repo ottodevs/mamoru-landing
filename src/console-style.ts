@@ -98,6 +98,7 @@ html, body { overflow-x: clip; }
 .c-big { margin: 0.35rem 0 0.3rem; font-size: clamp(3rem, 7vw, 4.9rem); line-height: 1; letter-spacing: -0.03em; }
 .c-line { margin: 0 0 1rem; display: flex; flex-wrap: wrap; gap: 0.3rem 1.3rem; font-size: 0.98rem; color: var(--muted); }
 .c-line b { font-weight: 400; color: var(--ink); }
+.c-sub { margin: 0 0 0.6rem; font-size: 1.05rem; color: var(--muted); }
 .c-foot { margin: 0.6rem 0 0; font-size: 0.82rem; color: var(--muted); line-height: 1.45; }
 
 /* figures */

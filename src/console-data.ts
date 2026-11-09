@@ -24,8 +24,13 @@ export type AccountYield = {
   total: number;
   lp: number;
   idle: number;
-  /** Uncollected fees since each position's checkpoint, USD. */
+  /** Uncollected fees since each position's checkpoint, USD: earned but not harvested yet. */
   fees: number;
+  /**
+   * otto/mamoru-astro#43: lifetime fees collected (harvest, close), USD, priced when collected and frozen. What
+   * "earned" means, as on the app's Home. Null when the receipts table cannot be read.
+   */
+  collected: number | null;
   /** Its first confirmed entry, as the operator reports it; null when the operator has not reported one. */
   since: string | null;
   days: number | null;
@@ -97,7 +102,7 @@ export interface ConsoleModel {
   /** Read time of the newest ledger row, or null before the ledger has written one. */
   ledgerReadAt: string | null;
   accounts: AccountYield[];
-  totals: { fees: number; lp: number; idle: number; apr: number | null; positions: number; inRange: number; earning: number };
+  totals: { fees: number; collected: number | null; lp: number; idle: number; apr: number | null; positions: number; inRange: number; earning: number };
   pools: PoolYield[];
   lifecycle: { total: number; earning: number; waiting: number; signedUp: number };
   /** Capital held per day from metrics_daily: every environment, test included (that table has no env column). */
@@ -309,7 +314,7 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     asOf: now.toISOString(),
     ledgerReadAt: null,
     accounts: [],
-    totals: { fees: 0, lp: 0, idle: 0, apr: null, positions: 0, inRange: 0, earning: 0 },
+    totals: { fees: 0, collected: null, lp: 0, idle: 0, apr: null, positions: 0, inRange: 0, earning: 0 },
     pools: [],
     lifecycle: { total: 0, earning: 0, waiting: 0, signedUp: 0 },
     capital: [],
@@ -322,14 +327,16 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
   };
   if (!db) return empty;
 
-  const [snaps, accounts, metrics, operatorRows, overrides, settings] = await Promise.all([
+  const [snaps, accounts, metrics, operatorRows, overrides, settings, receipts] = await Promise.all([
     rows<SnapRow>(db, `SELECT account_key, env, read_at, idle_usdc, lp_usdc, fees_usdc, total_usdc, positions_json FROM account_snapshot_latest`),
     rows<AccountRow>(db, `SELECT account_key, env, is_test, created_at FROM accounts ORDER BY created_at`),
     rows<MetricsRow>(db, `SELECT day, lp_usd, idle_usdc_usd FROM metrics_daily ORDER BY day`),
     rows<OperatorRow>(db, `SELECT payload_json, generated_at FROM operator_metrics_latest WHERE id = 1`),
     newestOverrides(db),
     inEffect(db),
+    rows<{ account_key: string; collected: number | null }>(db, `SELECT account_key, SUM(collected_usdc) AS collected FROM yield_ledger_account_receipts GROUP BY account_key`),
   ]);
+  const collectedBy = new Map((receipts ?? []).map((r) => [r.account_key, usd(r.collected ?? 0)]));
 
   const parsedOperator = parseOperator(operatorRows?.[0]);
   const acctRows = (accounts ?? []).filter((a) => inScope(env, a.env, a.is_test));
@@ -372,6 +379,7 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
       lp,
       idle: usd(s.idle_usdc),
       fees,
+      collected: receipts ? (collectedBy.get(s.account_key) ?? 0) : null,
       since,
       days,
       apr: days && lp >= 0.5 ? (fees / lp) * (365 / days) * 100 : null,
@@ -458,6 +466,8 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     accounts: yields,
     totals: {
       fees: feesSum,
+      // Every account in scope, snapshot or not: one with receipts and no snapshot row still harvested them.
+      collected: receipts ? acctRows.reduce((x, a) => x + (collectedBy.get(a.account_key) ?? 0), 0) : null,
       lp: working.reduce((x, a) => x + a.lp, 0),
       idle: yields.reduce((x, a) => x + a.idle, 0),
       apr: capDays > 0 ? (datedFees / capDays) * 365 * 100 : null,
