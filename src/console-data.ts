@@ -16,10 +16,23 @@ export function parseConsoleEnv(value: string | null): ConsoleEnv {
   return value === "all" ? "all" : "prod";
 }
 
+/** The chain an account key names: `<uuid>` is Base, `<uuid>@143` is Monad, any other suffix its chain id. */
+export function chainOfKey(accountKey: string): string {
+  const at = accountKey.lastIndexOf("@");
+  if (at < 0) return "Base";
+  const id = accountKey.slice(at + 1);
+  return id === "143" ? "Monad" : id === "8453" ? "Base" : `Chain ${id}`;
+}
+
 export type Position = { tokenId: string; pool: string; inRange: boolean; value: number; fees: number };
 
 export type AccountYield = {
+  /** First 8 characters of the account key: how the operator, the caps and the ops feed name it. Shared by an owner's Safes. */
   key: string;
+  /** The full account key: unique per Safe (a remote Safe's `@<chainId>` suffix included). Row, drawer and `data-account` id. */
+  id: string;
+  /** The chain the Safe lives on, from the key's suffix: Base is the home chain and carries none. */
+  chain: string;
   env: string;
   total: number;
   lp: number;
@@ -367,6 +380,8 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     const days = since ? daysBetween(since, now) : null;
     yields.push({
       key: s.account_key.slice(0, 8),
+      id: s.account_key,
+      chain: chainOfKey(s.account_key),
       env: acct.is_test === 1 ? "test" : acct.env ?? "unknown",
       total: usd(s.total_usdc),
       lp,
@@ -417,7 +432,7 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     const held = idle + lp + e.usd;
     // An unread Base read could hide money: such a Safe stays listed, as a floor.
     if (held < 0.01 && e.away.length === 0 && !rs.some((r) => r.unread === true)) continue;
-    yields.push({ key: k, env: rs[0].isTest ? "test" : rs[0].env, total: idle + lp, lp, idle, fees: 0, since: null, days: null, apr: null, positions: [], readAt: infra?.asOf ?? now.toISOString(), held, floor: e.floor, away: e.away });
+    yields.push({ key: k, id: rs[0].key, chain: chainOfKey(rs[0].key), env: rs[0].isTest ? "test" : rs[0].env, total: idle + lp, lp, idle, fees: 0, since: null, days: null, apr: null, positions: [], readAt: infra?.asOf ?? now.toISOString(), held, floor: e.floor, away: e.away });
   }
   yields.sort((a, b) => b.fees - a.fees || b.lp - a.lp);
 
@@ -570,7 +585,7 @@ export function alertsOf(m: ConsoleModel, now: Date, ledgerMissing: boolean): Al
   if (ledgerMissing) out.push({ tone: "info", title: "The yield ledger is not set up on this database", detail: "Migrations 0009 and 0010 have not been applied, so no yield can be shown." });
   for (const a of m.accounts) {
     for (const p of a.positions) {
-      if (!p.inRange && a.lp > 0.01) out.push({ tone: "warn", title: `Out of range in ${poolLabel(p.pool).pair}`, detail: `Account ${a.key}: ${money(p.value)} earns nothing until the engine re-centres it.`, account: a.key });
+      if (!p.inRange && a.lp > 0.01) out.push({ tone: "warn", title: `Out of range in ${poolLabel(p.pool).pair}`, detail: `Account ${a.key}: ${money(p.value)} earns nothing until the engine re-centres it.`, account: a.id });
     }
   }
   const since = now.getTime() - 48 * 3600e3;
@@ -582,7 +597,7 @@ export function alertsOf(m: ConsoleModel, now: Date, ledgerMissing: boolean): Al
   if (m.relayer?.runway != null && m.relayer.runway < 10) {
     out.push({ tone: m.relayer.runway < 3 ? "bad" : "warn", title: `The relayer can fund ${m.relayer.runway} more new account${m.relayer.runway === 1 ? "" : "s"}`, detail: `${m.relayer.eth.toFixed(4)} ETH left, ${m.relayer.costPerAccountUsd != null ? money(m.relayer.costPerAccountUsd) : "unknown"} per new account.` });
   }
-  for (const a of m.accounts) if (a.idle >= 0.2 && a.lp <= 0.01) out.push({ tone: "info", title: `Funds waiting in ${a.key}`, detail: `${money(a.idle)} deposited and not placed yet.`, account: a.key });
+  for (const a of m.accounts) if (a.idle >= 0.2 && a.lp <= 0.01) out.push({ tone: "info", title: `Funds waiting in ${a.key}`, detail: `${money(a.idle)} deposited and not placed yet.`, account: a.id });
   if (!m.operator) out.push({ tone: "info", title: "Engine data is not connected yet", detail: "Engine and RPC figures appear once the app Worker stores the operator metrics (migration 0013)." });
   return out;
 }

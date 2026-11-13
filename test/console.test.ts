@@ -30,6 +30,16 @@ const SEED_DATA_WITH_GAS = SEED_DATA.replace(
   "INSERT INTO account_daily VALUES ('2026-10-17', 8453, '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'acc1', 'unknown', 90, 95, 120000000, 121000000, 0, 120000000, 1000000, 1500000, 500000, '2000000000000000');",
 );
 
+/** One owner, two Safes: the Base home and its remote Monad Safe share the first 8 characters of the key (otto/mamoru-astro#53). */
+const PAIR_BASE = "0a1b2c3d-0000-4000-8000-000000000001";
+const PAIR_MONAD = `${PAIR_BASE}@143`;
+const SEED_PAIR = `
+INSERT INTO accounts VALUES ('${PAIR_BASE}', 'u9', 8453, '0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC', '2026-09-01T00:00:00Z', 'prod', 0);
+INSERT INTO accounts VALUES ('${PAIR_MONAD}', 'u9', 143, '0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD', '2026-09-01T00:00:00Z', 'prod', 0);
+INSERT INTO account_snapshot_latest VALUES (8453, '0xcccccccccccccccccccccccccccccccccccccccc', '${PAIR_BASE}', 'unknown', 100, '2026-10-18T09:00:00Z', 1, 1000000, 130000000, 300000, 0, 131300000, '[{"tokenId":"1","pool":"pool:USDC/ETH/500","inRange":true,"valueUsdc":"130000000","feesUsdc":"300000","owedUsdc":"0"}]', '2026-10-18T09:00:05Z');
+INSERT INTO account_snapshot_latest VALUES (143, '0xdddddddddddddddddddddddddddddddddddddddd', '${PAIR_MONAD}', 'unknown', 100, '2026-10-18T09:00:00Z', 1, 2000000, 20000000, 100000, 0, 22100000, '[{"tokenId":"7","pool":"pool:USDC/MON/500","inRange":false,"valueUsdc":"20000000","feesUsdc":"100000","owedUsdc":"0"}]', '2026-10-18T09:00:05Z');
+`;
+
 const OPERATOR_SCHEMA = `CREATE TABLE operator_metrics_latest (id INTEGER PRIMARY KEY CHECK (id = 1), payload_json TEXT NOT NULL, generated_at TEXT NOT NULL, fetched_at TEXT NOT NULL);`;
 const OPERATOR_PAYLOAD = {
   operator: { gitSha: "abc1234", relayer: { address: "0x8F7D", balanceWei: "3600000000000000" } },
@@ -50,6 +60,7 @@ function memoryDb(tables: string[], operator: object = OPERATOR_PAYLOAD): D1Db {
   if (tables.includes("yield")) db.exec(YIELD_SCHEMA);
   if (tables.includes("flags")) db.exec(FLAGS_SCHEMA);
   if (tables.includes("seed")) db.exec(SEED_DATA);
+  if (tables.includes("seed-pair")) db.exec(SEED_PAIR);
   if (tables.includes("seed-gas")) db.exec(SEED_DATA_WITH_GAS);
   if (tables.includes("operator")) db.exec(operator === OPERATOR_PAYLOAD ? OPERATOR_SCHEMA + OPERATOR_SEED : OPERATOR_SCHEMA + `INSERT INTO operator_metrics_latest VALUES (1, '${JSON.stringify(operator)}', '2026-10-18T09:00:00Z', '2026-10-18T09:00:05Z');`);
   const stmt = (sql: string, values: unknown[] = []): any => ({
@@ -120,6 +131,39 @@ describe("console views", () => {
     expect(html).toContain('<p class="c-big">30¢</p>');
     expect(html).not.toContain("c-acct-acc2");
     expect(html).toContain('id="c-acct-acc1"');
+  });
+
+  test("a Base Safe and its remote Monad Safe share 8 characters but get distinct rows, drawers and chain labels (otto/mamoru-astro#53)", async () => {
+    const { env, cookie } = await opsEnv(memoryDb(["yield", "seed-pair", "operator"]));
+    for (const path of ["/ops/accounts", "/ops/yield", "/ops"]) {
+      for (const fragment of [false, true]) {
+        const res = await worker.fetch(get(path, cookie, fragment), env);
+        expect(res.status).toBe(200);
+        const body = await res.text();
+        // A fragment is JSON ({ section, title, html }): the same markup the document embeds.
+        const html = fragment ? (JSON.parse(body) as { html: string }).html : body;
+        const ids = [...html.matchAll(/<template id="(c-acct-[^"]+)"/g)].map((m) => m[1]);
+        expect(ids.length).toBe(new Set(ids).size);
+        expect(ids).toContain(`c-acct-${PAIR_BASE}`);
+        expect(ids).toContain(`c-acct-${PAIR_MONAD}`);
+        if (path !== "/ops") {
+          expect(html).toContain(`data-account="${PAIR_BASE}"`);
+          expect(html).toContain(`data-account="${PAIR_MONAD}"`);
+          expect(html).toContain("<em>Monad</em>");
+          expect(html).toContain("<em>Base</em>");
+        }
+        // The Monad drawer holds the Monad Safe's own position, not the Base one's.
+        const monad = html.slice(html.indexOf(`<template id="c-acct-${PAIR_MONAD}"`));
+        expect(monad.split("</template>")[0]).toContain("MON");
+      }
+    }
+  });
+
+  test("a lone Base Safe shows no chain label", async () => {
+    const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "operator"]));
+    const html = await (await worker.fetch(get("/ops/accounts", cookie), env)).text();
+    expect(html).not.toContain("<em>Base</em>");
+    expect(html).not.toContain("<em>Monad</em>");
   });
 
   test("?env=all brings in the beta account and marks the switch", async () => {
