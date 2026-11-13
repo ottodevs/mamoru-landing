@@ -192,7 +192,7 @@ function authorizationSheet(m: ConsoleModel, c: AccountCap | undefined, now: Dat
 }
 
 /** Accounts with a cap of their own (the newest row is not a removal), for the Accounts view. */
-function ownCapsSheet(m: ConsoleModel, drawerKeys: Set<string>): string {
+function ownCapsSheet(m: ConsoleModel, drawerKeys: Map<string, string>): string {
   if (!m.caps.table) return sheet("Accounts with their own cap", null, `<p class="c-empty">Not set up yet: the account caps table is not on this database (ottodevs/mamoru#109).</p>`);
   const own = [...m.caps.byKey.values()].filter((c) => c.override && c.override.capUsdc != null).sort((x, y) => y.override!.id - x.override!.id);
   if (!own.length) return sheet("Accounts with their own cap", null, `<p class="c-empty">None. Every account runs the general cap of its environment.</p>`);
@@ -200,7 +200,7 @@ function ownCapsSheet(m: ConsoleModel, drawerKeys: Set<string>): string {
     const o = c.override!;
     const a = c.authorization;
     const running = a?.capUsdc != null ? `${usdc(a.capUsdc)}, ${a.capSource ? capSourceWords(a.capSource) : "source not reported"}` : a ? "cap not reported" : m.caps.reported && m.caps.complete ? "no approval reported" : "not reported yet";
-    const keyHtml = drawerKeys.has(c.key) ? `<button type="button" class="c-linkish" data-account="${esc(c.key)}">${esc(c.key)}</button>` : `<span class="c-mono">${esc(c.key)}</span>`;
+    const keyHtml = drawerKeys.has(c.key) ? `<button type="button" class="c-linkish" data-account="${esc(drawerKeys.get(c.key)!)}">${esc(c.key)}</button>` : `<span class="c-mono">${esc(c.key)}</span>`;
     return `<li>${keyHtml}<div><b>${esc(usdc(o.capUsdc!))} asked</b><span>${esc(`runs ${running}`)}${c.env !== "prod" ? ` · ${esc(c.env)}` : ""}</span><span>${esc(`${maskEmail(o.author)}, ${timeLabel(o.createdAt)}`)}</span></div>${!a && m.caps.reported && m.caps.complete ? chip("No approval") : a?.capUsdc == null ? chip("Not reported") : a.capSource === "override" && a.capUsdc === o.capUsdc ? chip("In effect", "good") : chip("Not in effect", "warn")}</li>`;
   };
   return sheet("Accounts with their own cap", `${own.length} account${own.length === 1 ? "" : "s"} above or below the general cap`, `<ul class="c-feed c-owncaps">${own.map(row).join("")}</ul>`);
@@ -215,6 +215,19 @@ function capConfirmSheet(m: ConsoleModel, c: CapConfirm, csrf: string): string {
 <ul class="c-caplines">${c.lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
 <form method="post" action="${action}" data-ops-form data-ops-no-retry>${csrfField(csrf)}${hidden("key", c.key)}${hidden("action", c.capUsdc == null ? "clear" : "set")}${c.capUsdc == null ? "" : hidden("cap", String(c.capUsdc))}${hidden("reason", c.reason)}${hidden("base", String(c.base))}${hidden("confirm_token", c.token)}
 <button type="submit">Yes, authorize ${esc(what)}</button> <a href="/ops/accounts${m.env === "all" ? "?env=all" : ""}">Cancel</a></form></section>`;
+}
+
+/** An owner's Safes share the 8-character key: the chain is shown whenever it tells two rows apart or is not Base. */
+function chainTag(m: ConsoleModel, a: AccountYield): string {
+  const shared = m.accounts.some((o) => o !== a && o.key === a.key);
+  return a.chain !== "Base" || shared ? ` <em>${esc(a.chain)}</em>` : "";
+}
+
+/** The drawer id of an 8-character key as the operator names it: the owner's Base Safe, else the first one. */
+function drawerIds(m: ConsoleModel): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const a of m.accounts) if (!out.has(a.key) || a.chain === "Base") out.set(a.key, a.id);
+  return out;
 }
 
 /** One hidden template per account: the drawer the client opens from any view. */
@@ -234,8 +247,8 @@ function drawers(m: ConsoleModel, now: Date, csrf?: string): string {
         .slice(0, 8)
         .map((o) => `<li><span>${esc(o.kind)}</span>${chip(`${o.state}, ${ago(o.at, now)}`, o.state === "confirmed" ? "good" : o.state === "failed" ? "bad" : "dim")}</li>`)
         .join("");
-      return `<template id="c-acct-${esc(a.key)}"><div class="c-drawer-in">
-<p class="c-k">Account ${a.env !== "prod" ? esc(a.env) : ""}</p><h2 class="c-acct">${esc(a.key)}</h2>
+      return `<template id="c-acct-${esc(a.id)}"><div class="c-drawer-in">
+<p class="c-k">Account ${a.env !== "prod" ? esc(a.env) : ""}</p><h2 class="c-acct">${esc(a.key)}${chainTag(m, a)}</h2>
 <div class="c-figs two">${fig("Earned", money(a.fees), a.since ? `since ${dayLabel(a.since)}` : "")}${fig("Fee APR", pct(a.apr), `${money(a.lp)} placed, before gas`)}</div>
 ${sheet("Positions", `${a.positions.filter((p) => p.inRange).length} of ${a.positions.length} in range`, a.positions.length ? `<ul class="c-poslist">${pos}</ul>` : `<p class="c-empty">No position open. ${a.idle >= 0.01 ? money(a.idle) + " is waiting to be placed." : ""}</p>`)}
 ${authorizationSheet(m, m.caps.byKey.get(a.key.toLowerCase()), now, csrf)}
@@ -296,7 +309,7 @@ function leaderboard(m: ConsoleModel): string {
   if (!earning.length) return `<p class="c-empty">No account has capital placed yet.</p>`;
   const max = Math.max(...earning.map((a) => a.fees), 1e-9);
   const row = (a: AccountYield) =>
-    `<li><button type="button" class="c-lb-row" data-account="${esc(a.key)}"><span class="c-mono">${esc(a.key)}${a.env !== "prod" ? ` <em>${esc(a.env)}</em>` : ""}</span><span class="c-bar"><i style="width:${((a.fees / max) * 100).toFixed(1)}%"></i><small>${esc(money(a.fees))}</small></span><span class="n">${esc(pct(a.apr))}</span><span class="n wide">${esc(money(a.lp))}</span><span class="n wide">${a.positions.filter((p) => p.inRange).length}/${a.positions.length}</span></button></li>`;
+    `<li><button type="button" class="c-lb-row" data-account="${esc(a.id)}"><span class="c-mono">${esc(a.key)}${chainTag(m, a)}${a.env !== "prod" ? ` <em>${esc(a.env)}</em>` : ""}</span><span class="c-bar"><i style="width:${((a.fees / max) * 100).toFixed(1)}%"></i><small>${esc(money(a.fees))}</small></span><span class="n">${esc(pct(a.apr))}</span><span class="n wide">${esc(money(a.lp))}</span><span class="n wide">${a.positions.filter((p) => p.inRange).length}/${a.positions.length}</span></button></li>`;
   return `<div class="c-lb-head"><span>Account</span><span>Fees earned</span><span class="n">APR</span><span class="n wide">Placed</span><span class="n wide">In range</span></div><ul class="c-lb">${earning.map(row).join("")}</ul>`;
 }
 
@@ -323,7 +336,7 @@ export function yieldView(m: ConsoleModel, now: Date): SectionView {
   const figs = `<div class="c-figs">
 ${fig("Earned to date", money(t.fees), "uncollected fees, every position")}
 ${fig("Fee APR", pct(t.apr), "at least: since first entry, weighted by capital, before gas")}
-${fig("Best account", best ? pct(best.apr) : "n/a", best ? `${best.key}, ${money(best.lp)} placed` : "")}
+${fig("Best account", best ? pct(best.apr) : "n/a", best ? `${best.key}${best.chain !== "Base" ? ` on ${best.chain}` : ""}, ${money(best.lp)} placed` : "")}
 ${harvestFig(m)}
 </div>`;
   const body = `<div class="c-grid hero">${sheet("Yield by account", "Bar length is fees earned. Open an account for its positions.", leaderboard(m))}${sheet("Pools", "What each pool earns per dollar placed", poolCards(m))}</div>`;
@@ -349,7 +362,7 @@ export function accountsView(m: ConsoleModel, now: Date, opts: AccountsOpts = {}
           const away = a.away.map((w) => chip(w, "warn")).join("");
           const cap = m.caps.byKey.get(a.key.toLowerCase());
           const own = cap?.override?.capUsdc != null ? chip(`Own cap ${cap.override.capUsdc.toLocaleString("en-US")}`, "em") : "";
-          return `<li><button type="button" class="c-lb-row compact" data-account="${esc(a.key)}"><span class="c-mono">${esc(a.key)}</span><span class="c-chips">${state}${away}${authChip(m, cap)}${own}</span><span class="n">${esc(`${a.floor ? "≥ " : ""}${money(a.held)}`)}</span><span class="n wide">${esc(ago(a.readAt, now))}</span></button></li>`;
+          return `<li><button type="button" class="c-lb-row compact" data-account="${esc(a.id)}"><span class="c-mono">${esc(a.key)}${chainTag(m, a)}</span><span class="c-chips">${state}${away}${authChip(m, cap)}${own}</span><span class="n">${esc(`${a.floor ? "≥ " : ""}${money(a.held)}`)}</span><span class="n wide">${esc(ago(a.readAt, now))}</span></button></li>`;
         })
         .join("")}</ul>${folded ? `<p class="c-foot">${folded} more Safe${folded === 1 ? "" : "s"} with nothing deposited yet.</p>` : ""}`
     : `<p class="c-empty">No account has been read yet.</p>`;
@@ -360,7 +373,7 @@ export function accountsView(m: ConsoleModel, now: Date, opts: AccountsOpts = {}
       (opts.confirm && opts.csrf ? capConfirmSheet(m, opts.confirm, opts.csrf) : "") +
       `<div class="c-grid two">${sheet("Where every account stands", `${int(l.total)} accounts`, stand)}${sheet("From sign-up to earning", "Conversion so far", funnel)}</div>` +
       `<div class="c-grid hero">${sheet("Sign-ups per day", "Since launch", signupChart(m, 170))}${sheet("Accounts with money in", "Every Safe that holds funds on any chain: Base, Ethereum, Monad", list)}</div>` +
-      ownCapsSheet(m, new Set(m.accounts.map((a) => a.key))) +
+      ownCapsSheet(m, drawerIds(m)) +
       drawers(m, now, opts.csrf),
   );
 }
@@ -428,12 +441,13 @@ ${fig("In range now", `${m.totals.inRange} of ${m.totals.positions}`, "positions
     (recent.length ? codeList(recent) : `<p class="c-empty">No failures in the last 7 days.</p>`) +
       (older.length ? `<details class="c-data"><summary>Older than a week, ${older.length}</summary>${codeList(older)}</details>` : ""),
   );
+  const feedIds = drawerIds(m);
   const feed = sheet(
     "Latest operations",
     "Newest first",
     `<ul class="c-feed">${ops
       .slice(0, 10)
-      .map((o) => `<li><button type="button" class="c-linkish" data-account="${esc(o.accountKey)}">${esc(o.accountKey)}</button><span>${esc(o.kind)}</span>${chip(`${o.state}, ${ago(o.at, now)}`, o.state === "confirmed" ? "good" : o.state === "failed" ? "bad" : "dim")}</li>`)
+      .map((o) => `<li><button type="button" class="c-linkish" data-account="${esc(feedIds.get(o.accountKey) ?? o.accountKey)}">${esc(o.accountKey)}</button><span>${esc(o.kind)}</span>${chip(`${o.state}, ${ago(o.at, now)}`, o.state === "confirmed" ? "good" : o.state === "failed" ? "bad" : "dim")}</li>`)
       .join("")}</ul>`,
   );
   return view("engine", "Engine", head("Engine", "/ops/engine", m) + figs + perDay + `<div class="c-grid two">${why}${feed}</div>` + drawers(m, now));
