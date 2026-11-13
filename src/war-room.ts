@@ -64,6 +64,8 @@ export type GuardLive = {
   volBps: number | null;
   threshold: GuardThreshold;
   verdict: GuardVerdict;
+  /** The newest pool snapshot is older than FEED_STALE_SECONDS: the reading is history, not the market now. */
+  stale: boolean;
 };
 
 export type ExposurePool = { pool: string; positions: number; inRange: number; valueUsd: number };
@@ -75,6 +77,8 @@ export type ExposureChain = {
   feesUsd: number;
   /** ISO of the newest account read on this chain. */
   readAt: string | null;
+  /** ISO of the oldest account read on this chain: the totals are only as fresh as this. */
+  oldestReadAt: string | null;
   pools: ExposurePool[];
 };
 export type YieldToday = { chainId: number; pool: string; valueUsd: number; holdUsd: number; feesUsd: number };
@@ -94,21 +98,10 @@ export type WarRoomData = {
 
 type Snap = { block: number; block_time: number; tick: number; tick_cumulative: string | null };
 
-/**
- * Blocks per second measured from the snapshots themselves (Base went from 2 s to sub-second blocks, so a fixed rate
- * cut the 24 h range to its last minutes). A lookback in seconds becomes a block bound with slack, so the primary key
- * range stays small. Null when the pool has under an hour of history: callers then bound by time alone.
- */
-async function blockRate(db: D1Db, pool: string, latest: Snap): Promise<number | null> {
-  const old = await db
-    .prepare("SELECT block, block_time FROM pool_snapshots WHERE chain_id = ? AND pool_address = ? AND block_time <= ? ORDER BY block DESC LIMIT 1")
-    .bind(BASE, pool, latest.block_time - 3600)
-    .first<{ block: number; block_time: number }>();
-  if (!old || latest.block_time <= old.block_time) return null;
-  return (latest.block - old.block) / (latest.block_time - old.block_time);
-}
-
-export const blocksBack = (rate: number | null, secs: number, slack: number) => (rate === null ? Number.MAX_SAFE_INTEGER : Math.ceil(secs * rate * slack));
+/** The engine writes a snapshot every ~2 min; older than this, the market feed has stopped and no reading is current. */
+export const FEED_STALE_SECONDS = 900;
+/** An account snapshot older than this is reported apart, so a total never reads as fresher than its oldest part. */
+export const ACCOUNT_STALE_MS = 3_600_000;
 
 async function latestSnap(db: D1Db, pool: string): Promise<Snap | null> {
   return db
@@ -117,35 +110,42 @@ async function latestSnap(db: D1Db, pool: string): Promise<Snap | null> {
     .first<Snap>();
 }
 
-/** The newest snapshot at or before `t`, nearest-first from a block bound near it. Null when none is close enough. */
-async function snapAtOrBefore(db: D1Db, pool: string, latest: Snap, rate: number | null, secsAgo: number): Promise<Snap | null> {
-  const t = latest.block_time - secsAgo;
-  const row = await db
-    .prepare(
-      "SELECT block, block_time, tick, tick_cumulative FROM pool_snapshots WHERE chain_id = ? AND pool_address = ? AND block <= ? AND block_time <= ? ORDER BY block DESC LIMIT 1",
-    )
-    .bind(BASE, pool, rate === null ? latest.block : latest.block - Math.floor(secsAgo * rate * 0.97), t)
+/**
+ * The newest snapshot at or before `t`. The primary key walks back from the newest block and stops at the first match,
+ * so the cost is the snapshots inside the lookback (~720 a day), with no assumption about block time.
+ */
+async function rowAtOrBefore(db: D1Db, pool: string, t: number): Promise<Snap | null> {
+  return db
+    .prepare("SELECT block, block_time, tick, tick_cumulative FROM pool_snapshots WHERE chain_id = ? AND pool_address = ? AND block_time <= ? ORDER BY block DESC LIMIT 1")
+    .bind(BASE, pool, t)
     .first<Snap>();
-  if (!row) return null;
-  return t - row.block_time <= Math.max(TWAP_WINDOW_SECONDS, secsAgo * 0.02) ? row : null;
 }
+
+/** `row` when it is close enough to `t` to stand for it, else null (a gap in the snapshots). */
+export const closeTo = (row: Pick<Snap, "block_time"> | null, t: number, secsAgo: number) =>
+  row && t - row.block_time <= Math.max(TWAP_WINDOW_SECONDS, secsAgo * 0.02) ? row : null;
 
 async function readPool(db: D1Db, pool: (typeof WAR_POOLS)[number]): Promise<{ market: MarketRow; cumulative: CumulativePoint[] }> {
   const empty: MarketRow = { pool: pool.name, asset: pool.asset, price: null, snapshotTime: null, chg1h: null, chg24h: null, chg7d: null, low24h: null, high24h: null };
   const latest = await latestSnap(db, pool.address);
   if (!latest) return { market: empty, cumulative: [] };
   const now = latest.block_time;
-  const rate = await blockRate(db, pool.address, latest);
   const segments = DAY / TWAP_WINDOW_SECONDS;
   const base = now - (segments + 1) * TWAP_WINDOW_SECONDS;
-  const span = (segments + 2) * TWAP_WINDOW_SECONDS;
-  const [h1, h24, d7, range, grid] = await Promise.all([
-    snapAtOrBefore(db, pool.address, latest, rate, 3600),
-    snapAtOrBefore(db, pool.address, latest, rate, DAY),
-    snapAtOrBefore(db, pool.address, latest, rate, 7 * DAY),
+  // Exact block bounds from the snapshots themselves: the rows at or before the start of each range.
+  const [r1h, r24h, r7d, rGrid] = await Promise.all([
+    rowAtOrBefore(db, pool.address, now - 3600),
+    rowAtOrBefore(db, pool.address, now - DAY),
+    rowAtOrBefore(db, pool.address, now - 7 * DAY),
+    rowAtOrBefore(db, pool.address, base - TWAP_WINDOW_SECONDS),
+  ]);
+  const h1 = closeTo(r1h, now - 3600, 3600);
+  const h24 = closeTo(r24h, now - DAY, DAY);
+  const d7 = closeTo(r7d, now - 7 * DAY, 7 * DAY);
+  const [range, grid] = await Promise.all([
     db
       .prepare("SELECT MIN(tick) AS lo, MAX(tick) AS hi FROM pool_snapshots WHERE chain_id = ? AND pool_address = ? AND block >= ? AND block_time >= ?")
-      .bind(BASE, pool.address, latest.block - blocksBack(rate, DAY, 1.25), now - DAY)
+      .bind(BASE, pool.address, r24h?.block ?? 0, now - DAY)
       .first<{ lo: number | null; hi: number | null }>(),
     // The grid the guard reads: per TWAP window the newest snapshot at or before each grid time, summed in SQL (at most 50 rows).
     db
@@ -154,7 +154,7 @@ async function readPool(db: D1Db, pool: (typeof WAR_POOLS)[number]): Promise<{ m
          WHERE chain_id = ? AND pool_address = ? AND block >= ? AND block_time > ? AND block_time <= ?
          GROUP BY (block_time - ? + ${TWAP_WINDOW_SECONDS - 1}) / ${TWAP_WINDOW_SECONDS} ORDER BY time`,
       )
-      .bind(BASE, pool.address, latest.block - blocksBack(rate, span, 1.25), base - TWAP_WINDOW_SECONDS, now, base)
+      .bind(BASE, pool.address, rGrid?.block ?? 0, base - TWAP_WINDOW_SECONDS, now, base)
       .all<{ time: number; cum: string | null }>(),
   ]);
   const price = priceOfTick(pool, latest.tick);
@@ -236,12 +236,13 @@ export function exposureOf(rows: readonly RawSnapshot[]): ExposureChain[] {
   const pools = new Map<string, ExposurePool>();
   for (const r of rows) {
     const chainId = Number(r.chain_id);
-    const c = byChain.get(chainId) ?? { chainId, accounts: 0, idleUsd: 0, lpUsd: 0, feesUsd: 0, readAt: null, pools: [] };
+    const c = byChain.get(chainId) ?? { chainId, accounts: 0, idleUsd: 0, lpUsd: 0, feesUsd: 0, readAt: null, oldestReadAt: null, pools: [] };
     c.accounts += 1;
     c.idleUsd += Number(r.idle_usdc) / USDC;
     c.lpUsd += Number(r.lp_usdc) / USDC;
     c.feesUsd += Number(r.fees_usdc) / USDC;
     if (!c.readAt || r.read_at > c.readAt) c.readAt = r.read_at;
+    if (!c.oldestReadAt || r.read_at < c.oldestReadAt) c.oldestReadAt = r.read_at;
     byChain.set(chainId, c);
     try {
       const arr = JSON.parse(r.positions_json) as { pool?: unknown; inRange?: unknown; valueUsdc?: unknown }[];
@@ -308,7 +309,8 @@ export async function loadWarRoom(db: D1Db, nowMs: number = Date.now()): Promise
       const spec = WAR_POOLS[i]!;
       const threshold = wide[spec.bucket];
       const metric = p.market.snapshotTime === null ? null : guardMetric(spec, p.market.snapshotTime, p.cumulative);
-      guard.push({ pool: spec.name, asset: spec.asset, fallBps: metric?.fallBps ?? null, volBps: metric?.volBps ?? null, threshold, verdict: guardVerdict(metric, threshold) });
+      const stale = p.market.snapshotTime === null || nowMs / 1000 - p.market.snapshotTime > FEED_STALE_SECONDS;
+      guard.push({ pool: spec.name, asset: spec.asset, fallBps: metric?.fallBps ?? null, volBps: metric?.volBps ?? null, threshold, verdict: guardVerdict(metric, threshold), stale });
     });
   }
   return {
@@ -323,7 +325,7 @@ export async function loadWarRoom(db: D1Db, nowMs: number = Date.now()): Promise
   };
 }
 
-/** A pool whose positions keep under 10% of their entry value was emptied (exit-only buckets): value vs hold means nothing there. */
+/** Under 10% of entry value: an exit-only pool that was emptied, or a real loss. The page shows the figure either way. */
 export const isEmptied = (y: Pick<YieldToday, "valueUsd" | "holdUsd">) => y.holdUsd > 0 && y.valueUsd < y.holdUsd * 0.1;
 
 // ---- rendering ----
@@ -342,6 +344,13 @@ const pct = (n: number | null) => (n === null ? "n/a" : `${signed(n, 2)}%`);
 const bpsText = (n: number | null) => (n === null ? "n/a" : `${num(n)} bps`);
 const usd = (n: number) => (n < 0 ? `−${fmtCapitalUsd(-n)}` : fmtCapitalUsd(n));
 const priceText = (asset: "ETH" | "BTC", n: number | null) => (n === null ? "n/a" : `$${num(n, asset === "BTC" ? 0 : 2)}`);
+
+/** Newest read, and the oldest one too when it is over an hour old, so a total never looks fresher than its parts. */
+export function readSpan(c: Pick<ExposureChain, "readAt" | "oldestReadAt">, nowMs: number): string {
+  if (!c.readAt) return "n/a";
+  const newest = esc(ago(c.readAt, nowMs));
+  return c.oldestReadAt && nowMs - Date.parse(c.oldestReadAt) > ACCOUNT_STALE_MS ? `${newest}; oldest ${esc(ago(c.oldestReadAt, nowMs))}` : newest;
+}
 
 function ago(iso: string, nowMs: number): string {
   return fmtRelative(iso, new Date(nowMs));
@@ -383,7 +392,7 @@ function guardBlock(d: WarRoomData, nowMs: number): string {
   const stamp = `Version ${w.id}, set <time datetime="${esc(w.createdAt)}">${esc(ago(w.createdAt, nowMs))}</time>`;
   const th = (t: GuardThreshold) => `fall ${num(t.fallBps)} / vol ${num(t.volBps)} bps`;
   const live = d.guard.map((g) => {
-    const state = g.verdict.metric === null ? "Data insufficient" : g.verdict.wouldTrigger ? "Would freeze entries" : "Clear";
+    const state = g.stale ? "Feed stopped" : g.verdict.metric === null ? "Data insufficient" : g.verdict.wouldTrigger ? "Would freeze entries" : "Clear";
     return [esc(g.asset), bpsText(g.fallBps), bpsText(g.volBps), esc(th(g.threshold)), esc(state)];
   });
   const canary = d.settings.canary;
@@ -399,7 +408,7 @@ function guardBlock(d: WarRoomData, nowMs: number): string {
     `<p>Guard ${w.guardEnabled ? "enabled" : "disabled"} for production. Thresholds: ETH ${esc(th(w.eth))}; BTC ${esc(th(w.btc))}.</p>` +
       status +
       table(["Asset", "24h TWAP fall", "24h volatility", "Threshold", "Reading"], live) +
-      note("Both numbers must be at or over their threshold to trigger. Volatility is annualized from 30-minute mean ticks. Data insufficient means a snapshot is missing in the last 24 hours.") +
+      note("Both numbers must be at or over their threshold to trigger. Volatility is annualized from 30-minute mean ticks. Data insufficient means a snapshot is missing in the last 24 hours. Feed stopped means the newest pool snapshot is over 15 minutes old, so no reading is current.") +
       canaryRow,
   );
 }
@@ -411,13 +420,13 @@ function exposureBlock(d: WarRoomData, nowMs: number): string {
   const c = chains[0]!;
   const summary = table(
     ["Accounts", "Idle", "In pools", "Fees", "Last read"],
-    [[num(c.accounts), usd(c.idleUsd), usd(c.lpUsd), usd(c.feesUsd), c.readAt ? esc(ago(c.readAt, nowMs)) : "n/a"]],
+    [[num(c.accounts), usd(c.idleUsd), usd(c.lpUsd), usd(c.feesUsd), readSpan(c, nowMs)]],
   );
   const poolRows = c.pools.map((p) => [esc(poolDisplay(p.pool)), num(p.positions), `${num(p.inRange)} of ${num(p.positions)}`, usd(p.valueUsd)]);
   const poolTable = poolRows.length ? table(["Pool", "Positions", "In range", "Value"], poolRows) : "";
   const ys = (d.yieldToday?.rows ?? []).filter((r) => r.chainId === BASE);
   const vsHold = (y: YieldToday) =>
-    isEmptied(y) ? "emptied (exit)" : `${usd(y.valueUsd - y.holdUsd)}${y.holdUsd > 0 ? ` (${pct(((y.valueUsd - y.holdUsd) / y.holdUsd) * 100)})` : ""}`;
+    `${usd(y.valueUsd - y.holdUsd)}${y.holdUsd > 0 ? ` (${pct(((y.valueUsd - y.holdUsd) / y.holdUsd) * 100)})` : ""}${isEmptied(y) ? `<br><span class="dim">under 10% of entry: emptied exit or a real loss</span>` : ""}`;
   const yieldPart = ys.length
     ? table(
         [`Today (${esc(d.yieldToday!.day)} UTC)`, "Value", "If held", "Value vs hold", "Fees accrued"],
@@ -431,7 +440,7 @@ function exposureBlock(d: WarRoomData, nowMs: number): string {
       poolTable +
       note("Distance of the price to the nearest range edge is not shown: the account snapshots do not store the tick range of each position.") +
       yieldPart +
-      note("Value vs hold compares each position with what its entry amounts would be worth now. A pool whose positions hold under 10% of their entry value was emptied on the way out; its hold figure is not a loss. Fees accrued is closing minus opening accrued fees, so a harvest during the day lowers it."),
+      note("Value vs hold compares each position with what its entry amounts would be worth now. A pool under 10% of its entry value is flagged: an exit-only pool emptied on the way out shows that way too, so check its positions before reading it as a loss. Fees accrued is closing minus opening accrued fees, so a harvest during the day lowers it."),
   );
 }
 
@@ -447,7 +456,7 @@ function monadBlock(d: WarRoomData, nowMs: number): string {
     "Monad",
     c.readAt ? `As of <time datetime="${esc(c.readAt)}">${esc(when(c.readAt))}</time>` : "",
     table(["Accounts", "Idle", "Positions", "In range", "In pools", "Last read"], [
-      [num(c.accounts), usd(c.idleUsd), num(positions), `${num(inRange)} of ${num(positions)}`, usd(c.lpUsd), c.readAt ? esc(ago(c.readAt, nowMs)) : "n/a"],
+      [num(c.accounts), usd(c.idleUsd), num(positions), `${num(inRange)} of ${num(positions)}`, usd(c.lpUsd), readSpan(c, nowMs)],
     ]) + (rows.length ? table(["Pool", "Positions", "In range", "Value"], rows) : "") + price,
   );
 }

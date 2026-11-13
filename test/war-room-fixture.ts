@@ -22,8 +22,8 @@ export function warRoomFixture(nowIso = "2026-11-13T14:30:00.000Z"): WarRoomData
       canary: null,
     },
     guard: [
-      { pool: "pool:WETH/USDC/3000", asset: "ETH", fallBps: 462, volBps: 5210, threshold: { fallBps: 900, volBps: 10000 }, verdict: { metric: { fallBps: 462, volBps: 5210 }, wouldTrigger: false } },
-      { pool: "pool:USDC/cbBTC/500", asset: "BTC", fallBps: 543, volBps: 4380, threshold: { fallBps: 700, volBps: 8000 }, verdict: { metric: { fallBps: 543, volBps: 4380 }, wouldTrigger: false } },
+      { pool: "pool:WETH/USDC/3000", asset: "ETH", fallBps: 462, volBps: 5210, threshold: { fallBps: 900, volBps: 10000 }, verdict: { metric: { fallBps: 462, volBps: 5210 }, wouldTrigger: false }, stale: false },
+      { pool: "pool:USDC/cbBTC/500", asset: "BTC", fallBps: 543, volBps: 4380, threshold: { fallBps: 700, volBps: 8000 }, verdict: { metric: { fallBps: 543, volBps: 4380 }, wouldTrigger: false }, stale: false },
     ],
     exposure: [
       {
@@ -33,6 +33,7 @@ export function warRoomFixture(nowIso = "2026-11-13T14:30:00.000Z"): WarRoomData
         lpUsd: 2322.75,
         feesUsd: 3.41,
         readAt: new Date((now - 130) * 1000).toISOString(),
+        oldestReadAt: new Date((now - 400) * 1000).toISOString(),
         pools: [{ pool: "pool:WETH/USDC/3000", positions: 11, inRange: 11, valueUsd: 2322.75 }],
       },
       {
@@ -42,6 +43,7 @@ export function warRoomFixture(nowIso = "2026-11-13T14:30:00.000Z"): WarRoomData
         lpUsd: 614,
         feesUsd: 0.9,
         readAt: new Date((now - 150) * 1000).toISOString(),
+        oldestReadAt: new Date((now - 300) * 1000).toISOString(),
         pools: [{ pool: "pool:WMON/USDC", positions: 7, inRange: 7, valueUsd: 614 }],
       },
     ],

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { WAR_POOLS, changePct, edgeDistancePct, fallBpsOf, guardVerdict, marketOf, priceOfTick, type CumulativePoint } from "../src/war-room-math";
-import { blocksBack, cumulativeFrom, isEmptied, poolDisplay, exposureOf, guardMetric, renderWarRoom, warRoomSection } from "../src/war-room";
+import { closeTo, cumulativeFrom, isEmptied, readSpan, poolDisplay, exposureOf, guardMetric, renderWarRoom, warRoomSection } from "../src/war-room";
 import { OPS_SECTIONS } from "../src/ops";
 import { warRoomFixture } from "./war-room-fixture";
 
@@ -103,9 +103,28 @@ describe("war room page", () => {
 });
 
 describe("war room: block bounds and emptied pools", () => {
-  test("blocksBack scales with the measured block rate and is unbounded without one", () => {
-    expect(blocksBack(5, 86_400, 1.25)).toBe(540_000);
-    expect(blocksBack(null, 86_400, 1.25)).toBe(Number.MAX_SAFE_INTEGER);
+  test("a reference snapshot stands for its time only when close enough", () => {
+    expect(closeTo({ block_time: 1000 - 600 }, 1000, 3600)).not.toBeNull();
+    expect(closeTo({ block_time: 1000 - 2000 }, 1000, 3600)).toBeNull();
+    expect(closeTo({ block_time: 1000 - 10_000 }, 1000, 7 * 86_400)).not.toBeNull();
+    expect(closeTo(null, 1000, 3600)).toBeNull();
+  });
+  test("exposure reads name the oldest read once it is over an hour old", () => {
+    const now = Date.parse("2026-11-13T12:00:00Z");
+    expect(readSpan({ readAt: "2026-11-13T11:58:00Z", oldestReadAt: "2026-11-13T11:30:00Z" }, now)).not.toContain("oldest");
+    expect(readSpan({ readAt: "2026-11-13T11:58:00Z", oldestReadAt: "2026-11-12T11:00:00Z" }, now)).toContain("oldest");
+  });
+  test("a stopped feed never reads Clear", () => {
+    const d = warRoomFixture();
+    d.guard = d.guard.map((g) => ({ ...g, stale: true }));
+    const html = renderWarRoom(d);
+    expect(html).toContain("Feed stopped");
+    expect(html).not.toContain(">Clear<");
+  });
+  test("a pool under 10% of entry still shows its loss figure", () => {
+    const html = renderWarRoom(warRoomFixture());
+    expect(html).toContain("−$78.26");
+    expect(html).toContain("emptied exit or a real loss");
   });
   test("a pool holding under 10% of its entry value is emptied, not a loss", () => {
     expect(isEmptied({ valueUsd: 0.27, holdUsd: 78.53 })).toBe(true);
