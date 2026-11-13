@@ -4,6 +4,7 @@ import type { D1Db } from "../src/d1-infra";
 import { loadConsole, money, poolLabel } from "../src/console-data";
 import type { InfraSnapshot } from "../src/infra-snapshot";
 import { sealSession } from "../src/ops";
+import { accountsView } from "../src/console-views";
 import worker, { type Env } from "../src/worker";
 
 const YIELD_SCHEMA = `
@@ -157,6 +158,29 @@ describe("console views", () => {
         expect(monad.split("</template>")[0]).toContain("MON");
       }
     }
+  });
+
+  test("both Safes of a pair without a ledger snapshot still get one row and one drawer each", async () => {
+    const db = memoryDb(["yield", "operator"]);
+    await db.prepare(`INSERT INTO accounts VALUES ('${PAIR_BASE}', 'u9', 8453, '0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC', '2026-09-01T00:00:00Z', 'prod', 0)`).run();
+    await db.prepare(`INSERT INTO accounts VALUES ('${PAIR_MONAD}', 'u9', 143, '0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD', '2026-09-01T00:00:00Z', 'prod', 0)`).run();
+    const row = (key: string, chainId: number, address: string, usdcIdle: number) => ({ accountKey: key.slice(0, 8), key, userId: "u9", address, basescanUrl: "", ethBalance: 0, usdcIdle, lpUsd: 0, positions: 0, inRange: 0, env: "prod", chainId, isTest: false });
+    const infra = {
+      asOf: "2026-10-18T09:00:00Z",
+      ethUsd: 2000,
+      btcUsd: null,
+      relayer: null,
+      cost: null,
+      accounts: { totalUsers: 1, totalAccounts: 2, last7d: 0, rows: [row(PAIR_BASE, 8453, "0xcccc", 5), row(PAIR_MONAD, 143, "0xdddd", 7)], tvlUsd: 0, idleUsdcUsd: 0, lpUsd: 0, gasReservesEth: 0 },
+    } as unknown as InfraSnapshot;
+    const m = await loadConsole(db, "prod", NOW, infra);
+    expect(m.accounts.map((a) => a.id).sort()).toEqual([PAIR_BASE, PAIR_MONAD]);
+    expect(m.accounts.find((a) => a.id === PAIR_MONAD)?.chain).toBe("Monad");
+    const html = accountsView(m, NOW).html;
+    const ids = [...html.matchAll(/<template id="(c-acct-[^"]+)"/g)].map((x) => x[1]);
+    expect(ids.sort()).toEqual([`c-acct-${PAIR_BASE}`, `c-acct-${PAIR_MONAD}`]);
+    expect(html).toContain(`data-account="${PAIR_MONAD}"`);
+    expect(html).toContain("<em>Monad</em>");
   });
 
   test("a lone Base Safe shows no chain label", async () => {
