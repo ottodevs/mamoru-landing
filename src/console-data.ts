@@ -421,9 +421,12 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     y.away = e.away;
   }
   // A Safe the ledger has not written yet still counts with everything the on-chain read saw, Base included.
-  const ledgerKeys = new Set(yields.map((y) => y.key));
-  for (const [k, rs] of infraByKey) {
-    if (ledgerKeys.has(k)) continue;
+  // One row per Safe, by its full key: an owner's Base and Monad Safes are never merged into one row or one drawer.
+  const ledgerIds = new Set(yields.map((y) => y.id));
+  const infraById = new Map<string, AccountView[]>();
+  for (const r of infraRows) infraById.set(r.key, [...(infraById.get(r.key) ?? []), r]);
+  for (const [id, rs] of infraById) {
+    if (ledgerIds.has(id)) continue;
     const e = elsewhere(rs);
     // Testnet rows' Base-side figures are testnet tokens, never money.
     const real = rs.filter((r) => isMapped(r.chainId));
@@ -432,7 +435,7 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     const held = idle + lp + e.usd;
     // An unread Base read could hide money: such a Safe stays listed, as a floor.
     if (held < 0.01 && e.away.length === 0 && !rs.some((r) => r.unread === true)) continue;
-    yields.push({ key: k, id: rs[0].key, chain: chainOfKey(rs[0].key), env: rs[0].isTest ? "test" : rs[0].env, total: idle + lp, lp, idle, fees: 0, since: null, days: null, apr: null, positions: [], readAt: infra?.asOf ?? now.toISOString(), held, floor: e.floor, away: e.away });
+    yields.push({ key: id.slice(0, 8), id, chain: chainOfKey(id), env: rs[0].isTest ? "test" : rs[0].env, total: idle + lp, lp, idle, fees: 0, since: null, days: null, apr: null, positions: [], readAt: infra?.asOf ?? now.toISOString(), held, floor: e.floor, away: e.away });
   }
   yields.sort((a, b) => b.fees - a.fees || b.lp - a.lp);
 
