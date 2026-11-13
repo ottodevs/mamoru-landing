@@ -180,7 +180,7 @@ describe("uniswap-math.ts", () => {
 
 describe("ops.ts nav", () => {
   test("OPS_SECTIONS: five primary entries (otto/mamoru-astro#35), then Grow and More", () => {
-    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["overview", "yield", "accounts", "engine", "money", "mails", "experiments", "lab", "archive", "preview"]);
+    expect(OPS_SECTIONS.map((s) => s.id)).toEqual(["overview", "yield", "accounts", "engine", "money", "mails", "experiments", "lab", "war-room", "archive", "preview"]);
     expect(OPS_SECTIONS.filter((s) => s.tab).map((s) => s.id)).toEqual(["overview", "yield", "accounts", "engine", "money"]);
     expect(OPS_SECTIONS.filter((s) => s.tab).map((s) => s.tab)).toEqual(["Pulse", "Yield", "Accounts", "Engine", "Money"]);
     expect(OPS_SECTIONS.find((s) => s.id === "overview")?.href).toBe("/ops");

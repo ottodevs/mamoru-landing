@@ -192,7 +192,7 @@ export const FLASH_COPY: Record<Exclude<Flash, "">, string> = {
   bad: "That did not go through. Try again.",
 };
 
-export type SectionId = "overview" | "yield" | "accounts" | "engine" | "money" | "costs" | "more" | "mails" | "infra" | "registry" | "experiments" | "settings" | "functions" | "archive" | "lab" | "gate";
+export type SectionId = "overview" | "yield" | "accounts" | "engine" | "money" | "costs" | "more" | "mails" | "infra" | "registry" | "experiments" | "settings" | "functions" | "archive" | "lab" | "war-room" | "gate";
 
 export type OpsSection = {
   id: string;
@@ -271,6 +271,8 @@ export const OPS_SECTIONS: readonly OpsSection[] = [
   // otto/mamoru-astro#28 (spec 008 phase 1): the strategy bench. Grouped with Experiments, not a primary tab —
   // keeps the phone tab bar at five entries (otto/mamoru-astro#24).
   { id: "lab", label: "Lab", href: "/ops/lab", group: "Grow" },
+  // otto/mamoru-astro#55: read-only market, guard and exposure board. Rail only, grouped like Lab, never a sixth phone tab.
+  { id: "war-room", label: "War room", href: "/ops/war-room", group: "Grow" },
   { id: "archive", label: "Archive", href: "/ops/archive", group: "More" },
   // The staged site is its own document with its own base URL and CSP, so it opens beside the console.
   { id: "preview", label: "Preview", href: "/ops/preview", out: true, group: "More" },

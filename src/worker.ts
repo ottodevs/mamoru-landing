@@ -114,6 +114,7 @@ import { archiveTarget } from "./archive";
 import { archiveBar, archiveSection } from "./ops-archive";
 import { handleLabAsk, handleLabCatalog, handleLabCreateJob, handleLabJobStatus, handleLabRun, handleLabRuns, handleLabThread, handleLabThreads, labSection } from "./ops-lab";
 import { handleLabRunner } from "./lab-runner";
+import { loadWarRoom, warRoomSection } from "./war-room";
 import {
   isPreviewPath,
   previewReturnUrl,
@@ -402,7 +403,7 @@ function withNotice(view: SectionView, text: string, tone: "plain" | "bad" = "pl
 }
 
 /** Sections a stranger is sent to Google from, and returned to after signing in. */
-const SECTION_PATHS = new Set(["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/functions", "/ops/archive", "/ops/lab", "/ops/money", "/ops/money/funding", "/ops/money/registry", "/ops/engine/settings", "/ops/engine/functions"]);
+const SECTION_PATHS = new Set(["/ops", "/ops/yield", "/ops/accounts", "/ops/engine", "/ops/costs", "/ops/more", "/ops/mails", "/ops/infra", "/ops/experiments", "/ops/settings", "/ops/functions", "/ops/archive", "/ops/lab", "/ops/war-room", "/ops/money", "/ops/money/funding", "/ops/money/registry", "/ops/engine/settings", "/ops/engine/functions"]);
 
 /**
  * otto/mamoru-astro#35: Engine (Status, Settings, Functions) and Money (Costs, Funding) replaced five sections.
@@ -716,6 +717,12 @@ async function handleOps(request: Request, env: Env, ctx?: Background): Promise<
 
   if (sectionPath === "/ops/experiments" && request.method === "GET") {
     return flashed(await experimentsView());
+  }
+
+  // otto/mamoru-astro#55: read-only, D1 only, no external HTTP.
+  if (sectionPath === "/ops/war-room" && request.method === "GET") {
+    if (!env.MAMORU_DB) return flashed({ section: "war-room", title: "War room", html: noticeHtml("The database is not connected.", { tone: "bad" }), status: 503 });
+    return flashed(warRoomSection(await loadWarRoom(env.MAMORU_DB)));
   }
 
   // ---- Lab bench (otto/mamoru-astro#28, spec 008 phase 1): one SSR shell, data fetched from the API below ----
