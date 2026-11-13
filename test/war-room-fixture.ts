@@ -45,6 +45,6 @@ export function warRoomFixture(nowIso = "2026-11-13T14:30:00.000Z"): WarRoomData
         pools: [{ pool: "pool:WMON/USDC", positions: 7, inRange: 7, valueUsd: 614 }],
       },
     ],
-    yieldToday: { day: nowIso.slice(0, 10), rows: [{ chainId: 8453, valueUsd: 2322.75, holdUsd: 2329.41, feesUsd: 1.84 }] },
+    yieldToday: { day: nowIso.slice(0, 10), rows: [{ chainId: 8453, pool: "pool:WETH/USDC/3000", valueUsd: 2322.75, holdUsd: 2329.41, feesUsd: 0.33 }, { chainId: 8453, pool: "pool:USDC/USDT/100", valueUsd: 0.27, holdUsd: 78.53, feesUsd: 0 }] },
   };
 }

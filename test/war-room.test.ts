@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { WAR_POOLS, changePct, edgeDistancePct, fallBpsOf, guardVerdict, marketOf, priceOfTick, type CumulativePoint } from "../src/war-room-math";
-import { cumulativeFrom, exposureOf, guardMetric, renderWarRoom, warRoomSection } from "../src/war-room";
+import { blocksBack, cumulativeFrom, isEmptied, poolDisplay, exposureOf, guardMetric, renderWarRoom, warRoomSection } from "../src/war-room";
 import { OPS_SECTIONS } from "../src/ops";
 import { warRoomFixture } from "./war-room-fixture";
 
@@ -100,4 +100,22 @@ describe("war room page", () => {
     expect(s.tab).toBeUndefined();
     expect(warRoomSection(warRoomFixture()).section).toBe("war-room");
   });
+});
+
+describe("war room: block bounds and emptied pools", () => {
+  test("blocksBack scales with the measured block rate and is unbounded without one", () => {
+    expect(blocksBack(5, 86_400, 1.25)).toBe(540_000);
+    expect(blocksBack(null, 86_400, 1.25)).toBe(Number.MAX_SAFE_INTEGER);
+  });
+  test("a pool holding under 10% of its entry value is emptied, not a loss", () => {
+    expect(isEmptied({ valueUsd: 0.27, holdUsd: 78.53 })).toBe(true);
+    expect(isEmptied({ valueUsd: 2322.75, holdUsd: 2329.41 })).toBe(false);
+    expect(isEmptied({ valueUsd: 0, holdUsd: 0 })).toBe(false);
+  });
+});
+
+test("pool labels drop the prefix and show the fee tier", () => {
+  expect(poolDisplay("pool:WETH/USDC/3000")).toBe("WETH/USDC 0.3%");
+  expect(poolDisplay("pool:USDC/USDT/100")).toBe("USDC/USDT 0.01%");
+  expect(poolDisplay("0xabc")).toBe("0xabc");
 });
