@@ -409,6 +409,7 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     const lp = usd(s.lp_usdc);
     const fees = usd(s.fees_usdc);
     // otto/mamoru-astro#52: what the total holds beyond idle, positions and their fees and owed amounts is vault USDC.
+    // Floored at 0 as /stats does (`rowExposure`): a rounding residue of the same read is not a negative vault.
     const vault = Math.max(0, usd(s.total_usdc) - usd(s.idle_usdc) - lp - fees - usd(s.owed_usdc));
     const since = firstEnter.get(s.account_key.slice(0, 8)) ?? null;
     const days = since ? daysBetween(since, now) : null;

@@ -171,10 +171,14 @@ export function buildFundsMap(
     const gasEth = rs.reduce((s, r) => s + r.ethBalance, 0);
     if (ledger) {
       // otto/mamoru-astro#52: the ledger's figures, the ones /stats shows; the infra read misses vaults and remote Safes.
-      const ls = ledgerRows.filter((r) => canonical(r.chainId) === cid);
-      put(cid, { id: "positions", label: "In positions (liquidity)", kind: "working", usd: ls.reduce((s, r) => s + r.positions, 0), accounts: ls.filter((r) => positive(r.positions)).length, note: "", atLeast: false });
+      // A Safe the ledger has not read yet (no snapshot row on this chain) keeps its infra figures (review r1).
+      const read = new Set(ledgerRows.filter((r) => canonical(r.chainId) === cid).map((r) => r.address.toLowerCase()));
+      const unseen = rs.filter((r) => !read.has(r.address?.toLowerCase() ?? "")).map((r): LedgerRow => ({ chainId: cid, address: r.address, idle: r.usdcIdle, positions: r.lpUsd, vault: 0 }));
+      const ls = [...ledgerRows.filter((r) => canonical(r.chainId) === cid), ...unseen];
+      const unreadInfra = rs.some((r) => r.unread === true && !read.has(r.address?.toLowerCase() ?? ""));
+      put(cid, { id: "positions", label: "In positions (liquidity)", kind: "working", usd: ls.reduce((s, r) => s + r.positions, 0), accounts: ls.filter((r) => positive(r.positions)).length, note: "", atLeast: unreadInfra });
       if (ls.some((r) => positive(r.vault))) put(cid, { id: "vaults", label: "In vaults", kind: "working", usd: ls.reduce((s, r) => s + r.vault, 0), accounts: ls.filter((r) => positive(r.vault)).length, note: "", atLeast: false });
-      put(cid, { id: "idle", label: "Idle USDC", kind: "outside", usd: ls.reduce((s, r) => s + r.idle, 0), accounts: ls.filter((r) => positive(r.idle)).length, note: "", atLeast: false });
+      put(cid, { id: "idle", label: "Idle USDC", kind: "outside", usd: ls.reduce((s, r) => s + r.idle, 0), accounts: ls.filter((r) => positive(r.idle)).length, note: "", atLeast: unreadInfra });
     } else {
       put(cid, {
         id: "positions",

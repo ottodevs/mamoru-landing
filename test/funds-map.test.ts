@@ -242,6 +242,16 @@ describe("buildFundsMap", () => {
     expect(find(m, "Base", "gas")!.usd).toBeCloseTo(1, 6);
   });
 
+  test("ledger rows: a Safe the ledger has not read yet keeps its infra figures (review r1)", () => {
+    const READ = "0xaaa0000000000000000000000000000000000001";
+    const NEW = "0xaaa0000000000000000000000000000000000002";
+    const rows = [row({ address: READ, lpUsd: 90, usdcIdle: 1 }), row({ address: NEW, lpUsd: 40, usdcIdle: 7 })];
+    const m = buildFundsMap(snap(), rows, [{ chainId: 8453, address: READ, idle: 1, positions: 91, vault: 200 }]);
+    expect(find(m, "Base", "positions")!.usd).toBe(91 + 40);
+    expect(find(m, "Base", "vaults")!.usd).toBe(200);
+    expect(find(m, "Base", "idle")!.usd).toBe(1 + 7);
+  });
+
   test("ledger rows: a Monad address the ledger reads keeps only its MON in the infra bucket", () => {
     const A = "0xabc000000000000000000000000000000000000a";
     const rows = [row({ address: A, monad: { mon: 2, usdc: 30, positions: 1, usd: 30 + 2 * 0.5, monUnpriced: false } })];
