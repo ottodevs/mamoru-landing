@@ -3,10 +3,12 @@
  * the existing infra snapshot only (no RPC reads here). Pure.
  *
  * Kinds, never mixed:
- *  - working:  USDC idle and LP positions in the account Safes. Their sum is exactly the headline "Value held".
+ *  - working:  LP positions and vaults in the account Safes (otto/mamoru-astro#52: from the operator's ledger rows when
+ *              given, the source /stats reads, so Monad sleeves and vaults count; idle USDC is not working).
  *  - reserve:  gas ETH sitting in the Safes. Real money, not part of Value held.
  *  - operator: the relayer wallets that pay for gas. Not user money.
- *  - outside:  balances at the account addresses on Ethereum and Monad that earn nothing.
+ *  - outside:  money that earns nothing: idle USDC in the Safes, and balances at the account addresses on Ethereum and
+ *              Monad.
  *
  * Value held (otto/mamoru-astro#39) is every user bucket on every chain: working + Safe gas + not working.
  * Operator relayers are team gas and never in it.
@@ -64,6 +66,13 @@ export const ETHEREUM_ID = 1;
 export const MONAD_ID = 143;
 /** Only these chains enter the map. Testnets (10143, 84532, 11155111) and unknown ids are counted apart, never mapped. */
 const MAPPED = new Set([BASE_ID, ETHEREUM_ID, MONAD_ID]);
+
+/**
+ * otto/mamoru-astro#52: one Safe as the operator's ledger reads it (`account_snapshot_latest`), in USD. `positions`
+ * is the positions' principal plus their uncollected fees and owed amounts; `vault` is what the total holds beyond
+ * idle and positions. Rows of every Safe in scope, remote sleeves included: their addresses are not infra rows.
+ */
+export type LedgerRow = { chainId: number; address: string; idle: number; positions: number; vault: number };
 
 export type Row = Pick<AccountView, "chainId" | "usdcIdle" | "lpUsd" | "ethBalance" | "positions" | "outside" | "unread" | "address"> & Partial<Pick<AccountView, "monad">>;
 
@@ -140,6 +149,7 @@ function carriedNote(ats: (string | undefined)[]): string {
 export function buildFundsMap(
   snapshot: Pick<InfraSnapshot, "ethUsd" | "relayer" | "funding">,
   allRows: readonly Row[],
+  ledger?: readonly LedgerRow[],
 ): FundsMap {
   const rows = allRows.filter((r) => MAPPED.has(r.chainId));
   const excluded = allRows.length - rows.length;
@@ -153,29 +163,38 @@ export function buildFundsMap(
 
   // Working and reserve: per the chain the account lives on.
   // Mapped chains only: Base, Ethereum, Monad.
-  const rowChains = [...new Set(rows.map((r) => canonical(r.chainId)))];
+  const ledgerRows = (ledger ?? []).filter((r) => MAPPED.has(r.chainId));
+  const rowChains = [...new Set([...rows, ...ledgerRows].map((r) => canonical(r.chainId)))];
   if (!rowChains.includes(BASE_ID)) rowChains.push(BASE_ID);
   for (const cid of rowChains) {
     const rs = rows.filter((r) => canonical(r.chainId) === cid);
     const gasEth = rs.reduce((s, r) => s + r.ethBalance, 0);
-    put(cid, {
-      id: "positions",
-      label: "In positions (liquidity)",
-      kind: "working",
-      usd: rs.reduce((s, r) => s + r.lpUsd, 0),
-      accounts: rs.filter((r) => positive(r.lpUsd)).length,
-      note: "",
-      atLeast: rs.some((r) => r.unread === true),
-    });
-    put(cid, {
-      id: "idle",
-      label: "Idle USDC",
-      kind: "working",
-      usd: rs.reduce((s, r) => s + r.usdcIdle, 0),
-      accounts: rs.filter((r) => positive(r.usdcIdle)).length,
-      note: "",
-      atLeast: rs.some((r) => r.unread === true),
-    });
+    if (ledger) {
+      // otto/mamoru-astro#52: the ledger's figures, the ones /stats shows; the infra read misses vaults and remote Safes.
+      const ls = ledgerRows.filter((r) => canonical(r.chainId) === cid);
+      put(cid, { id: "positions", label: "In positions (liquidity)", kind: "working", usd: ls.reduce((s, r) => s + r.positions, 0), accounts: ls.filter((r) => positive(r.positions)).length, note: "", atLeast: false });
+      if (ls.some((r) => positive(r.vault))) put(cid, { id: "vaults", label: "In vaults", kind: "working", usd: ls.reduce((s, r) => s + r.vault, 0), accounts: ls.filter((r) => positive(r.vault)).length, note: "", atLeast: false });
+      put(cid, { id: "idle", label: "Idle USDC", kind: "outside", usd: ls.reduce((s, r) => s + r.idle, 0), accounts: ls.filter((r) => positive(r.idle)).length, note: "", atLeast: false });
+    } else {
+      put(cid, {
+        id: "positions",
+        label: "In positions (liquidity)",
+        kind: "working",
+        usd: rs.reduce((s, r) => s + r.lpUsd, 0),
+        accounts: rs.filter((r) => positive(r.lpUsd)).length,
+        note: "",
+        atLeast: rs.some((r) => r.unread === true),
+      });
+      put(cid, {
+        id: "idle",
+        label: "Idle USDC",
+        kind: "outside",
+        usd: rs.reduce((s, r) => s + r.usdcIdle, 0),
+        accounts: rs.filter((r) => positive(r.usdcIdle)).length,
+        note: "",
+        atLeast: rs.some((r) => r.unread === true),
+      });
+    }
     const symbol = cid === MONAD_ID ? "MON" : "ETH";
     const priced = cid !== MONAD_ID && ethUsd !== null;
     put(cid, {
@@ -213,7 +232,11 @@ export function buildFundsMap(
   });
 
   // Monad: MON, USDC and positions at the account addresses. Positions are working but not priced here.
-  const monadRows = monadRowsOf(allRows);
+  // otto/mamoru-astro#52: an address the ledger reads on Monad is already counted above (its USDC and positions); only
+  // its MON stays here.
+  const ledgerMonad = new Set(ledgerRows.filter((r) => r.chainId === MONAD_ID).map((r) => r.address.toLowerCase()));
+  const inLedger = (r: Pick<Row, "address">) => ledgerMonad.has(r.address?.toLowerCase() ?? "");
+  const monadRows = monadRowsOf(allRows).map((r) => (inLedger(r) && r.monad ? { ...r, monad: { ...r.monad, usdc: 0, positions: 0, usd: r.monad.usd - r.monad.usdc } } : r));
   const monadRead = monadRows.filter((r) => r.monad);
   const monadUnread = monadRows.length - monadRead.length;
   const mon = monadRead.reduce((s, r) => s + (r.monad?.mon ?? 0), 0);
@@ -457,7 +480,7 @@ export function renderFundsMap(f: FundsMap, opts: { inlineStyle?: boolean } = {}
     <div class="fm-head"><h2 id="fm-h">Where the money is</h2><a href="/ops/accounts">Accounts</a></div>
     <dl class="fm-sum">
       ${sum("fm-t", "Value held, every chain", f.partial ? { text: `≥ ${fmtUsd(rest)}`, sub: "Every Safe balance on every chain. A floor: some figures are unread or unpriced" } : { text: fmtUsd(rest), sub: "Every Safe balance on every chain: working + Safe gas + not working" })}
-      ${sum("fm-w", "Working", aggregate(f, ["working"], "Positions and idle USDC"))}
+      ${sum("fm-w", "Working", aggregate(f, ["working"], "Positions and vaults"))}
       ${sum("fm-r", "Gas in the Safes", aggregate(f, ["reserve"], "In Value held"))}
       ${sum("fm-x", "Not working", aggregate(f, ["outside"], "In Value held, earns nothing"))}
       ${sum("fm-o", "Operator relayers (team gas)", aggregate(f, ["operator"], "Team money, not in any total"))}

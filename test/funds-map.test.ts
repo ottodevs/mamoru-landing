@@ -45,8 +45,9 @@ describe("buildFundsMap", () => {
       row({ outside: { eth: 0.05537835, usdc: 0, usd: 127.277 } }),
     ];
     const m = buildFundsMap(snap(), rows);
-    expect(m.working).toBe(42);
-    expect(m.notWorking).toBeCloseTo(127.277, 3);
+    // otto/mamoru-astro#52: idle USDC earns nothing: not working, beside the outside ETH.
+    expect(m.working).toBe(40);
+    expect(m.notWorking).toBeCloseTo(129.277, 3);
     const out = find(m, "Ethereum", "outside")!;
     expect(out.kind).toBe("outside");
     expect(out.accounts).toBe(1);
@@ -94,14 +95,15 @@ describe("buildFundsMap", () => {
     const rows = [row({ usdcIdle: 3 }), row({ chainId: 10143, usdcIdle: 50 }), row({ chainId: 84532, lpUsd: 60 }), row({ chainId: 11155111, usdcIdle: 70 }), row({ chainId: 999, usdcIdle: 80 })];
     const m = buildFundsMap(snap(), rows);
     expect(m.excluded).toBe(4);
-    expect(m.working).toBe(3);
+    expect(m.working).toBe(0);
+    expect(m.notWorking).toBe(3);
     expect(m.chains.map((c) => c.name)).not.toContain("Chain 10143");
     expect(find(m, "Monad", "idle")).toBeUndefined();
     expect(renderFundsMap(m)).toContain("4 accounts on test networks, not counted.");
     expect(renderFundsMap(buildFundsMap(snap(), [row()]))).not.toContain("test networks");
   });
 
-  test("an Ethereum account (chainId 1) is working money on Ethereum, not outside, and counted once", () => {
+  test("an Ethereum account (chainId 1) is money on Ethereum, not outside, and counted once", () => {
     const rows = [
       row({ chainId: 1, usdcIdle: 500, ethBalance: 0.001, outside: { eth: 1, usdc: 999, usd: 3000 } }),
       row({ lpUsd: 10, outside: { eth: 0, usdc: 0, usd: 0 } }),
@@ -109,10 +111,10 @@ describe("buildFundsMap", () => {
     const m = buildFundsMap(snap(), rows);
     expect(m.excluded).toBe(0);
     expect(find(m, "Ethereum", "idle")!.usd).toBe(500);
-    expect(find(m, "Ethereum", "idle")!.kind).toBe("working");
+    expect(find(m, "Ethereum", "idle")!.kind).toBe("outside");
     expect(find(m, "Ethereum", "gas")!.usd).toBeCloseTo(2, 6);
-    expect(m.working).toBe(510);
-    expect(m.notWorking).toBe(0);
+    expect(m.working).toBe(10);
+    expect(m.notWorking).toBe(500);
     expect(m.total).toBeCloseTo(512, 6);
     const out = find(m, "Ethereum", "outside");
     expect(out?.usd ?? 0).toBe(0);
@@ -127,7 +129,8 @@ describe("buildFundsMap", () => {
       row({ chainId: 1, address: A.toLowerCase(), usdcIdle: 500 }),
     ]);
     expect(m.total).toBeCloseTo(500, 6);
-    expect(m.notWorking).toBe(0);
+    expect(find(m, "Ethereum", "outside")?.usd ?? 0).toBe(0);
+    expect(m.notWorking).toBe(500);
     expect(m.partial).toBe(false);
   });
 
@@ -214,8 +217,40 @@ describe("buildFundsMap", () => {
     const head = summarizeOutside(outsideRowsOf(rows));
     const m = buildFundsMap(snap(), rows);
     expect(head.usd).toBe(170);
-    expect(m.notWorking).toBe(head.usd!);
+    expect(find(m, "Ethereum", "outside")!.usd).toBe(head.usd!);
+    expect(m.notWorking).toBe(head.usd! + 500);
     expect(m.total).toBeCloseTo(670, 6);
+  });
+
+  // otto/mamoru-astro#52: with the ledger rows, working money is what /stats counts: positions and vaults on every
+  // chain, remote sleeves included; idle is not working; a sleeve's USDC is never counted twice.
+  test("ledger rows: vaults and Monad sleeves count, idle is not working, one figure per dollar", () => {
+    const BASE = "0x0e22661cae70f5e6675df8e112997f424161718d";
+    const SLEEVE = "0x0003d8021bbec02291b7f0001e05d56bec3734cc";
+    const rows = [row({ address: BASE, lpUsd: 976.12, usdcIdle: 0.05, ethBalance: 0.0005 })];
+    const ledger = [
+      { chainId: 8453, address: BASE, idle: 0.48, positions: 977.67, vault: 1509.02 },
+      { chainId: 143, address: SLEEVE, idle: 449.55, positions: 0, vault: 0 },
+    ];
+    const m = buildFundsMap(snap(), rows, ledger);
+    expect(find(m, "Base", "positions")!.usd).toBeCloseTo(977.67, 6);
+    expect(find(m, "Base", "vaults")!.usd).toBeCloseTo(1509.02, 6);
+    expect(find(m, "Base", "idle")!.kind).toBe("outside");
+    expect(find(m, "Monad", "idle")!.usd).toBeCloseTo(449.55, 6);
+    expect(m.working).toBeCloseTo(977.67 + 1509.02, 6);
+    expect(m.notWorking).toBeCloseTo(0.48 + 449.55, 6);
+    expect(find(m, "Base", "gas")!.usd).toBeCloseTo(1, 6);
+  });
+
+  test("ledger rows: a Monad address the ledger reads keeps only its MON in the infra bucket", () => {
+    const A = "0xabc000000000000000000000000000000000000a";
+    const rows = [row({ address: A, monad: { mon: 2, usdc: 30, positions: 1, usd: 30 + 2 * 0.5, monUnpriced: false } })];
+    const m = buildFundsMap(snap(), rows, [{ chainId: 143, address: A, idle: 30, positions: 12, vault: 0 }]);
+    expect(find(m, "Monad", "idle")!.usd).toBe(30);
+    expect(find(m, "Monad", "positions")!.usd).toBe(12);
+    expect(find(m, "Monad", "monad-held")!.usd).toBeCloseTo(1, 6);
+    expect(find(m, "Monad", "monad-positions")).toBeUndefined();
+    expect(m.working + m.notWorking).toBeCloseTo(30 + 12 + 1, 6);
   });
 
   test("operator summary is a floor or not priced, never exact or $0", () => {
