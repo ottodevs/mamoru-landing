@@ -3,7 +3,7 @@
 // own /metrics as the app Worker stores it in operator_metrics_latest (ottodevs/mamoru migration 0013). Every
 // figure says where it comes from, and a source that is not there yet is null, never a guessed zero.
 import type { D1Db } from "./d1-infra";
-import { buildFundsMap, type FundsMap, isMapped } from "./funds-map";
+import { buildFundsMap, type FundsMap, isMapped, type LedgerRow } from "./funds-map";
 import { readAtNote } from "./outside-base";
 import type { AccountView, InfraSnapshot } from "./infra-snapshot";
 import { CAP_SOURCES, DEFAULT_CAP_USDC, type CapSource } from "./account-cap-model";
@@ -35,7 +35,15 @@ export type AccountYield = {
   chain: string;
   env: string;
   total: number;
+  /** Principal of the Uniswap positions, USD. */
   lp: number;
+  /**
+   * otto/mamoru-astro#52: USDC in the Safe's vaults, USD: the snapshot total less idle, positions, their fees and owed
+   * amounts, the same split as the app's /stats (`rowExposure`). 0 for a Safe the ledger has not written.
+   */
+  vault: number;
+  /** Working money: positions plus vaults (`lp + vault`). What /stats counts as money working, before fees. */
+  placed: number;
   idle: number;
   /** Uncollected fees since each position's checkpoint, USD. */
   fees: number;
@@ -110,10 +118,11 @@ export interface ConsoleModel {
   /** Read time of the newest ledger row, or null before the ledger has written one. */
   ledgerReadAt: string | null;
   accounts: AccountYield[];
-  totals: { fees: number; lp: number; idle: number; apr: number | null; positions: number; inRange: number; earning: number };
+  /** `lp` is what fee APR is measured on; `placed` adds the vaults (otto/mamoru-astro#52). */
+  totals: { fees: number; lp: number; placed: number; idle: number; apr: number | null; positions: number; inRange: number; earning: number };
   pools: PoolYield[];
   lifecycle: { total: number; earning: number; waiting: number; signedUp: number };
-  /** Capital held per day from metrics_daily: every environment, test included (that table has no env column). */
+  /** Capital held per UTC day: the day's closing total of every Safe in scope on every chain, vaults included (account_daily). */
   capital: DayPoint[];
   signups: DayPoint[];
   operator: null | {
@@ -197,6 +206,21 @@ export function heldElsewhere(
   return { usd: usdSum, floor, away };
 }
 
+/**
+ * otto/mamoru-astro#52: the ledger rows of the Safes in scope, for the funds map's working buckets. Undefined when the
+ * ledger could not be read: the map then keeps the infra read, never a guessed 0.
+ */
+function ledgerRowsOf(snaps: readonly SnapRow[] | null, inView: ReadonlyMap<string, unknown>): LedgerRow[] | undefined {
+  if (snaps === null) return undefined;
+  return snaps
+    .filter((s) => inView.has(s.account_key))
+    .map((s) => {
+      const positions = usd(s.lp_usdc) + usd(s.fees_usdc) + usd(s.owed_usdc);
+      const idle = usd(s.idle_usdc);
+      return { chainId: s.chain_id, address: s.address, idle, positions, vault: Math.max(0, usd(s.total_usdc) - idle - positions) };
+    });
+}
+
 const missing = (e: unknown) => /no such (table|column)/i.test(e instanceof Error ? e.message : String(e));
 
 async function rows<T>(db: D1Db, sql: string, ...binds: unknown[]): Promise<T[] | null> {
@@ -225,9 +249,9 @@ function eachDay(from: string, to: Date): string[] {
   return out;
 }
 
-type SnapRow = { account_key: string; env: string; read_at: string; idle_usdc: number; lp_usdc: number; fees_usdc: number; total_usdc: number; positions_json: string };
+type SnapRow = { account_key: string; chain_id: number; address: string; env: string; read_at: string; idle_usdc: number; lp_usdc: number; fees_usdc: number; owed_usdc: number; total_usdc: number; positions_json: string };
 type AccountRow = { account_key: string; env: string | null; is_test: number | null; created_at: string };
-type MetricsRow = { day: string; lp_usd: number; idle_usdc_usd: number };
+type DailyRow = { day: string; account_key: string; total_close_usdc: number };
 type OperatorRow = { payload_json: string; generated_at: string };
 
 type StoredOperatorMetrics = {
@@ -311,9 +335,13 @@ function parseOperator(row: OperatorRow | undefined): ConsoleModel["operator"] {
   };
 }
 
+/**
+ * otto/mamoru-astro#52: the default view is real money, the accounts /stats counts (prod and beta, test left out):
+ * beta shares the D1 and the live operator, so its Safes hold real funds. "all" adds the test accounts.
+ */
 export function inScope(env: ConsoleEnv, accountEnv: string | null | undefined, isTest: number | null | undefined): boolean {
   if (env === "all") return true;
-  return accountEnv === "prod" && isTest !== 1;
+  return (accountEnv === "prod" || accountEnv === "beta") && isTest !== 1;
 }
 
 export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Date, infra: InfraSnapshot | null): Promise<ConsoleModel> {
@@ -322,7 +350,7 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     asOf: now.toISOString(),
     ledgerReadAt: null,
     accounts: [],
-    totals: { fees: 0, lp: 0, idle: 0, apr: null, positions: 0, inRange: 0, earning: 0 },
+    totals: { fees: 0, lp: 0, placed: 0, idle: 0, apr: null, positions: 0, inRange: 0, earning: 0 },
     pools: [],
     lifecycle: { total: 0, earning: 0, waiting: 0, signedUp: 0 },
     capital: [],
@@ -335,10 +363,10 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
   };
   if (!db) return empty;
 
-  const [snaps, accounts, metrics, operatorRows, overrides, settings] = await Promise.all([
-    rows<SnapRow>(db, `SELECT account_key, env, read_at, idle_usdc, lp_usdc, fees_usdc, total_usdc, positions_json FROM account_snapshot_latest`),
+  const [snaps, accounts, daily, operatorRows, overrides, settings] = await Promise.all([
+    rows<SnapRow>(db, `SELECT account_key, chain_id, address, env, read_at, idle_usdc, lp_usdc, fees_usdc, owed_usdc, total_usdc, positions_json FROM account_snapshot_latest`),
     rows<AccountRow>(db, `SELECT account_key, env, is_test, created_at FROM accounts ORDER BY created_at`),
-    rows<MetricsRow>(db, `SELECT day, lp_usd, idle_usdc_usd FROM metrics_daily ORDER BY day`),
+    rows<DailyRow>(db, `SELECT day, account_key, total_close_usdc FROM account_daily ORDER BY day`),
     rows<OperatorRow>(db, `SELECT payload_json, generated_at FROM operator_metrics_latest WHERE id = 1`),
     newestOverrides(db),
     inEffect(db),
@@ -364,18 +392,25 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     if (!acct) continue;
     let positions: Position[] = [];
     try {
-      positions = (JSON.parse(s.positions_json) as { tokenId: string; pool: string; inRange: boolean; valueUsdc: string; feesUsdc: string }[]).map((p) => ({
-        tokenId: String(p.tokenId),
-        pool: p.pool,
-        inRange: Boolean(p.inRange),
-        value: usd(p.valueUsdc),
-        fees: usd(p.feesUsdc),
-      }));
+      positions = (JSON.parse(s.positions_json) as { tokenId: string; pool: string; inRange: boolean; valueUsdc: string; feesUsdc: string }[])
+        .map((p) => ({
+          tokenId: String(p.tokenId),
+          pool: p.pool,
+          inRange: Boolean(p.inRange),
+          value: usd(p.valueUsdc),
+          fees: usd(p.feesUsdc),
+        }))
+        // otto/mamoru-astro#52: an emptied NFT (exited or reduced to nothing, kept by the Safe) holds no money: it is not a
+        // position out of range, and counting it made "29 of 35 in range" and $0 alerts.
+        .filter((p) => p.value >= 0.01 || p.fees >= 0.01);
     } catch {
       positions = [];
     }
     const lp = usd(s.lp_usdc);
     const fees = usd(s.fees_usdc);
+    // otto/mamoru-astro#52: what the total holds beyond idle, positions and their fees and owed amounts is vault USDC.
+    // Floored at 0 as /stats does (`rowExposure`): a rounding residue of the same read is not a negative vault.
+    const vault = Math.max(0, usd(s.total_usdc) - usd(s.idle_usdc) - lp - fees - usd(s.owed_usdc));
     const since = firstEnter.get(s.account_key.slice(0, 8)) ?? null;
     const days = since ? daysBetween(since, now) : null;
     yields.push({
@@ -385,6 +420,8 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
       env: acct.is_test === 1 ? "test" : acct.env ?? "unknown",
       total: usd(s.total_usdc),
       lp,
+      vault,
+      placed: lp + vault,
       idle: usd(s.idle_usdc),
       fees,
       since,
@@ -435,15 +472,15 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     const held = idle + lp + e.usd;
     // An unread Base read could hide money: such a Safe stays listed, as a floor.
     if (held < 0.01 && e.away.length === 0 && !rs.some((r) => r.unread === true)) continue;
-    yields.push({ key: id.slice(0, 8), id, chain: chainOfKey(id), env: rs[0].isTest ? "test" : rs[0].env, total: idle + lp, lp, idle, fees: 0, since: null, days: null, apr: null, positions: [], readAt: infra?.asOf ?? now.toISOString(), held, floor: e.floor, away: e.away });
+    yields.push({ key: id.slice(0, 8), id, chain: chainOfKey(id), env: rs[0].isTest ? "test" : rs[0].env, total: idle + lp, lp, vault: 0, placed: lp, idle, fees: 0, since: null, days: null, apr: null, positions: [], readAt: infra?.asOf ?? now.toISOString(), held, floor: e.floor, away: e.away });
   }
   yields.sort((a, b) => b.fees - a.fees || b.lp - a.lp);
 
-  const working = yields.filter((a) => a.lp > 0.01);
+  const working = yields.filter((a) => a.placed > 0.01);
   // Numerator and denominator over the same accounts: those with capital placed and a known first entry.
   const dated = working.filter((a) => a.days != null);
-  const capDays = dated.reduce((x, a) => x + a.lp * (a.days ?? 0), 0);
-  const datedFees = dated.reduce((x, a) => x + a.fees, 0);
+  const capDays = dated.filter((a) => a.lp > 0.01).reduce((x, a) => x + a.lp * (a.days ?? 0), 0);
+  const datedFees = dated.filter((a) => a.lp > 0.01).reduce((x, a) => x + a.fees, 0);
   const feesSum = yields.reduce((x, a) => x + a.fees, 0);
   const positions = working.flatMap((a) => a.positions.map((p) => ({ ...p, days: a.days })));
   const poolMap = new Map<string, PoolYield & { capDays: number }>();
@@ -460,10 +497,13 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     .map(({ capDays: cd, ...q }) => ({ ...q, apr: cd > 0 ? (q.fees / cd) * 365 * 100 : null }))
     .sort((a, b) => b.fees - a.fees);
 
-  const waiting = yields.filter((a) => a.idle >= 0.2 && a.lp <= 0.01).length;
+  const waiting = yields.filter((a) => a.idle >= 0.2 && a.placed <= 0.01).length;
   const lifecycle = { total: acctRows.length, earning: working.length, waiting, signedUp: Math.max(0, acctRows.length - working.length - waiting) };
 
-  const capital = (metrics ?? []).map((m) => ({ day: m.day, value: (m.lp_usd ?? 0) + (m.idle_usdc_usd ?? 0) }));
+  // otto/mamoru-astro#52: the same daily closes /stats reads, in scope, every chain and vaults included; not metrics_daily (Base only).
+  const byDay = new Map<string, number>();
+  for (const d of daily ?? []) if (byKey.has(d.account_key)) byDay.set(d.day, (byDay.get(d.day) ?? 0) + usd(d.total_close_usdc));
+  const capital = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, value]) => ({ day, value }));
   const signupCount = new Map<string, number>();
   for (const a of acctRows) signupCount.set(dayOf(a.created_at), (signupCount.get(dayOf(a.created_at)) ?? 0) + 1);
   const firstDay = acctRows[0] ? dayOf(acctRows[0].created_at) : null;
@@ -477,6 +517,7 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     totals: {
       fees: feesSum,
       lp: working.reduce((x, a) => x + a.lp, 0),
+      placed: working.reduce((x, a) => x + a.placed, 0),
       idle: yields.reduce((x, a) => x + a.idle, 0),
       apr: capDays > 0 ? (datedFees / capDays) * 365 * 100 : null,
       positions: positions.length,
@@ -491,7 +532,8 @@ export async function loadConsole(db: D1Db | undefined, env: ConsoleEnv, now: Da
     relayer: relayerOf(infra, operator?.relayerWei ?? null),
     alerts: [],
     caps: empty.caps,
-    funds: infra?.accounts && !infra.accounts.error ? buildFundsMap(infra, infraRows) : null,
+    // otto/mamoru-astro#52: working money per chain from the ledger rows in scope (Monad sleeves and vaults included).
+    funds: infra?.accounts && !infra.accounts.error ? buildFundsMap(infra, infraRows, ledgerRowsOf(snaps, byKey)) : null,
   };
   model.caps = capsOf(acctRows, parseAuthorizations(parsePayload(operatorRows?.[0])?.authorizations), overrides, settings);
   model.alerts = alertsOf(model, now, snaps === null);
@@ -549,10 +591,13 @@ function capsOf(
   const over = new Map((overrides ?? []).map((o) => [o.accountKey.toLowerCase(), o]));
   const byKey = new Map<string, AccountCap>();
   // Two accounts sharing the first 8 characters cannot be told apart by the operator's key: neither is shown, and the
-  // cap route refuses an ambiguous key the same way.
+  // cap route refuses an ambiguous key the same way. A remote Safe (`<key>@<chainId>`) is the same account as its home
+  // Safe, not a second one: only home rows count and carry the cap (otto/mamoru-astro#52: every account with a Monad
+  // sleeve read "No approval" while its approval was active).
+  const homes = acctRows.filter((a) => !a.account_key.includes("@"));
   const seen = new Map<string, number>();
-  for (const a of acctRows) seen.set(a.account_key.slice(0, 8).toLowerCase(), (seen.get(a.account_key.slice(0, 8).toLowerCase()) ?? 0) + 1);
-  for (const a of acctRows) {
+  for (const a of homes) seen.set(a.account_key.slice(0, 8).toLowerCase(), (seen.get(a.account_key.slice(0, 8).toLowerCase()) ?? 0) + 1);
+  for (const a of homes) {
     const key = a.account_key.slice(0, 8);
     if (seen.get(key.toLowerCase())! > 1) continue;
     byKey.set(key.toLowerCase(), {
@@ -600,7 +645,7 @@ export function alertsOf(m: ConsoleModel, now: Date, ledgerMissing: boolean): Al
   if (m.relayer?.runway != null && m.relayer.runway < 10) {
     out.push({ tone: m.relayer.runway < 3 ? "bad" : "warn", title: `The relayer can fund ${m.relayer.runway} more new account${m.relayer.runway === 1 ? "" : "s"}`, detail: `${m.relayer.eth.toFixed(4)} ETH left, ${m.relayer.costPerAccountUsd != null ? money(m.relayer.costPerAccountUsd) : "unknown"} per new account.` });
   }
-  for (const a of m.accounts) if (a.idle >= 0.2 && a.lp <= 0.01) out.push({ tone: "info", title: `Funds waiting in ${a.key}`, detail: `${money(a.idle)} deposited and not placed yet.`, account: a.id });
+  for (const a of m.accounts) if (a.idle >= 0.2 && a.placed <= 0.01) out.push({ tone: "info", title: `Funds waiting in ${a.key}`, detail: `${money(a.idle)} deposited and not placed yet.`, account: a.id });
   if (!m.operator) out.push({ tone: "info", title: "Engine data is not connected yet", detail: "Engine and RPC figures appear once the app Worker stores the operator metrics (migration 0013)." });
   return out;
 }

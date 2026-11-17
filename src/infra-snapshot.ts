@@ -408,6 +408,9 @@ async function valueAccounts(
   for (const p of positions) {
     const [, , token0, token1, fee, tickLower, tickUpper, liquidity, , , tokensOwed0, tokensOwed1] = p.raw;
     const entry = perAccountLp.get(p.accountIndex) ?? { usd: 0, count: 0, inRange: 0 };
+    // otto/mamoru-astro#52: an emptied NFT (no liquidity, nothing owed) holds no money and is not a position: counting
+    // it put "29 of 35 in range" in the daily metrics with every real position in range.
+    if (liquidity === 0n && tokensOwed0 === 0n && tokensOwed1 === 0n) continue;
     entry.count += 1;
     const poolAddress = poolAddressByKey.get(poolKey(token0, token1, fee));
     const pool = poolAddress ? poolStateByAddress.get(poolAddress.toLowerCase()) : undefined;

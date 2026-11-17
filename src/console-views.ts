@@ -53,7 +53,7 @@ function head(title: string, path: string, m: ConsoleModel): string {
     `<a href="${path}${env === "all" ? "?env=all" : ""}" ${m.env === env ? 'aria-current="true"' : ""}>${label}</a>`;
   const read = m.ledgerReadAt ? `Ledger read ${timeLabel(m.ledgerReadAt)}` : "Ledger has no reading yet";
   return `<header class="c-head"><h1 tabindex="-1">${esc(title)}</h1>
-<nav class="c-seg" aria-label="Environment">${link("prod", "Production")}${link("all", "All, with test")}</nav>
+<nav class="c-seg" aria-label="Environment">${link("prod", "Production and beta")}${link("all", "All, with test")}</nav>
 <span class="c-fresh"><i aria-hidden="true"></i>${esc(read)}</span></header>`;
 }
 
@@ -249,7 +249,7 @@ function drawers(m: ConsoleModel, now: Date, csrf?: string): string {
         .join("");
       return `<template id="c-acct-${esc(a.id)}"><div class="c-drawer-in">
 <p class="c-k">Account ${a.env !== "prod" ? esc(a.env) : ""}</p><h2 class="c-acct">${esc(a.key)}${chainTag(m, a)}</h2>
-<div class="c-figs two">${fig("Earned", money(a.fees), a.since ? `since ${dayLabel(a.since)}` : "")}${fig("Fee APR", pct(a.apr), `${money(a.lp)} placed, before gas`)}</div>
+<div class="c-figs two">${fig("Earned", money(a.fees), a.since ? `since ${dayLabel(a.since)}` : "")}${fig("Fee APR", pct(a.apr), `on ${money(a.lp)} in pools, before gas${a.vault > 0.01 ? ` · ${money(a.vault)} in vaults` : ""}`)}</div>
 ${sheet("Positions", `${a.positions.filter((p) => p.inRange).length} of ${a.positions.length} in range`, a.positions.length ? `<ul class="c-poslist">${pos}</ul>` : `<p class="c-empty">No position open. ${a.idle >= 0.01 ? money(a.idle) + " is waiting to be placed." : ""}</p>`)}
 ${authorizationSheet(m, m.caps.byKey.get(a.key.toLowerCase()), now, csrf)}
 ${sheet("Engine activity", m.operator ? "Newest first" : "Not connected yet", ops ? `<ul class="c-feed">${ops}</ul>` : `<p class="c-empty">No recent operations reported.</p>`)}
@@ -286,7 +286,7 @@ export function pulseSection(m: ConsoleModel, now: Date): SectionView {
 <p class="c-big">${esc(money(t.fees))}</p>
 <p class="c-line"><span>${t.apr != null ? `at least <b>${esc(pct(t.apr))}</b> fee APR, before gas` : "fee APR shows once the engine reports first entries"}</span><span><b>${esc(money(t.lp))}</b> placed in ${t.positions} positions</span><span><b>${t.earning}</b> accounts earning</span></p>
 ${capitalChart(m)}
-<p class="c-foot">Capital held per day, every account including test: that daily table has no environment yet. A dip is a withdrawal as often as a price move.</p></section>`;
+<p class="c-foot">Capital held per day at the UTC close, every Safe in this view on every chain, vaults included. A dip is a withdrawal as often as a price move.</p></section>`;
   const attention = sheet("Needs attention", m.alerts.length ? `${m.alerts.length} open` : null, alertsList(m), "c-attn");
   // otto/mamoru-astro#39: Value held is every Safe balance on every chain; the map below says where each dollar sits.
   const f = m.funds;
@@ -294,7 +294,7 @@ ${capitalChart(m)}
   const heldNote = f ? `${money(f.working)} working · ${money(f.notWorking)} not working · ${money(f.reserve)} Safe gas` : "no on-chain reading yet";
   const figs = `<div class="c-figs five">
 ${fig("Value held, every chain", held, heldNote, f ? `<a class="c-note" href="#funds-map">Where the money is</a>` : "")}
-${fig("Placed and earning", money(t.lp), `${money(t.idle)} waiting to be placed`)}
+${fig("Placed and earning", money(t.placed), `${money(t.lp)} in pools · ${money(t.placed - t.lp)} in vaults · ${money(t.idle)} waiting`)}
 ${fig("Positions in range", `${t.inRange} of ${t.positions}`, t.inRange === t.positions ? "All earning fees" : `${t.positions - t.inRange} paused out of range`)}
 ${fig("Accounts", int(m.lifecycle.total), `${m.lifecycle.earning} earning, ${m.lifecycle.signedUp} signed up only`)}
 ${fig("Projected fee", money(t.fees * 0.1), "10% of the yield, once harvested")}
@@ -310,7 +310,7 @@ function leaderboard(m: ConsoleModel): string {
   const max = Math.max(...earning.map((a) => a.fees), 1e-9);
   const row = (a: AccountYield) =>
     `<li><button type="button" class="c-lb-row" data-account="${esc(a.id)}"><span class="c-mono">${esc(a.key)}${chainTag(m, a)}${a.env !== "prod" ? ` <em>${esc(a.env)}</em>` : ""}</span><span class="c-bar"><i style="width:${((a.fees / max) * 100).toFixed(1)}%"></i><small>${esc(money(a.fees))}</small></span><span class="n">${esc(pct(a.apr))}</span><span class="n wide">${esc(money(a.lp))}</span><span class="n wide">${a.positions.filter((p) => p.inRange).length}/${a.positions.length}</span></button></li>`;
-  return `<div class="c-lb-head"><span>Account</span><span>Fees earned</span><span class="n">APR</span><span class="n wide">Placed</span><span class="n wide">In range</span></div><ul class="c-lb">${earning.map(row).join("")}</ul>`;
+  return `<div class="c-lb-head"><span>Account</span><span>Fees earned</span><span class="n">APR</span><span class="n wide">In pools</span><span class="n wide">In range</span></div><ul class="c-lb">${earning.map(row).join("")}</ul>`;
 }
 
 function poolCards(m: ConsoleModel): string {
@@ -336,7 +336,7 @@ export function yieldView(m: ConsoleModel, now: Date): SectionView {
   const figs = `<div class="c-figs">
 ${fig("Earned to date", money(t.fees), "uncollected fees, every position")}
 ${fig("Fee APR", pct(t.apr), "at least: since first entry, weighted by capital, before gas")}
-${fig("Best account", best ? pct(best.apr) : "n/a", best ? `${best.key}${best.chain !== "Base" ? ` on ${best.chain}` : ""}, ${money(best.lp)} placed` : "")}
+${fig("Best account", best ? pct(best.apr) : "n/a", best ? `${best.key}${best.chain !== "Base" ? ` on ${best.chain}` : ""}, ${money(best.lp)} in pools` : "")}
 ${harvestFig(m)}
 </div>`;
   const body = `<div class="c-grid hero">${sheet("Yield by account", "Bar length is fees earned. Open an account for its positions.", leaderboard(m))}${sheet("Pools", "What each pool earns per dollar placed", poolCards(m))}</div>`;
@@ -358,7 +358,7 @@ export function accountsView(m: ConsoleModel, now: Date, opts: AccountsOpts = {}
   const list = m.accounts.length
     ? `<ul class="c-lb plain">${shown
         .map((a) => {
-          const state = a.lp > 0.01 ? chip("Earning", "good") : a.idle >= 0.2 ? chip("Funds waiting", "warn") : a.away.length ? chip("Not working", "warn") : chip("No deposit");
+          const state = a.placed > 0.01 ? chip("Earning", "good") : a.idle >= 0.2 ? chip("Funds waiting", "warn") : a.away.length ? chip("Not working", "warn") : chip("No deposit");
           const away = a.away.map((w) => chip(w, "warn")).join("");
           const cap = m.caps.byKey.get(a.key.toLowerCase());
           const own = cap?.override?.capUsdc != null ? chip(`Own cap ${cap.override.capUsdc.toLocaleString("en-US")}`, "em") : "";

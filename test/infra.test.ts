@@ -324,12 +324,14 @@ describe("infra-snapshot.ts", () => {
         { address: MULTICALL3, functionName: "getEthBalance", args: [ACC_ZERO], result: 0n },
         { address: USDC_ADDRESS, functionName: "balanceOf", args: [ACC_ZERO], result: 0n },
         { address: NPM, functionName: "balanceOf", args: [ACC_ZERO], result: 0n },
-        // ACC_LP: two LP NFTs, one in range, one out of range.
+        // ACC_LP: two LP NFTs, one in range, one out of range, and an emptied one (otto/mamoru-astro#52).
         { address: MULTICALL3, functionName: "getEthBalance", args: [ACC_LP], result: 500_000_000_000_000n },
         { address: USDC_ADDRESS, functionName: "balanceOf", args: [ACC_LP], result: 0n },
-        { address: NPM, functionName: "balanceOf", args: [ACC_LP], result: 2n },
+        { address: NPM, functionName: "balanceOf", args: [ACC_LP], result: 3n },
         { address: NPM, functionName: "tokenOfOwnerByIndex", args: [ACC_LP, 0n], result: 10n },
         { address: NPM, functionName: "tokenOfOwnerByIndex", args: [ACC_LP, 1n], result: 11n },
+        { address: NPM, functionName: "tokenOfOwnerByIndex", args: [ACC_LP, 2n], result: 12n },
+        { address: NPM, functionName: "positions", args: [12n], result: [0n, "0x0", WETH_ADDRESS, USDC_ADDRESS, 500, 3000, 4000, 0n, 0n, 0n, 0n, 0n] },
         {
           address: NPM,
           functionName: "positions",
@@ -377,7 +379,7 @@ describe("infra-snapshot.ts", () => {
     expect(seenCalls.some((c) => c.functionName === "tokenOfOwnerByIndex" && c.args?.[0] === ACC_ZERO)).toBe(false);
 
     const lpRow = rows.find((r) => r.address === ACC_LP)!;
-    expect(lpRow.positions).toBe(2);
+    expect(lpRow.positions).toBe(2); // the emptied NFT 12 is no position
     expect(lpRow.inRange).toBe(1); // only the -1000..1000 position covers tick 0
 
     const priceUsd = (t: string) => priceUsdOf({ ethUsd: snapshot.ethUsd, btcUsd: snapshot.btcUsd }, t);

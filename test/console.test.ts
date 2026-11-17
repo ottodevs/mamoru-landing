@@ -18,7 +18,7 @@ const FLAGS_SCHEMA = `CREATE TABLE ops_flag_changes (id INTEGER PRIMARY KEY AUTO
 
 const SEED_DATA = `
 INSERT INTO accounts VALUES ('acc1', 'u1', 8453, '0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', '2026-09-01T00:00:00Z', 'prod', 0);
-INSERT INTO accounts VALUES ('acc2', 'u2', 8453, '0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB', '2026-09-02T00:00:00Z', 'beta', 0);
+INSERT INTO accounts VALUES ('acc2', 'u2', 8453, '0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB', '2026-09-02T00:00:00Z', 'beta', 1);
 INSERT INTO account_snapshot_latest VALUES (8453, '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'acc1', 'unknown', 100, '2026-10-18T09:00:00Z', 1, 1000000, 130000000, 300000, 0, 131300000, '[{"tokenId":"1","pool":"pool:USDC/ETH/500","inRange":true,"valueUsdc":"130000000","feesUsdc":"300000","owedUsdc":"0"}]', '2026-10-18T09:00:05Z');
 INSERT INTO account_snapshot_latest VALUES (8453, '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'acc2', 'unknown', 100, '2026-10-18T09:00:00Z', 1, 500000, 10000000, 50000, 0, 10550000, '[]', '2026-10-18T09:00:05Z');
 INSERT INTO account_daily VALUES ('2026-10-17', 8453, '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'acc1', 'unknown', 90, 95, 120000000, 121000000, 0, 120000000, 1000000, 1500000, 500000, NULL);
@@ -125,7 +125,8 @@ describe("console gate (otto/mamoru-astro#24)", () => {
 });
 
 describe("console views", () => {
-  test("Pulse, production by default: the beta account is out, the prod account's fees lead", async () => {
+  // otto/mamoru-astro#52: the default view is prod and beta (real money, as /stats); a test account is what stays out.
+  test("Pulse, real money by default: the test account is out, the prod account's fees lead", async () => {
     const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "operator"]));
     const html = await (await worker.fetch(get("/ops", cookie), env)).text();
     expect(html).toContain("Earned for users so far");
@@ -190,7 +191,7 @@ describe("console views", () => {
     expect(html).not.toContain("<em>Monad</em>");
   });
 
-  test("?env=all brings in the beta account and marks the switch", async () => {
+  test("?env=all brings in the test account and marks the switch", async () => {
     const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "operator"]));
     const html = await (await worker.fetch(get("/ops/yield?env=all", cookie), env)).text();
     expect(html).toContain('id="c-acct-acc2"');
@@ -250,6 +251,42 @@ describe("console views", () => {
   });
 });
 
+/** otto/mamoru-astro#52: a beta Safe with a vault, an emptied NFT and idle USDC, beside the prod one. */
+const SEED_VAULT = `
+INSERT INTO accounts VALUES ('acc3', 'u3', 8453, '0xEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE', '2026-09-03T00:00:00Z', 'beta', 0);
+INSERT INTO account_snapshot_latest VALUES (8453, '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 'acc3', 'beta', 100, '2026-10-18T09:00:00Z', 1, 2000000, 50000000, 100000, 0, 202100000, '[{"tokenId":"8","pool":"pool:USDC/ETH/500","inRange":true,"valueUsdc":"50000000","feesUsdc":"100000","owedUsdc":"0"},{"tokenId":"9","pool":"pool:USDC/cbBTC/500","inRange":false,"valueUsdc":"0","feesUsdc":"0","owedUsdc":"0"}]', '2026-10-18T09:00:05Z');
+INSERT INTO account_daily VALUES ('2026-10-18', 8453, '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 'acc3', 'beta', 96, 100, 202000000, 202100000, 2000000, 50000000, 0, 100000, NULL, NULL);
+`;
+
+describe("console figures match /stats (otto/mamoru-astro#52)", () => {
+  test("placed is positions plus vaults, beta counts as real money, an emptied NFT is no position", async () => {
+    const sqlite = new Database(":memory:");
+    sqlite.exec(YIELD_SCHEMA + SEED_DATA + SEED_VAULT);
+    const d: D1Db = { prepare: (sql: string) => { const st: any = (v: unknown[] = []) => ({ bind: (...b: unknown[]) => st(b), first: async () => sqlite.query(sql).get(...(v as never[])) ?? null, all: async () => ({ results: sqlite.query(sql).all(...(v as never[])), success: true }), run: async () => sqlite.query(sql).run(...(v as never[])) }); return st(); } } as D1Db;
+    const m = await loadConsole(d, "prod", NOW, null);
+    const a3 = m.accounts.find((a) => a.key === "acc3")!;
+    expect(a3.lp).toBe(50);
+    expect(a3.vault).toBeCloseTo(150, 6);
+    expect(a3.placed).toBeCloseTo(200, 6);
+    expect(a3.positions.map((p) => p.tokenId)).toEqual(["8"]);
+    expect(m.accounts.some((a) => a.key === "acc2")).toBe(false);
+    expect(m.totals.placed).toBeCloseTo(130 + 200, 6);
+    expect(m.totals.lp).toBeCloseTo(130 + 50, 6);
+    expect(m.alerts.some((x) => /Out of range/.test(x.title))).toBe(false);
+    // Capital per day: the closes in scope, every chain, vaults included.
+    expect(m.capital.at(-1)).toEqual({ day: "2026-10-18", value: 131.3 + 202.1 });
+  });
+});
+
+describe("a remote Safe is the same account (otto/mamoru-astro#52)", () => {
+  test("the home Safe of an account with a Monad sleeve shows its reported approval", async () => {
+    const m = await loadConsole(memoryDb(["yield", "seed-pair", "operator"], { ...OPERATOR_PAYLOAD, authorizations: [{ account: PAIR_BASE.slice(0, 8), active: true, policyId: "conservador-live-v7", grants: [] }] }), "prod", NOW, null);
+    const cap = m.caps.byKey.get(PAIR_BASE.slice(0, 8))!;
+    expect(cap.accountKey).toBe(PAIR_BASE);
+    expect(cap.authorization?.policyId).toBe("conservador-live-v7");
+  });
+});
+
 describe("console honesty (review r1, PR #13)", () => {
   test("production views leave out the operations of accounts outside the scope", async () => {
     const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "operator"]));
@@ -272,7 +309,7 @@ describe("console honesty (review r1, PR #13)", () => {
 
   test("portfolio APR counts only accounts with capital placed and a first entry, in both terms", async () => {
     const m = await loadConsole(memoryDb(["yield", "seed", "operator"]), "all", NOW, null);
-    // acc2 (beta) has fees but no reported first entry: it is out of the numerator as well as the denominator.
+    // acc2 (a test account) has fees but no reported first entry: it is out of the numerator as well as the denominator.
     const a1 = m.accounts.find((a) => a.key === "acc1")!;
     expect(m.totals.apr!).toBeCloseTo(a1.apr!, 6);
   });
