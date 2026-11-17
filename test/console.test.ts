@@ -278,6 +278,15 @@ describe("console figures match /stats (otto/mamoru-astro#52)", () => {
   });
 });
 
+describe("a remote Safe is the same account (otto/mamoru-astro#52)", () => {
+  test("the home Safe of an account with a Monad sleeve shows its reported approval", async () => {
+    const m = await loadConsole(memoryDb(["yield", "seed-pair", "operator"], { ...OPERATOR_PAYLOAD, authorizations: [{ account: PAIR_BASE.slice(0, 8), active: true, policyId: "conservador-live-v7", grants: [] }] }), "prod", NOW, null);
+    const cap = m.caps.byKey.get(PAIR_BASE.slice(0, 8))!;
+    expect(cap.accountKey).toBe(PAIR_BASE);
+    expect(cap.authorization?.policyId).toBe("conservador-live-v7");
+  });
+});
+
 describe("console honesty (review r1, PR #13)", () => {
   test("production views leave out the operations of accounts outside the scope", async () => {
     const { env, cookie } = await opsEnv(memoryDb(["yield", "seed", "operator"]));

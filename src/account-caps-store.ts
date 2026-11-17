@@ -72,7 +72,8 @@ export type Resolved =
 export async function resolveAccountKey(db: D1Db, short: string): Promise<Resolved> {
   if (!SHORT_KEY.test(short)) return { kind: "none" };
   const { results } = await db
-    .prepare("SELECT account_key, env, is_test FROM accounts WHERE lower(substr(account_key, 1, 8)) = lower(?) LIMIT 3")
+    // A remote Safe (`<key>@<chainId>`) is the same account as its home Safe: only home rows are candidates (otto/mamoru-astro#52).
+    .prepare("SELECT account_key, env, is_test FROM accounts WHERE lower(substr(account_key, 1, 8)) = lower(?) AND instr(account_key, '@') = 0 LIMIT 3")
     .bind(short)
     .all<{ account_key: string; env: string | null; is_test: number | null }>();
   if (!results.length) return { kind: "none" };

@@ -591,10 +591,13 @@ function capsOf(
   const over = new Map((overrides ?? []).map((o) => [o.accountKey.toLowerCase(), o]));
   const byKey = new Map<string, AccountCap>();
   // Two accounts sharing the first 8 characters cannot be told apart by the operator's key: neither is shown, and the
-  // cap route refuses an ambiguous key the same way.
+  // cap route refuses an ambiguous key the same way. A remote Safe (`<key>@<chainId>`) is the same account as its home
+  // Safe, not a second one: only home rows count and carry the cap (otto/mamoru-astro#52: every account with a Monad
+  // sleeve read "No approval" while its approval was active).
+  const homes = acctRows.filter((a) => !a.account_key.includes("@"));
   const seen = new Map<string, number>();
-  for (const a of acctRows) seen.set(a.account_key.slice(0, 8).toLowerCase(), (seen.get(a.account_key.slice(0, 8).toLowerCase()) ?? 0) + 1);
-  for (const a of acctRows) {
+  for (const a of homes) seen.set(a.account_key.slice(0, 8).toLowerCase(), (seen.get(a.account_key.slice(0, 8).toLowerCase()) ?? 0) + 1);
+  for (const a of homes) {
     const key = a.account_key.slice(0, 8);
     if (seen.get(key.toLowerCase())! > 1) continue;
     byKey.set(key.toLowerCase(), {

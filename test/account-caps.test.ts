@@ -67,6 +67,11 @@ describe("account key resolution", () => {
     expect(await resolveAccountKey(db, "3f9a7c2%")).toEqual({ kind: "none" });
     expect(await resolveAccountKey(capsDb({ dupe: true }), "3f9a7c21")).toEqual({ kind: "many", count: 2 });
   });
+  test("a remote Safe of the same account does not make its key ambiguous (otto/mamoru-astro#52)", async () => {
+    const db = capsDb();
+    db.raw.exec(`INSERT INTO accounts VALUES ('${A}@143', 'u1', 143, '0xA2', '2026-10-01T00:00:00Z', 'prod', 0);`);
+    expect(await resolveAccountKey(db, "3f9a7c21")).toEqual({ kind: "one", accountKey: A, env: "prod", isTest: false });
+  });
 });
 
 describe("confirm token", () => {
