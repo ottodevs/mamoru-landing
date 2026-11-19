@@ -44,7 +44,7 @@ describe("open instant", () => {
       "What's next?",
       "You keep control",
     ]);
-    expect(OPEN_COPY.onboard.screens[0].body[0]).toBe("Send the ETH you want to invest.");
+    expect(OPEN_COPY.onboard.screens[0].body[0]).toBe("Add USDC on Base.");
     expect(OPEN_COPY.onboard.screens[1].body[0]).toBe(
       "Yield is reinvested. You can transfer part or all of it whenever you want.",
     );
