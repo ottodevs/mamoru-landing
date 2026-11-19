@@ -9,19 +9,19 @@ export const APP_HREF = "https://app.mamoru.lol";
 const MIX = [
   {
     pct: 15,
-    name: "Mercenary Capital",
+    name: "Growth",
     note: "High risk, high reward",
     tone: "mercenary",
   },
   {
     pct: 35,
-    name: "BTC / ETH + Stablecoins",
+    name: "Balance",
     note: "Bluechips paired with stablecoins",
     tone: "paired",
   },
   {
     pct: 50,
-    name: "Stablecoins",
+    name: "Stables",
     note: "Liquidity, yield and market depth.",
     tone: "stables",
   },
@@ -44,7 +44,7 @@ export const OPEN_COPY = {
     screens: [
       {
         title: "Fund Mamoru",
-        body: ["Send the ETH you want to invest."],
+        body: ["Add USDC on Base."],
         mix: false,
       },
       {
