@@ -6,6 +6,7 @@
  */
 
 import { accountScopeSql, isFullyUnscoped, type AccountScopeFilter } from "./account-filter";
+import { CHAIN_ID as BASE_CHAIN_ID } from "./chain-addresses";
 import { fetchGroupCounts, type D1Db, type D1PreparedStatement, type GroupCount } from "./d1-infra";
 import { type InfraReading, loadInfraReading, type InfraSources } from "./infra-cache";
 import type { AccountView, InfraSnapshot } from "./infra-snapshot";
@@ -588,10 +589,11 @@ export async function captureDaily(
     for (const groupRow of groupRows) {
       await upsertDailyV2(db, groupRow);
     }
-    // relayer_eth/eth_usd are chain-level, not per-env (see DailyRowV2's doc comment): one row per chain
-    // actually present today, never duplicated per env.
-    for (const chainId of new Set(groupRows.map((r) => r.chain_id))) {
-      await upsertDailyChain(db, chainRowFromSnapshot(snapshot, today, chainId));
+    // relayer_eth/eth_usd are chain-level, not per-env (see DailyRowV2's doc comment): one row per chain,
+    // never duplicated per env. otto/mamoru-astro#56: the infra snapshot reads the Base relayer and the ETH
+    // price only, so only Base gets a row; a Monad row would carry Base's ETH as MON.
+    if (groupRows.some((r) => r.chain_id === BASE_CHAIN_ID)) {
+      await upsertDailyChain(db, chainRowFromSnapshot(snapshot, today, BASE_CHAIN_ID));
     }
     if (opts.settleYesterday) {
       const yesterday = addDays(today, -1);
