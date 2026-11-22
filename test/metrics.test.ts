@@ -348,6 +348,18 @@ describe("metrics-store.ts", () => {
     expect(settleV2.args).toEqual([0, "2026-09-30", 8453, "prod"]);
   });
 
+  test("captureDaily: a day with Monad accounts writes the chain row for Base only (otto/mamoru-astro#56)", async () => {
+    const { db, calls } = fakeDb({ first: (sql) => (sql.includes("FROM metrics_daily") ? { n: 12 } : { n: 0 }) });
+    const rows = [...ROWS, acct(6, 3, 10, 1, 1, { chainId: 143 })];
+    const outcome = await captureDaily({ db }, { now: NOW, load: async () => ({ snapshot: snap({ accounts: { ...snap().accounts, rows } }) }) });
+    expect(outcome.ok).toBe(true);
+    const chainRows = calls.filter((c) => c.kind === "run" && c.sql.includes("metrics_daily_chain"));
+    // The snapshot's relayer and ETH price are Base's: a Monad row would carry them as MON.
+    expect(chainRows.map((c) => c.args[1])).toEqual([8453]);
+    // The per-(chain, env) breakdown still has Monad.
+    expect(calls.filter((c) => c.kind === "run" && c.sql.includes("metrics_daily_v2")).map((c) => c.args[1])).toContain(143);
+  });
+
   test("captureDaily: a table with rows is not backfilled again", async () => {
     const { db, calls } = fakeDb({ first: (sql) => (sql.includes("FROM metrics_daily") ? { n: 12 } : { n: 0 }) });
     const outcome = await captureDaily({ db }, { now: NOW, load: async () => ({ snapshot: snap() }) });
